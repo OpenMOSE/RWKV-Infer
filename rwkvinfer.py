@@ -96,6 +96,7 @@ class RWKVWrapper:
                 ).contiguous()
 
             self.model_state = None
+            self.model_current_statetuned_filename = state_filename
             if self.debug:
                 print(f"State-tune model loaded:{state_filename}")
         elif state_filename == "":
@@ -136,12 +137,12 @@ class RWKVWrapper:
         out_tokens = []
         out_last = 0
 
-        if self.model_current_statetuned is not None:
+        if self.model_current_statetuned is not None and self.model_state is None:
             self.model_state = copy.deepcopy(self.model_current_statetuned)
             if self.debug:
                 print("State-tuned deepcopy")
-        else:
-            self.model_state = None #ToDo Implement State-Cache for Faster Inference
+        #else:
+        #    self.model_state = None #ToDo Implement State-Cache for Faster Inference
 
         output_text = ''
 

@@ -1,4 +1,5 @@
 rwkv
 flask
+flask_cors
 ninja
 pandas
