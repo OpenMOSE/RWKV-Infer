@@ -10,7 +10,7 @@ from flask_cors import CORS
 
 import pandas as pd
 from flask import Flask, Response, request
-from rwkv.utils import PIPELINE
+#from rwkv.utils import PIPELINE
 import asyncio
 import json
 import threading
@@ -32,7 +32,7 @@ AUTHORIZED_TOKEN = 'your_secure_token'
 ModelList = [{"object":"models","id":"RWKV-14B x060 'finch'"}]
 StateList = []
 model = None
-pipeline = PIPELINE(model, "rwkv_vocab_v20230424")
+#pipeline = PIPELINE(model, "rwkv_vocab_v20230424")
 
 DynamicStateList = []
 DynamicStateList_lock = threading.Lock()
@@ -354,15 +354,19 @@ def rwkv_completions():
 
     #selected_wrapper.load_state("")
 
+    target_state_filename = ''
+
     for modelname in models2:
         if modelname['id'] == model:
-            selected_wrapper.load_state(modelname['filename'])
+            target_state_filename = modelname['filename']
+            #selected_wrapper.load_state(modelname['filename'])
 
     if state != '':
         selected_wrapper.load_state(state)
+        target_state_filename = selected_wrapper.model_current_statetuned_filename
 
     #statecache = search_dynamic_state_list(input_prompt_b,selected_wrapper.model_current_statetuned_filename)
-    statecache = search_dynamic_state_list(input_prompt_stm_b,selected_wrapper.model_current_statetuned_filename)
+    statecache = search_dynamic_state_list(input_prompt_stm_b,target_state_filename)
     StateCacheMode = False
     if statecache is not None:
         print('resume state detected.')
@@ -370,6 +374,7 @@ def rwkv_completions():
         StateCacheMode = True
     else:
         print('plane state')
+        selected_wrapper.load_state(target_state_filename)
         input_prompt = input_prompt_b + input_prompt
         input_prompt_stm = input_prompt_stm_b + input_prompt_stm
 
