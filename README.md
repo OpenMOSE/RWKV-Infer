@@ -5,6 +5,7 @@ A large-scale RWKV v6 inference engine using the Cuda backend. Supports multi-ba
 This project aims to simplify the deployment of RWKV model inference in a Docker
 ## 2024.07.25 Update:
    - Support for CPU memory storage of Dynamic State Cache
+   
    Since State Cache can be stored virtually infinitely, re-inference can be eliminated in most cases
    - Improved behavior during inference interruption
    - Speedup for 8-bit inference (5-13% on AD102)
