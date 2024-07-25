@@ -176,7 +176,8 @@ class RWKVWrapper:
         torch.cuda.empty_cache()
     def load_state(self, state_filename):
         global model
-        if self.model_current_statetuned_filename != state_filename and state_filename != "":
+        #if self.model_current_statetuned_filename != state_filename and state_filename != "":
+        if state_filename != "":
             try:
                 state_raw = torch.load(state_filename, map_location="cpu")
             except Exception as e:
