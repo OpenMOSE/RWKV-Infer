@@ -24,7 +24,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 parser = ArgumentParser()
 parser.add_argument("--localhost", default="0.0.0.0", type=str) 
-parser.add_argument("--port", default=9000, type=int) 
+parser.add_argument("--port", default=8000, type=int) 
 parser.add_argument("--debug", default=True, type=bool) 
 parser.add_argument("--workers", default=16, type=int) 
 parser.add_argument("--dynamic_state_cache_size", default=512, type=int)  # for 14B need 16GB of PC RAM
