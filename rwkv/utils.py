@@ -28,9 +28,12 @@ class PIPELINE():
         elif WORD_NAME == 'rwkv_vocab_v20230424':
             sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
             from rwkv_tokenizer import TRIE_TOKENIZER
-            import pyrwkv_tokenizer
-            #self.tokenizer = pyrwkv_tokenizer.RWKVTokenizer()
-            self.tokenizer = TRIE_TOKENIZER(os.path.dirname(os.path.abspath(__file__)) + '/rwkv_vocab_v20230424.txt')        
+            #import rwkv_tokenizer_cython2
+            #import pyrwkv_tokenizer
+
+            #from rwkv_tokenizer_cpython_310_x86_64_linux_gnu import TRIE_TOKENIZER
+            self.tokenizer = TRIE_TOKENIZER(os.path.dirname(os.path.abspath(__file__)) + '/rwkv_vocab_v20230424.txt')    
+            #self.tokenizer = pyrwkv_tokenizer.RWKVTokenizer()    
         else:
             from tokenizers import Tokenizer
             self.tokenizer = Tokenizer.from_file(WORD_NAME)
@@ -88,6 +91,25 @@ class PIPELINE():
                 probs = probs ** (1.0 / temperature)
             out = torch.multinomial(probs, num_samples=1)[0]
             return int(out)
+    def sample_logits_mose2(self,logits, temperature=1.0, top_p=0.85, top_k=0):
+
+        if temperature == 0:
+            temperature = 1.0
+            top_p = 0
+
+        probs = F.softmax(logits.float(), dim=-1)
+        sorted_probs, sorted_indices = torch.sort(probs, descending=True)
+        cumulative_probs = torch.cumsum(sorted_probs, dim=-1)
+        cutoff_index = torch.searchsorted(cumulative_probs, top_p)
+        cutoff_value = sorted_probs[cutoff_index]
+        probs = torch.where(probs < cutoff_value, torch.tensor(0.0, device=probs.device), probs)
+        if top_k > 0 and top_k < len(probs):
+            probs[sorted_indices[top_k:]] = 0
+        if temperature != 1.0:
+            probs = probs ** (1.0 / temperature)
+        probs = probs / torch.sum(probs)
+        out = torch.multinomial(probs, num_samples=1)[0]
+        return int(out)
     
     def generate(self, ctx, token_count=100, args=PIPELINE_ARGS(), callback=None, state=None):
         all_tokens = []
@@ -108,13 +130,14 @@ class PIPELINE():
                 out[n] -= (args.alpha_presence + occurrence[n] * args.alpha_frequency)
             
             # sampler
-            token = self.sample_logits(out, temperature=args.temperature, top_p=args.top_p, top_k=args.top_k)
+            token = self.sample_logits_mose2(out, temperature=args.temperature, top_p=args.top_p, top_k=args.top_k)
             if token in args.token_stop:
                 break
             all_tokens += [token]
             for xxx in occurrence:
                 occurrence[xxx] *= args.alpha_decay
             
+            #ttt = self.decode([token])
             ttt = self.decode([token])
             www = 1
             if ttt in ' \t0123456789':

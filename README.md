@@ -9,7 +9,7 @@ This project aims to simplify the deployment of RWKV model inference in a Docker
    - Speedup for 8-bit inference (5-13% on AD102)
    - FastAPI implementation
    
-   Since State Cache can be stored virtually infinitely, re-inference can be eliminated in most cases
+   Since State Cache can be stored virtually infinitely, re-inference can be avoided in most cases
 
 ## The following features are included:
    - Support for multi-batch generation and stream delivery

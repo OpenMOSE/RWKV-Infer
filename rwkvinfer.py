@@ -15,7 +15,7 @@ import asyncio
 import time
 import gc
 import multiprocessing
-from rwkv.model import RWKV
+from rwkv.model2 import RWKV
 #from rwkv.utils import PIPELINE
 
 torch.backends.cudnn.benchmark = True
@@ -26,8 +26,8 @@ class PIPELINE():
     def __init__(self, model):
         self.model = model
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-        from rwkv_tokenizer import TRIE_TOKENIZER_MOSE
-        self.tokenizer = TRIE_TOKENIZER_MOSE(os.path.dirname(os.path.abspath(__file__)) + '/rwkv_vocab_v20230424.txt')        
+        from rwkv.rwkv_tokenizer import TRIE_TOKENIZER_MOSE
+        self.tokenizer = TRIE_TOKENIZER_MOSE(os.path.dirname(os.path.abspath(__file__)) + '/rwkv/rwkv_vocab_v20230424.txt')        
 
     def refine_context(self, context):
         context = context.strip().split('\n')
@@ -106,6 +106,37 @@ class PIPELINE():
         probs = probs / torch.sum(probs)
         out = torch.multinomial(probs, num_samples=1)[0]
         return int(out)
+    def sample_logits_mose3(self, logits, temperature=1.0, top_p=0.85, top_k=0):
+        if temperature == 0:
+            temperature = 1.0
+        top_p = 0   
+        probs = F.softmax(logits.float(), dim=-1)
+        sorted_probs, sorted_indices = torch.sort(probs, descending=True)
+        cumulative_probs = torch.cumsum(sorted_probs, dim=-1)
+        cutoff_index = torch.searchsorted(cumulative_probs, top_p)
+        cutoff_value = sorted_probs[cutoff_index]
+
+        # Use boolean indexing instead of torch.where for masking
+        mask = probs >= cutoff_value
+        probs = probs * mask
+
+        if 0 < top_k < len(probs):
+            # Use boolean indexing for masking top_k values
+            mask = torch.zeros_like(probs, dtype=torch.bool)
+            mask[sorted_indices[:top_k]] = True
+            probs = probs * mask
+
+        if temperature != 1.0:
+            probs = probs ** (1.0 / temperature)
+
+        # Normalize probabilities in-place
+        probs /= probs.sum()
+
+        # Use Gumbel-max trick for faster sampling
+        gumbel_noise = -torch.log(-torch.log(torch.rand_like(probs)))
+        out = torch.argmax(probs + gumbel_noise)
+
+        return int(out)
 
  
 
@@ -117,7 +148,7 @@ class RWKVWrapper:
     def __init__(self,debug=False):
         self.model_tokens = []
         self.model_state = None
-        self.CHUNK_LEN = 128  # split input into chunks to save VRAM (shorter -> slower, but saves VRAM)
+        self.CHUNK_LEN = 64  # split input into chunks to save VRAM (shorter -> slower, but saves VRAM)
         self.model_current_statetuned_filename = ""
         self.model_current_statetuned = None
 
@@ -129,6 +160,7 @@ class RWKVWrapper:
         self.GEN_MAX_COUNT = 1000
         self.busy = False
         self.debug = debug
+        self.Stop = True
     def is_busy(self):
         return self.busy
     def set_busy(self, busy):
@@ -205,6 +237,7 @@ class RWKVWrapper:
     async def Generate(self, input_prompt, temperature=1.0, top_p=0.5,alpha_presence=0.0,alpha_frequency=1.0, penalty_decay=0.996, MAX_COUNT=1000,STOP=['\n\n']):
         if self.debug:
             print("Generate Command Start")
+        self.Stop = False
 
         self.GEN_TEMP = temperature
         self.GEN_TOP_P = top_p
@@ -241,6 +274,9 @@ class RWKVWrapper:
             print(input_prompt)
         
         for i in range(self.GEN_MAX_COUNT):
+            if self.Stop:
+                yield ''
+                break
             for n in occurrence:
                 out[n] -= self.GEN_alpha_presence + occurrence[n] * self.GEN_alpha_frequency
             out[0] -= 1e10

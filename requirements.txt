@@ -1,5 +1,6 @@
-rwkv
-flask
-flask_cors
 ninja
 pandas
+fastapi
+starlette
+uvicorn
+numpy

@@ -1,16 +1,11 @@
 #OpenAI API Compatible RWKV Inference Engine
+#Fast API Version
 #2024 OpenMOSE
 import os
 os.environ["RWKV_JIT_ON"] = "1"
 os.environ["RWKV_CUDA_ON"] = "1"
 from rwkvinfer import RWKVWrapper
-
-from flask import Flask, request, Response, jsonify, stream_with_context
-from flask_cors import CORS
-
 import pandas as pd
-from flask import Flask, Response, request
-#from rwkv.utils import PIPELINE
 import asyncio
 import json
 import threading
@@ -18,8 +13,15 @@ import copy
 import re
 import torch
 from functools import wraps
-
 from argparse import ArgumentParser
+import uvicorn
+from starlette.concurrency import run_in_threadpool
+from starlette.background import BackgroundTask
+
+from fastapi import FastAPI, Request, Response, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse, StreamingResponse
+
 parser = ArgumentParser()
 parser.add_argument("--localhost", default="0.0.0.0", type=str) 
 parser.add_argument("--port", default=8000, type=int) 
@@ -49,21 +51,9 @@ model_viewname = ""
 
 
 def move_tensors_to_cpu(state):
-    """
-    リスト内のすべてのテンソルをGPUからCPUに移動する関数
-    
-    :param state: テンソルを含むリスト
-    :return: CPUに移動されたテンソルを含む新しいリスト
-    """
     return [tensor.to('cpu') if isinstance(tensor, torch.Tensor) else tensor for tensor in state]
 
 def move_tensors_to_gpu(state):
-    """
-    リスト内のすべてのテンソルをCPUからGPUに移動する関数
-    
-    :param state: テンソルを含むリスト
-    :return: GPUに移動されたテンソルを含む新しいリスト
-    """
     return [tensor.to('cuda') if isinstance(tensor, torch.Tensor) else tensor for tensor in state]
 
 
@@ -81,10 +71,6 @@ def add_to_dynamic_state_list(text_prompt,target_state_filename,raw_state):
         else:
             DynamicStateList.append({'text_prompt':text_prompt,'target_state_filename':target_state_filename,'raw_state': copy.deepcopy(raw_state)})
 
-        #print(raw_state)
-
-        #DynamicStateList.append({'text_prompt':text_prompt,'target_state_filename':target_state_filename,'raw_state': copy.deepcopy(raw_state)})  # 新しい要素を追加
-        #print({'text_prompt':text_prompt,'target_state_filename':target_state_filename})#,'raw_state': copy.deepcopy(raw_state)})
 
 def search_dynamic_state_list(inputprompt,state_filename):
     if args.debug == True:
@@ -121,8 +107,16 @@ def search_dynamic_state_list(inputprompt,state_filename):
         return None
 
 
-app = Flask(__name__)
-CORS(app)
+app = FastAPI()
+
+# CORSの設定
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 params_base = {
             "system_name": "System",
@@ -138,68 +132,85 @@ params_base = {
             "half_life": 400,
             "stop": ['\x00','\n\n']
         }
-@app.route('/removemodel', methods=['POST'])
-def removemodel():
+#@app.route('/removemodel', methods=['POST'])
+@app.post("/removemodel")
+async def removemodel():
     global wrappers
     global ModelList
     try:
         wrappers[0].unload_model()
         ModelList = []
-        return jsonify({"status": "success"}), 200
+        #return jsonify({"status": "success"}), 200
+        return {"status": "success"}
     except Exception as e:
         print(f'error {str(e)}')
-        return jsonify({"error": str(e)}), 500
+        #return jsonify({"error": str(e)}), 500
+        raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.route('/loadmodel', methods=['POST'])
-def loadmodel():
+#@app.route('/loadmodel', methods=['POST'])
+@app.post("/loadmodel")
+async def loadmodel(request: Request):
     global wrappers
     global ModelList
+    #raw_body = await request.body()
+    ## JSONとしてパース
+    #try:
+    #    data = json.loads(raw_body)
+    #except json.JSONDecodeError:
+    #    return {"error": "Invalid JSON"}
     try:
-        data = request.json
+        data = await request.json()
         model_filename = data.get('model_filename')
         model_viewname = data.get('model_viewname','default model')
         model_strategy = data.get('model_strategy','cuda fp16')
         wrappers[0].load_model(model_filename,model_strategy)
         ModelList = [{"object":"models","id":f"{model_viewname}"}]
-        return jsonify({"status": "success"}), 200
+        #return jsonify({"status": "success"}), 200
+        return {"status": "success"}
     except Exception as e:
         print(f'error {str(e)}')
-        return jsonify({"error": str(e)}), 500
+        #return jsonify({"error": str(e)}), 500
+        raise HTTPException(status_code=500, detail=str(e))
     
-@app.route('/loadstatemodel', methods=['POST'])
-def loadstatemodel():
+    
+#@app.route('/loadstatemodel', methods=['POST'])
+@app.post("/loadstatemodel")
+async def loadstatemodel(request: Request):
      global StateList
      try:
-         data = request.json
+         data = await request.json()
          state_filename = data.get('state_filename')
          state_viewname = data.get('state_viewname')
          #wrappers[0].load_model(model_filename,model_viewname)
          StateList.append({"state_filename":state_filename,"state_viewname":state_viewname})
-         return jsonify({"status": "success"}), 200
+         #return jsonify({"status": "success"}), 200
+         return {"status": "success"}
      except Exception as e:
          print(f'error {str(e)}')
-         return jsonify({"error": str(e)}), 500
+         #return jsonify({"error": str(e)}), 500
+         raise HTTPException(status_code=500, detail=str(e))
      
-@app.route('/removestatemodel', methods=['POST'])
-def removestatemodel():
+#@app.route('/removestatemodel', methods=['POST'])
+@app.post("/removestatemodel")
+async def removestatemodel(request: Request):
     global StateList
     
     try:
-        data = request.json
+        data = await request.json()
         StateList = []
-        return jsonify({"status": "success"}), 200
+        #return jsonify({"status": "success"}), 200
+        return {"status": "success"}
     except Exception as e:
          print(f'error {str(e)}')
-         return jsonify({"error": str(e)}), 500
+         #return jsonify({"error": str(e)}), 500
+         raise HTTPException(status_code=500, detail=str(e))
     
 
-
-
-
-
-@app.route('/v1/models', methods=['GET'])
-@app.route('/models', methods=['GET'])
+#@app.route('/v1/models', methods=['GET'])
+#@app.route('/models', methods=['GET'])
+@app.get("/v1/models")
+@app.get("/models")
 def models():
     try:
         models2 = [ModelList[0]]
@@ -213,10 +224,12 @@ def models():
             print('after')
             print(models2)
         #print(models2)
-        return jsonify(models2)
+        #return jsonify(models2)
+        return models2
     except Exception as e:
         print(f'error {str(e)}')
-        return jsonify({"error": str(e)}), 500
+        #return jsonify({"error": str(e)}), 500
+        raise HTTPException(status_code=500, detail=str(e))
     
 async def collect_chunks(async_gen):
     return [chunk async for chunk in async_gen]
@@ -224,11 +237,12 @@ async def collect_chunks(async_gen):
 def generate_response(wrapper, input_prompt, params):
     print(f"Start Processing prompt {input_prompt}")
     return wrapper.Generate(input_prompt)
-    
-@app.route('/v1/chat/completions', methods=['POST'])
-@app.route('/chat/completions', methods=['POST'])
-def rwkv_completions():
-    data = request.json
+
+
+@app.post("/v1/chat/completions")
+@app.post("/chat/completions")
+async def rwkv_completions(request: Request):
+    data = await request.json()
 
     print(data)
 
@@ -375,7 +389,8 @@ def rwkv_completions():
                 break
 
     if selected_wrapper is None:
-        return jsonify({"error": "All workers are busy"}), 503
+        #return jsonify({"error": "All workers are busy"}), 503
+        raise HTTPException(status_code=503, detail=str('All workers are busy'))
 
     selected_wrapper.set_busy(True)
 
@@ -410,60 +425,130 @@ def rwkv_completions():
         input_prompt = input_prompt_b + input_prompt
         input_prompt_stm = input_prompt_stm_b + input_prompt_stm
 
-    async def generate_and_stream():
-        #global selected_wrapper
-        i=0
-        try:
-            async for response_chunk in selected_wrapper.Generate(input_prompt, temperature=temperature, top_p=top_p,alpha_presence=presence_penalty,alpha_frequency=frequency_penalty, penalty_decay=penalty_decay, MAX_COUNT=max_tokens,STOP=stop):
-                yield response_chunk
-        finally:
-            i=1
-            #selected_wrapper.set_busy(False)
+    #async def generate_and_stream():
+    #    #global selected_wrapper
+    #    i=0
+    #    try:
+    #        async for response_chunk in selected_wrapper.Generate(input_prompt, temperature=temperature, top_p=top_p,alpha_presence=presence_penalty,alpha_frequency=frequency_penalty, penalty_decay=penalty_decay, MAX_COUNT=max_tokens,STOP=stop):
+    #            yield response_chunk
+    #    finally:
+    #        i=1
+    #        #selected_wrapper.set_busy(False)
+
+    #async def generate_and_stream(selected_wrapper, input_prompt, temperature, top_p, presence_penalty, frequency_penalty, penalty_decay, max_tokens, stop):
+    #async def generate_and_stream():
+    #    try:
+    #        async for response_chunk in selected_wrapper.Generate(
+    #            input_prompt, 
+    #            temperature=temperature, 
+    #            top_p=top_p,
+    #            alpha_presence=presence_penalty,
+    #            alpha_frequency=frequency_penalty, 
+    #            penalty_decay=penalty_decay, 
+    #            MAX_COUNT=max_tokens,
+    #            STOP=stop
+    #        ):
+    #            yield response_chunk
+    #    finally:
+    #        # クリーンアップ処理がある場合はここに記述
+    #        pass
 
     
 
     def handle_stream_disconnection(f):
+        nonlocal selected_wrapper
         @wraps(f)
         def decorated_function(*args, **kwargs):
             try:
+                print('handle_stream_disconnection start')
                 return f(*args, **kwargs)
             except GeneratorExit:
                 print("Stream disconnected")
                 selected_wrapper.Stop = True
                 selected_wrapper.set_busy(False)
+            except Exception as e:
+                print("Stream disconnected")
+                selected_wrapper.Stop = True
+                selected_wrapper.set_busy(False)
+    #            print(f"An error occurred: {str(e)}")
         return decorated_function
+    #def handle_stream_disconnection(f):
+    #    @wraps(f)
+    #    async def decorated_function(*args, **kwargs):
+    #        try:
+    #            return await f(*args, **kwargs)
+    #        except GeneratorExit:
+    #            print("Stream disconnected")
+    #            selected_wrapper = kwargs.get('selected_wrapper')
+    #            if selected_wrapper:
+    #                await run_in_threadpool(lambda: setattr(selected_wrapper, 'Stop', True))
+    #                await run_in_threadpool(selected_wrapper.set_busy, False)
+    #        except Exception as e:
+    #            print(f"An error occurred: {str(e)}")
+    #            # 適切なエラーハンドリングを行う
+    #    return decorated_function
+    #async def cleanup(generator):
+    #    nonlocal selected_wrapper
+    #    try:
+    #        await generator.close()
+    #    except Exception as e:
+    #        print(f"Error during cleanup: {e}")
+    #        print("Stream disconnected")
+    #        selected_wrapper.Stop = True
+    #        selected_wrapper.set_busy(False)
     @handle_stream_disconnection
-    def sync_stream():
-        #global selected_wrapper
+    async def sync_stream():
         totaltext = ''
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        async_gen = generate_and_stream()
-
+        nonlocal selected_wrapper
         try:
-            while True:
-                chunk = loop.run_until_complete(async_gen.__anext__())
-                totaltext = totaltext+chunk
-                response_data = [
-                    {
-                        "object": "chat.completion.chunk",
-                        "model": model,
-                        "choices": [
-                            {
-                                "index": 0,
-                                "delta": {
-                                    "content": chunk
-                                },
-                                "finish_reason": None
-                            }
-                        ]
-                    }
-                ]
-                #print(response_data[0])
-                yield f'data: {json.dumps(response_data[0])}\n\n'
-
-            
+            async for response_chunk in selected_wrapper.Generate(
+                    input_prompt, 
+                    temperature=temperature, 
+                    top_p=top_p,
+                    alpha_presence=presence_penalty,
+                    alpha_frequency=frequency_penalty, 
+                    penalty_decay=penalty_decay, 
+                    MAX_COUNT=max_tokens,
+                    STOP=stop
+                ):
+                    #yield response_chunk
+                    totaltext = totaltext+response_chunk
+                    response_data = [
+                        {
+                            "object": "chat.completion.chunk",
+                            "model": model,
+                            "choices": [
+                                {
+                                    "index": 0,
+                                    "delta": {
+                                        "content": response_chunk
+                                    },
+                                    "finish_reason": None
+                                }
+                            ]
+                        }
+                    ]
+                    yield f'data: {json.dumps(response_data[0])}\n\n'
         except StopAsyncIteration:
+            print('Stop Async Iteration detected.')
+            if StateCacheMode:
+                output_prompt = input_prompt_stm_b + input_prompt_stm + totaltext
+            else:
+                output_prompt = input_prompt_stm + totaltext
+            add_to_dynamic_state_list(output_prompt,selected_wrapper.model_current_statetuned_filename,selected_wrapper.model_state)
+            #print('OutputPrompt-----------------------------------------------------------------------')
+            #print(output_prompt[-100:])
+            #print('-----------------------------------------------------------------------------------')
+            selected_wrapper.Stop = True
+            selected_wrapper.set_busy(False)
+            response_data = [
+                "[DONE]"
+            ]
+            yield f'data: {json.dumps(response_data)}\n\n'
+            pass
+        except Exception as e:
+            print(f"An error occurred during generation: {str(e)}")
+        finally:
             print('Stop Async Iteration detected.')
             if StateCacheMode:
                 output_prompt = input_prompt_stm_b + input_prompt_stm + totaltext
@@ -482,13 +567,27 @@ def rwkv_completions():
             pass
 
     if stream:
-        return Response(stream_with_context(sync_stream()), content_type='text/event-stream')
+        #return Response(stream_with_context(sync_stream()), content_type='text/event-stream')
+        generator = sync_stream()
+        return StreamingResponse(generator, media_type='text/event-stream',background=BackgroundTask(sync_stream))
     else:
-        response = asyncio.run(collect_chunks(selected_wrapper.Generate(input_prompt, temperature=temperature, top_p=top_p,alpha_presence=presence_penalty,alpha_frequency=frequency_penalty, penalty_decay=penalty_decay, MAX_COUNT=max_tokens,STOP=stop)))
+        response_chunk = []
+        print('Non Stream Start Generate')
+        async for item in selected_wrapper.Generate(input_prompt, temperature=temperature, top_p=top_p,alpha_presence=presence_penalty,alpha_frequency=frequency_penalty, penalty_decay=penalty_decay, MAX_COUNT=max_tokens,STOP=stop):
+            response_chunk.append(item)
+        response = ''
+        for chunk in response_chunk:
+            response = response + chunk
+        #response = asyncio.run(collect_chunks(selected_wrapper.Generate(input_prompt, temperature=temperature, top_p=top_p,alpha_presence=presence_penalty,alpha_frequency=frequency_penalty, penalty_decay=penalty_decay, MAX_COUNT=max_tokens,STOP=stop)))
+        #response = (collect_chunks(selected_wrapper.Generate(input_prompt, temperature=temperature, top_p=top_p,alpha_presence=presence_penalty,alpha_frequency=frequency_penalty, penalty_decay=penalty_decay, MAX_COUNT=max_tokens,STOP=stop)))
         
-        OutputText = ''
-        for chunk in response:
-            OutputText = OutputText+chunk
+        #OutputText = ''
+        #for chunk in response:
+        #    OutputText = OutputText+chunk
+        OutputText = response
+
+        print(f'Non Stream: {OutputText}')
+
         if StateCacheMode:
             output_prompt = input_prompt_stm_b + input_prompt_stm + OutputText
         else:
@@ -521,9 +620,11 @@ def rwkv_completions():
                     ],
                 }
         #print(f'Not Stream Output:{response}')
-        return jsonify(jsonResponse)
+        return (jsonResponse)
         #return jsonify({"response": ''.join(response)})
 
 
+
 if __name__ == '__main__':
-    app.run(debug=False, host=args.localhost, port=args.port)
+    #app.run(debug=False, host=args.localhost, port=args.port)
+    uvicorn.run(app, host=args.localhost, port=args.port)
