@@ -5,17 +5,18 @@ A large-scale RWKV v6 inference engine using the Cuda backend. Supports multi-ba
 This project aims to simplify the deployment of RWKV model inference in a Docker
 ## 2024.07.25 Update:
    - Support for CPU memory storage of Dynamic State Cache
-   
-   Since State Cache can be stored virtually infinitely, re-inference can be eliminated in most cases
    - Improved behavior during inference interruption
    - Speedup for 8-bit inference (5-13% on AD102)
    - FastAPI implementation
+   
+   Since State Cache can be stored virtually infinitely, re-inference can be eliminated in most cases
 
 ## The following features are included:
    - Support for multi-batch generation and stream delivery
    - State switching for each batch
    - OpenAI-compatible API
    - Dynamic RNN State Cache(20240610)
+   
    By dynamically caching RNN states, we have improved the efficiency of state regeneration frequency and accelerated inference speed.
 
 ## How To Use
