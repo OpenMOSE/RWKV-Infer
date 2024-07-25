@@ -24,7 +24,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 parser = ArgumentParser()
 parser.add_argument("--localhost", default="0.0.0.0", type=str) 
-parser.add_argument("--port", default=8000, type=int) 
+parser.add_argument("--port", default=9000, type=int) 
 parser.add_argument("--debug", default=True, type=bool) 
 parser.add_argument("--workers", default=16, type=int) 
 parser.add_argument("--dynamic_state_cache_size", default=512, type=int)  # for 14B need 16GB of PC RAM
@@ -211,15 +211,16 @@ async def removestatemodel(request: Request):
 #@app.route('/models', methods=['GET'])
 @app.get("/v1/models")
 @app.get("/models")
-def models():
+async def models():
+    global StateList
     try:
-        models2 = [ModelList[0]]
+        models2 = copy.deepcopy([ModelList[0]])
         i = 0
         for State in StateList:
             i = i + 1
             print('before')
             print(models2)
-            models2.append({"object":"models","id":f"{ModelList[0]['id']} {State['state_viewname']}"})
+            models2.append({"object":"models","id":f"{models2[0]['id']} {State['state_viewname']}"})
             print(i)
             print('after')
             print(models2)
