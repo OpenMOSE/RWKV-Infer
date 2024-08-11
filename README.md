@@ -26,7 +26,7 @@ pip install -r requirements.txt
 ```sh
 python rwkv_server_fla_fastapi.py --localhost 0.0.0.0 --port 9000 --debug False --workers 64 --dynamic_state_cache_size 512
 ```     
-   - 6. Load Model
+   - 6. Load Model if quant, set model_strategy:quant
 ```sh
 curl http://127.0.0.1:9000/loadmodel -X POST -H "Content-Type: application/json" -d '{"model_filename":"models/RWKV-x060-World-1B6-v2.1-20240328-ctx4096.pth","model_viewname":"RWKV x060 1B6 Base","model_strategy":""}'
 ```
@@ -57,6 +57,8 @@ rwkv.hpp @harrisonvanderbyl
 RWKV-PEFT @Jl-er
 flash-linear-attention @ sustcsonglin
 
+## known issues
+   - Slightly degradation model perplexity. (maybe because of my monkey code..)
 
 ## ToDo for me
    - Improve FLA Stability on bf16
