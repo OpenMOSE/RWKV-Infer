@@ -10,6 +10,7 @@ When inferring quantized models, pre-prompt processing is twice as fast as the c
    - Support for true multi-batch generation and stream delivery
    - State switching for each batch
    - Bitsandbytes Quantization Support(NF4)
+   - Rocm and Cuda support
    - OpenAI-compatible API
    - Dynamic RNN State Cache
    By dynamically caching RNN states, we have improved the efficiency of state regeneration frequency and accelerated inference speed.
