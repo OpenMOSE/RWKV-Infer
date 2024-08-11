@@ -6,3 +6,4 @@ uvicorn
 numpy
 triton==2.2.0
 bitsandbytes
+einops
