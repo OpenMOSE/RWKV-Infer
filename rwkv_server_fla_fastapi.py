@@ -137,8 +137,12 @@ async def removemodel():
     #global wrappers
     global ModelList
     global engine1
+    global DynamicStateList
+    global DynamicStateList_lock
     try:
         #wrappers[0].unload_model()
+        with DynamicStateList_lock:
+            DynamicStateList = []
         engine1.UnloadModel()
         ModelList = []
         #return jsonify({"status": "success"}), 200
@@ -154,7 +158,12 @@ async def loadmodel(request: Request):
     #global wrappers
     global engine1
     global ModelList
+    global DynamicStateList
+    global DynamicStateList_lock
     try:
+        with DynamicStateList_lock:
+            DynamicStateList = []
+
         data = await request.json()
         model_filename = data.get('model_filename')
         model_viewname = data.get('model_viewname','default model')
