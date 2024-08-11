@@ -1,0 +1,7 @@
+ninja
+pandas
+fastapi
+starlette
+uvicorn
+numpy
+triton==2.2.0
