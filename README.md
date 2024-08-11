@@ -52,10 +52,10 @@ curl http://127.0.0.1:9000/models -X GET
 ```
 
 ## Thanks for
-RWKV-LM,ChatRWKV @BlinkDL
-rwkv.hpp @harrisonvanderbyl
-RWKV-PEFT @Jl-er
-flash-linear-attention @ sustcsonglin
+   - RWKV-LM,ChatRWKV @BlinkDL
+   - rwkv.hpp @harrisonvanderbyl
+   - RWKV-PEFT @Jl-er
+   - flash-linear-attention @ sustcsonglin
 
 ## known issues
    - Slightly degradation model perplexity. (maybe because of my monkey code..)
