@@ -108,6 +108,8 @@ class LLMWorker:
 
         self.pipeline = PIPELINE()
         self.proceed_total_batches = 0
+        
+        self.ForceExit = False
 
 
         #async with lock:
@@ -180,6 +182,10 @@ class LLMWorker:
         global prompt_queue
         print('Start Queue Management')
         while True:
+            if self.ForceExit:
+                print('Queue Exit')
+                return
+
             IdleSlot = 0
             async with lock:
                 for i in range(self.llm_max_batch_count):
@@ -233,6 +239,9 @@ class LLMWorker:
         print('Start LLM Engine')
         global prompt_queue
         while True:
+            if self.ForceExit:
+                print('LLM Exit')
+                return
             NoProcessing = 1
             for i in range(self.llm_max_batch_count):
                 if self.llM_current_batch_info[i]['slotstatus'] == 'processing':
@@ -315,6 +324,9 @@ class LLMWorker:
                         print(f'{token_max} forwarded')
 
                         x, shift_states, wkv_states = self.model.forward(idx, shift_states, wkv_states)
+
+                        #print(f'x = {x}')
+                        #print(f'x.shape = {x.shape}')
 
                         shift_states = shift_states.permute(1,0,2,3)
                         wkv_states = wkv_states.permute(1, 0, 2, 3, 4)

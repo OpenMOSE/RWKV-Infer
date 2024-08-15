@@ -25,9 +25,12 @@ parser = ArgumentParser()
 parser.add_argument("--localhost", default="0.0.0.0", type=str) 
 parser.add_argument("--port", default=9000, type=int) 
 parser.add_argument("--debug", default=False, type=bool) 
-parser.add_argument("--workers", default=64, type=int) 
+parser.add_argument("--workers", default=1, type=int) 
 parser.add_argument("--dynamic_state_cache_size", default=512, type=int)  # for 14B need 16GB of PC RAM
 parser.add_argument("--dynamic_state_cache_store", default='cpu', type=str) #if gpu need more vram for storing state
+
+parser.add_argument("--admin_key1", default='123874139713915425423541', type=str) 
+parser.add_argument("--admin_key2", default='d46871245412541544408014', type=str) 
 
 args = parser.parse_args()
 engine1 = LLMWorker(max_batch_size = args.workers)
@@ -137,12 +140,8 @@ async def removemodel():
     #global wrappers
     global ModelList
     global engine1
-    global DynamicStateList
-    global DynamicStateList_lock
     try:
         #wrappers[0].unload_model()
-        with DynamicStateList_lock:
-            DynamicStateList = []
         engine1.UnloadModel()
         ModelList = []
         #return jsonify({"status": "success"}), 200
@@ -158,12 +157,7 @@ async def loadmodel(request: Request):
     #global wrappers
     global engine1
     global ModelList
-    global DynamicStateList
-    global DynamicStateList_lock
     try:
-        with DynamicStateList_lock:
-            DynamicStateList = []
-
         data = await request.json()
         model_filename = data.get('model_filename')
         model_viewname = data.get('model_viewname','default model')
@@ -238,6 +232,28 @@ async def collect_chunks(async_gen):
 def generate_response(wrapper, input_prompt, params):
     print(f"Start Processing prompt {input_prompt}")
     return wrapper.Generate(input_prompt)
+
+async def shutdown():
+    # 少し待ってからシャットダウン（レスポンスを返す時間を確保）
+    global engine1
+    await asyncio.sleep(1)
+    uvicorn.Server.should_exit = True
+    engine1.ForceExit = True
+    exit()
+
+@app.post("/fjdkgmzak9sd/sksf_appkill")
+async def verify_keys(request: Request):
+    data = await request.json()
+    key1 = data.get("key1")
+    key2 = data.get("key2")
+
+    if key1 == args.admin_key1 and key2 == args.admin_key2:
+        # キーが正しい場合、シャットダウンをスケジュール
+        asyncio.create_task(shutdown())
+        return {"message": "Keys verified successfully", "status_code": 200}
+    else:
+        raise HTTPException(status_code=400, detail="Invalid keys")
+
 
 
 @app.post("/v1/chat/completions")
