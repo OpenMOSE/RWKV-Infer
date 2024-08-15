@@ -464,7 +464,7 @@ class LLMWorker:
                                     if statuss[j] == 'processing':
                                         prompt_queue.update_prompt(id,PromptStatus.PROCESSING,result=outputs[j])
                                     else:
-                                        prompt_queue.update_prompt(id,PromptStatus.COMPLETED,result=outputs[j],wkv_state=wkv_states[j],shift_state=shift_states[j])
+                                        prompt_queue.update_prompt(id,PromptStatus.COMPLETED,result=outputs[j],wkv_state=wkv_states[j].to('cpu'),shift_state=shift_states[j].to('cpu'))
                                         statuss[j] == 'idle'
 
                                     self.llM_current_batch_info[i]['wkv_states'] = wkv_states[j]
