@@ -9,6 +9,7 @@ from enum import Enum
 import torch
 import copy
 import gc
+import copy
 
 from rwkv6fla import PIPELINE, RWKV6
 
@@ -167,7 +168,8 @@ class LLMWorker:
 
 
             if prompt_queue.prompts[queue_id].status == PromptStatus.COMPLETED or prompt_queue.prompts[queue_id].status == PromptStatus.FAILED:
-                yield "", prompt_queue.prompts[queue_id].use_exist_state_wkv, prompt_queue.prompts[queue_id].use_exist_state_shift
+                yield "", copy.deepcopy(prompt_queue.prompts[queue_id].use_exist_state_wkv.to('cpu')), copy.deepcopy(prompt_queue.prompts[queue_id].use_exist_state_shift.to('cpu'))
+                prompt_queue.prompts[queue_id] = None
                 break
             await asyncio.sleep(0.01)
 
