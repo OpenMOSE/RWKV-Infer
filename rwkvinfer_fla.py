@@ -387,13 +387,13 @@ class LLMWorker:
                         for j in range(len(token)):
                             #x[j][0][0] -= 1e10
                             for n in occurrence[j]:
-                                current_prob[j][0][n] -= 0 + occurrence[j][n] * 1.0
+                                current_prob[j][-1][n] -= 0 + occurrence[j][n] * 1.0
                            # 
-                            current_prob[j][0][0] -= 1e10
-                            tk = self.pipeline.sample_logits_mose2(current_prob[j][0], temperature=temperature[j], top_p=top_p[j])
+                            current_prob[j][-1][0] -= 1e10
+                            tk = self.pipeline.sample_logits_mose2(current_prob[j][-1], temperature=temperature[j], top_p=top_p[j])
 
-                            if counts[j] == 0:
-                                tk = 33
+                            #if counts[j] == 0:
+                            #    tk = 33
 
                             for xxx in occurrence[j]:
                                 occurrence[j][xxx] *= 0.996
