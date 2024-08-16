@@ -25,7 +25,7 @@ parser = ArgumentParser()
 parser.add_argument("--localhost", default="0.0.0.0", type=str) 
 parser.add_argument("--port", default=9000, type=int) 
 parser.add_argument("--debug", default=False, type=bool) 
-parser.add_argument("--workers", default=1, type=int) 
+parser.add_argument("--workers", default=8, type=int) 
 parser.add_argument("--dynamic_state_cache_size", default=512, type=int)  # for 14B need 16GB of PC RAM
 parser.add_argument("--dynamic_state_cache_store", default='cpu', type=str) #if gpu need more vram for storing state
 
