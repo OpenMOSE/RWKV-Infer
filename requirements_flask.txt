@@ -1,5 +1,0 @@
-ninja
-flask
-flask_cors
-pandas
-numpy
