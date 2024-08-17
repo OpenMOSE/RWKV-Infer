@@ -93,7 +93,7 @@ def search_dynamic_state_list(inputprompt,state_filename):
                 print('--------------------------------------------------------------')
                 print(f'inputprompt {inputprompt[-100:]}')
                 print('--------------------------------------------------------------')
-            print(f'a = {len(text_prompt)} b = {len(inputprompt)} state_filename = {state_filename} target = {target_state_filename}')
+                print(f'a = {len(text_prompt)} b = {len(inputprompt)} state_filename = {state_filename} target = {target_state_filename}')
             if text_prompt == inputprompt and state_filename == target_state_filename:
                 raw_state = DynamicState['raw_state']
                 raw_state2 = DynamicState['raw_state2']

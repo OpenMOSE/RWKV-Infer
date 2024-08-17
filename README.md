@@ -6,6 +6,9 @@ This project aims to simplify the deployment of RWKV model inference in a Docker
 
 When inferring quantized models, pre-prompt processing is twice as fast as the conventional RWKV-Infer.
 
+## 2024.08.17 Update
+   - Slightly speedup for inference(up to 15% faster)
+
 ## The following features are included:
    - Support for true multi-batch generation and stream delivery
    - State switching for each batch
@@ -59,10 +62,11 @@ curl http://127.0.0.1:9000/models -X GET
    - flash-linear-attention @ sustcsonglin
 
 ## known issues
-   - Slightly degradation model perplexity. (maybe because of my monkey code..)
+   - Slightly degradation model perplexity. - solved on 2024.08.17 fix prob select of 1st token
 
 ## ToDo for me
-   - Improve FLA Stability on bf16
-   - Mixture of State Experts 
+   - Improve FLA Stability on bf16 - maybe done.
+   - Mixture of State Experts. in coding.
+   - Speculative Decoding(In Experiment. but hit rate is low..... 14b + 0.4b(hitrate only below 10%..)) 
    
 2024 OpenMOSE

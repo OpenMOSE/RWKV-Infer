@@ -10,6 +10,7 @@ import torch
 import copy
 import gc
 import copy
+import time
 
 from rwkv6fla import PIPELINE, RWKV6
 
@@ -110,6 +111,8 @@ class LLMWorker:
         self.proceed_total_batches = 0
         
         self.ForceExit = False
+
+        self.time_debug = False
 
 
         #async with lock:
@@ -219,6 +222,8 @@ class LLMWorker:
                                 'currenttoken':self.pipeline.encode(''),
                                 'occurrence':{},
                                 'count':0,
+                                'start_time':None,
+                                'end_time':None
                                 }
                         
                         #print(data)
@@ -310,14 +315,14 @@ class LLMWorker:
                                 #print(f'reference shape = {b_wkv_states[i].shape}')
                                 
                                 wkv_states[i] = b_wkv_states[i]#prompts['wkv_states']
-                            else:
-                                print('wkv is none')
+                            #else:
+                            #    print('wkv is none')
                             if b_shift_states[i] is not None:
                                 if type(b_shift_states[i])==list:
                                     b_shift_states[i] = torch.stack(b_shift_states[i],dim=0)
                                 shift_states[i] = b_shift_states[i]#prompts['shift_states']
-                            else:
-                                print('shift is none')
+                            #else:
+                            #    print('shift is none')
 
                         shift_states = shift_states.permute(1,0,2,3)
                         wkv_states = wkv_states.permute(1, 0, 2, 3, 4)
@@ -346,6 +351,8 @@ class LLMWorker:
                 else:
                     #print('recurrent infer mode')
                     #prompts = []
+                    if self.time_debug:
+                        start_time = time.time()
                     token = []
                     token_ids = [] 
                     b_wkv_states = []
@@ -361,6 +368,9 @@ class LLMWorker:
                     end_token = []
                     occurrence = []
                     counts = []
+
+                    start_times = []
+                    end_times = []
 
                     for i in range(self.llm_max_batch_count):
                         work = self.llM_current_batch_info[i]
@@ -381,16 +391,26 @@ class LLMWorker:
                                 end_token.append(work['end_token']) 
                                 occurrence.append(work['occurrence']) 
                                 counts.append(work['count']) 
+                                start_times.append(work['start_time'])
+                                end_times.append(work['end_time'])
                                 #outputs.append(work['output'])
+                    if self.time_debug:
+                        start_time1 = time.time()
                     if len(token) > 0:
                         otokens = []
                         for j in range(len(token)):
+                            if start_times[j] is None:
+                                start_times[j] = time.time()
                             #x[j][0][0] -= 1e10
                             for n in occurrence[j]:
                                 current_prob[j][-1][n] -= 0 + occurrence[j][n] * 1.0
                            # 
                             current_prob[j][-1][0] -= 1e10
-                            tk = self.pipeline.sample_logits_mose2(current_prob[j][-1], temperature=temperature[j], top_p=top_p[j])
+                            if self.time_debug:
+                                start_time_sample = time.time()
+                            tk = self.pipeline.sample_logits_mose2_optimized(current_prob[j][-1], temperature=temperature[j], top_p=top_p[j])
+                            if self.time_debug:
+                                start_time_sample1 = time.time()
 
                             #if counts[j] == 0:
                             #    tk = 33
@@ -438,6 +458,9 @@ class LLMWorker:
                             except:
                                 pass
 
+                        if self.time_debug:
+                            start_time2 = time.time()
+
                         idx = torch.cat(tokens, dim=0)
 
                         self.States = self.model.new_state(len(token))
@@ -448,17 +471,20 @@ class LLMWorker:
                         for i in range(len(token)):
                             if b_wkv_states[i] is not None:
                                 wkv_states[i] = b_wkv_states[i]#prompts['wkv_states']
-                            else:
-                                print('wkv is none')
+                            #else:
+                            #    print('wkv is none')
                             if b_shift_states[i] is not None:
                                 shift_states[i] = b_shift_states[i]#prompts['shift_states']
-                            else:
-                                print('shift is none')
+                            #else:
+                            #    print('shift is none')
 
                         shift_states = shift_states.permute(1,0,2,3)
                         wkv_states = wkv_states.permute(1, 0, 2, 3, 4)
 
                         x, shift_states, wkv_states = self.model.forward(idx, shift_states, wkv_states)
+
+                        if self.time_debug:
+                            start_time3 = time.time()
 
                         #print(f'probs shape = {x.shape}')
 
@@ -478,6 +504,14 @@ class LLMWorker:
                                     if statuss[j] == 'processing':
                                         prompt_queue.update_prompt(id,PromptStatus.PROCESSING,result=outputs[j])
                                     else:
+                                        if end_times[j] is None:
+                                           end_times[j] = time.time()
+                                           duration =  end_times[j] - start_times[j]
+                                           tokencount = len(out_tokens[j])
+                                           token_performance = tokencount / duration
+                                           print(f'batch{i} : finished. {token_performance:0.2f} t/s')
+
+
                                         prompt_queue.update_prompt(id,PromptStatus.COMPLETED,result=outputs[j],wkv_state=wkv_states[j].to('cpu'),shift_state=shift_states[j].to('cpu'))
                                         statuss[j] == 'idle'
 
@@ -487,12 +521,30 @@ class LLMWorker:
                                     self.llM_current_batch_info[i]['currenttoken'] = otokens[j]
                                     self.llM_current_batch_info[i]['slotstatus'] = statuss[j]
 
+                                    self.llM_current_batch_info[i]['start_time'] = start_times[j]
+                                    self.llM_current_batch_info[i]['end_time'] = end_times[j]
+
                                     self.llM_current_batch_info[i]['output'] = outputs[j]
                                     self.llM_current_batch_info[i]['out_tokens'] = out_tokens[j]
                                     self.llM_current_batch_info[i]['out_last'] = out_last[j]
                                     self.llM_current_batch_info[i]['occurrence'] = occurrence[j]
                                     self.llM_current_batch_info[i]['count'] = counts[j] + 1
                                     break
+                        if self.time_debug:
+                            start_time4 = time.time()
+
+                        if self.time_debug:
+                            StoreTime = start_time4 - start_time3
+                            InferenceTime = start_time3 - start_time2
+                            DecodeTime = start_time2 - start_time1
+                            FetchTime = start_time1 - start_time
+                            SamplerTime = start_time_sample1 - start_time_sample
+
+                            print(f'FetchTime = {FetchTime*1000:0.4f}')
+                            print(f'SamplerTime = {SamplerTime*1000:0.4f}')
+                            print(f'DecodeTime = {DecodeTime*1000:0.4f}')
+                            print(f'InferenceTime = {InferenceTime*1000:0.4f}')
+                            print(f'StoreTime = {StoreTime*1000:0.4f}')
 
 
                     

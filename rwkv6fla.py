@@ -16,6 +16,7 @@ import time
 import bitsandbytes as bnb
 import functools
 
+#@torch.jit.ignore
 class QuantLinear(nn.Module): # inspired by RWKV-PEFT @JL-er Thanks! 
     def __init__(self, in_features: int, out_features: int, bias: bool):
         super().__init__()
@@ -152,6 +153,8 @@ class PIPELINE():
         out = torch.multinomial(probs, num_samples=1)[0]
         return int(out)
     
+
+    
     def sample_logits_mose(self, logits, temperature=1.0, top_p=0.85, top_k=0):
         if temperature == 0:
             temperature = 1.0
@@ -192,6 +195,45 @@ class PIPELINE():
         probs = probs / torch.sum(probs)
         out = torch.multinomial(probs, num_samples=1)[0]
         return int(out)
+    
+    def sample_logits_mose2_optimized(self, logits, temperature=1.0, top_p=0.85, top_k=0):
+        if temperature == 0:
+            return int(torch.argmax(logits))
+
+        probs = F.softmax(logits.float(), dim=-1)
+
+        if top_k > 0 and top_k < len(probs):
+            top_k_probs, top_k_indices = torch.topk(probs, k=top_k)
+            probs = torch.zeros_like(probs).scatter_(0, top_k_indices, top_k_probs)
+        else:
+            top_k_probs = probs
+
+        if top_p < 1.0:
+            sorted_probs, sorted_indices = torch.sort(top_k_probs, descending=True)
+            cumulative_probs = torch.cumsum(sorted_probs, dim=-1)
+            cutoff_index = torch.searchsorted(cumulative_probs, top_p)
+            probs_above_cutoff = sorted_probs[:cutoff_index + 1]
+            indices_above_cutoff = sorted_indices[:cutoff_index + 1]
+            probs.zero_()
+            probs.scatter_(0, indices_above_cutoff, probs_above_cutoff)
+
+        if temperature != 1.0:
+            probs = probs ** (1.0 / temperature)
+            probs /= probs.sum()
+
+        return int(torch.multinomial(probs, num_samples=1)[0])
+    
+    def improved_nucleus_sampling(self, logits, temperature=1.0, top_p=0.9):
+       p = top_p
+       probs = F.softmax(logits, dim=-1)
+       sorted_probs, sorted_indices = torch.sort(probs, descending=True)
+       cumulative_probs = torch.cumsum(sorted_probs, dim=-1)
+       sorted_indices_to_remove = cumulative_probs > p
+       sorted_indices_to_remove[1:] = sorted_indices_to_remove[:-1].clone()
+       sorted_indices_to_remove[0] = False
+       indices_to_remove = sorted_indices_to_remove.scatter(0, sorted_indices, sorted_indices_to_remove)
+       probs.masked_fill_(indices_to_remove, 0.0)
+       return int(torch.multinomial(probs, num_samples=1)[0])
 
 
 
@@ -335,16 +377,63 @@ class RWKV6_TimeMix(torch.nn.Module):
             self.time_faaaa = nn.Parameter(torch.zeros(n_head, head_size))
             print(self.time_faaaa.shape)
 
-        self.time_shift = nn.ZeroPad2d((0, 0, 1, -1))
+        #self.time_shift = nn.ZeroPad2d((0, 0, 1, -1))
         self.receptance =HybridLinear(n_embd, dim_att, bias=False)
         self.key =HybridLinear(n_embd, dim_att, bias=False)
         self.value =HybridLinear(n_embd, dim_att, bias=False)
-        self.output =HybridLinear(dim_att, n_embd, bias=False)
+
+        self.output =nn.Linear(dim_att, n_embd, bias=False)
+
         self.gate =HybridLinear(n_embd, dim_att, bias=False)
         self.ln_x = nn.GroupNorm(self.n_head, dim_att, eps=(1e-5)*(head_size_divisor**2))
         self.ctx = 1024#saveBackDummy()
 
-    def jit_func(self, x, last_state_shift):
+    #@torch.jit.script
+    # def jit_func(self, x, last_state_shift):
+    #     B, T, C = x.size()
+
+    #     #print(f'last_state_shift = {last_state_shift.shape}')
+
+    #     output = torch.concat((last_state_shift, x[:, :-1]), dim=1)
+    #     last_state_shift[:] = x[:,-1:]
+
+    #     xx = output - x
+
+    #     xxx = x + xx * self.time_maa_x
+    #     xxx = torch.tanh(xxx @ self.time_maa_w1).view(B*T, 5, -1).transpose(0, 1)
+    #     xxx = torch.bmm(xxx, self.time_maa_w2).view(5, B, T, -1)
+    #     mw, mk, mv, mr, mg = xxx.unbind(dim=0)
+
+    #     xw = x + xx * (self.time_maa_w + mw)
+    #     xk = x + xx * (self.time_maa_k + mk)
+    #     xv = x + xx * (self.time_maa_v + mv)
+    #     xr = x + xx * (self.time_maa_r + mr)
+    #     xg = x + xx * (self.time_maa_g + mg)
+
+    #     r = self.receptance(xr)
+    #     k = self.key(xk)
+    #     v = self.value(xv)
+    #     g = torch.nn.functional.silu(self.gate(xg))
+
+    #     ww = torch.tanh(xw @ self.time_decay_w1) @ self.time_decay_w2
+    #     w = self.time_decay + ww
+    #     w = w.exp().neg()
+    #     return r, k, v, g, w
+    
+    @torch.jit.script    
+    def jit_func_parts(x, last_state_shift,
+                       time_maa_x,
+                       time_maa_w1,
+                       time_maa_w2,
+                       time_maa_w,
+                       time_maa_k,
+                       time_maa_v,
+                       time_maa_r,
+                       time_maa_g,
+                       time_decay_w1,
+                       time_decay_w2,
+                       time_decay
+                       ):
         B, T, C = x.size()
 
         #print(f'last_state_shift = {last_state_shift.shape}')
@@ -354,27 +443,34 @@ class RWKV6_TimeMix(torch.nn.Module):
 
         xx = output - x
 
-        xxx = x + xx * self.time_maa_x
-        xxx = torch.tanh(xxx @ self.time_maa_w1).view(B*T, 5, -1).transpose(0, 1)
-        xxx = torch.bmm(xxx, self.time_maa_w2).view(5, B, T, -1)
+        xxx = x + xx * time_maa_x
+        xxx = torch.tanh(xxx @ time_maa_w1).view(B*T, 5, -1).transpose(0, 1)
+        xxx = torch.bmm(xxx, time_maa_w2).view(5, B, T, -1)
         mw, mk, mv, mr, mg = xxx.unbind(dim=0)
 
-        xw = x + xx * (self.time_maa_w + mw)
-        xk = x + xx * (self.time_maa_k + mk)
-        xv = x + xx * (self.time_maa_v + mv)
-        xr = x + xx * (self.time_maa_r + mr)
-        xg = x + xx * (self.time_maa_g + mg)
+        xw = x + xx * (time_maa_w + mw)
+        xk = x + xx * (time_maa_k + mk)
+        xv = x + xx * (time_maa_v + mv)
+        xr = x + xx * (time_maa_r + mr)
+        xg = x + xx * (time_maa_g + mg)
+
+        ww = torch.tanh(xw @ time_decay_w1) @ time_decay_w2
+
+        w = time_decay + ww
+        w = w.exp().neg()
+
+        return xw,xk,xv,xr,xg,ww,w
+    
+    def jit_func_parts2(self,xw,xk,xv,xr,xg):
 
         r = self.receptance(xr)
         k = self.key(xk)
         v = self.value(xv)
         g = torch.nn.functional.silu(self.gate(xg))
-
-        ww = torch.tanh(xw @ self.time_decay_w1) @ self.time_decay_w2
-        w = self.time_decay + ww
-        w = w.exp().neg()
-        return r, k, v, g, w
-
+        return r, k, v, g
+    
+    
+   # @torch.jit.script
     def jit_func_2(self, x, g):
         B, T, C = x.size()
         x = x.view(B * T, C)
@@ -382,13 +478,28 @@ class RWKV6_TimeMix(torch.nn.Module):
         x = self.ln_x(x).view(B, T, C)
         x = self.output(x * g)
         return x
+ 
 
     def forward(self, x, last_state_shift, last_state_wkv):
         #print("x shape:", x.shape)
         B, T, C = x.size()
         H = self.n_head
 
-        r, k, v, g, w = self.jit_func(x, last_state_shift)
+        xw,xk,xv,xr,xg,ww,w  = self.jit_func_parts(x=x, last_state_shift=last_state_shift,
+                       time_maa_x=self.time_maa_x,
+                       time_maa_w1=self.time_maa_w1,
+                       time_maa_w2=self.time_maa_w2,
+                       time_maa_w=self.time_maa_w,
+                       time_maa_k=self.time_maa_k,
+                       time_maa_v=self.time_maa_v,
+                       time_maa_r=self.time_maa_r,
+                       time_maa_g=self.time_maa_g,
+                       time_decay_w1=self.time_decay_w1,
+                       time_decay_w2=self.time_decay_w2,
+                       time_decay=self.time_decay
+                       )
+        
+        r, k, v, g = self.jit_func_parts2(xw,xk,xv,xr,xg)
 
         if T > 1:
             #print(f'T = {T}')
@@ -412,9 +523,9 @@ class RWKV6_TimeMix(torch.nn.Module):
                 last_state_wkv,True, 0)
 
         x = x.reshape(B,T,C)
-        # x = RUN_CUDA_RWKV6(B, T, C, H, r, k, v, w, u=self.time_faaaa)
 
         return self.jit_func_2(x, g), last_state_shift, last_state_wkv
+ 
     
 ### ---
 # Core RWKV module
@@ -432,6 +543,8 @@ class RWKV6(nn.Module):
  
         # Setup the parent class
         super().__init__()
+
+        self.time_debug = False
            
         try:
             self.batches = micro_bsz
@@ -538,7 +651,7 @@ class RWKV6(nn.Module):
         quant_layers = 0
 
         if quantize:
-            quant_layers = 61
+            quant_layers = 40
 
 
         for name, m in self.named_modules():
@@ -591,22 +704,48 @@ class RWKV6(nn.Module):
                  self.emb.weight.device, self.emb.weight.dtype
              )
         
-    # @TCompileBaseline
-   
+    #@TCompileBaseline
     def forward(self, idx: torch.Tensor, last_shift_states: List[torch.Tensor],
                 last_wkv_states: List[torch.Tensor]):
+        if self.time_debug:
+            start_time = time.time()
         if idx.dtype != torch.int64:
             x = idx.requires_grad_(False).to(device=self.emb.weight.device)
         else:
             x = self.emb(idx)
+        if self.time_debug:
+            start_time1 = time.time()
         x = self.ln_in(x)
+
+        if self.time_debug:
+            start_time2 = time.time()
 
         for i,b in enumerate(self.blocks):
             #print(i)
             x,last_shift_states[i*2],last_shift_states[i*2+1], last_wkv_states[i]  = b(x, last_shift_states[i*2],last_shift_states[i*2+1], last_wkv_states[i])
 
+        if self.time_debug:
+            start_time3 = time.time()
+
         x = self.ln_out(x)
+        if self.time_debug:
+            start_time4 = time.time()
         x = self.head(x)
+        if self.time_debug:
+            start_time5 = time.time()
+
+        if self.time_debug:
+            time_head = start_time5 - start_time4
+            time_lnout = start_time4 - start_time3
+            time_block = start_time3 - start_time2
+            time_lnin = start_time2 - start_time1
+            time_emb = start_time1 - start_time
+
+            print(f'time_emb = {time_emb*1000:0.3f}ms')    
+            print(f'time_lnin = {time_lnin*1000:0.3f}ms')   
+            print(f'time_block = {time_block*1000:0.3f}ms')   
+            print(f'time_lnout = {time_lnout*1000:0.3f}ms')   
+            print(f'time_head = {time_head*1000:0.3f}ms')   
 
         return x, last_shift_states, last_wkv_states
     
