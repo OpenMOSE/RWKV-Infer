@@ -1,22 +1,6 @@
 # RWKV-Infer with Flash-Linear-Attention
 
-A large-scale RWKV v6 inference engine using the triton backend. Supports true multi-batch generation and dynamic State switching.
-
-This project aims to simplify the deployment of RWKV model inference in a Docker
-
-When inferring quantized models, pre-prompt processing is twice as fast as the conventional RWKV-Infer.
-
-## 2024.08.17 Update
-   - Slightly speedup for inference(up to 15% faster)
-
-## The following features are included:
-   - Support for true multi-batch generation and stream delivery
-   - State switching for each batch
-   - Bitsandbytes Quantization Support(NF4)
-   - Rocm and Cuda support
-   - OpenAI-compatible API
-   - Dynamic RNN State Cache
-   By dynamically caching RNN states, we have improved the efficiency of state regeneration frequency and accelerated inference speed.
+## Test Branch - Mixture of State Experts
 
 ## How To Use
    - 1. Install Latest? Pytorch with Cuda(2.2+ tested)

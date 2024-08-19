@@ -1,6 +1,8 @@
 #RWKVInfer with Flash-Linear-Attention
 #2024 OpenMOSE
 
+#Test Implement Mixture of State Experts "MoSE"
+
 import asyncio
 import queue
 from dataclasses import dataclass,field
