@@ -2,6 +2,9 @@
 
 ## Test Branch - Mixture of State Experts
 
+### Monkey Idea
+   - 1. Set 4
+
 ## How To Use
    - 1. Install Latest? Pytorch with Cuda(2.2+ tested)
    - 2. install requirements with triton==2.2.0
