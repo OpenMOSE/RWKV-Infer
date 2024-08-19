@@ -781,9 +781,9 @@ if __name__ == '__main__':
         #    token = pipeline.sample_logits_mose2(x[0][0], temperature=1, top_p=0.3)
         #else:
         #    token = pipeline.sample_logits_mose2(x[0], temperature=1, top_p=0.3)
-        State0GatingWeight = 0.2
-        State1GatingWeight = 0.0
-        State2GatingWeight = 0.8
+        State0GatingWeight = 0.0
+        State1GatingWeight = 0.5
+        State2GatingWeight = 0.0
 
         otokens = []
         #for j in range(Target_batch):
