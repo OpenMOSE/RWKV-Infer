@@ -5,7 +5,7 @@
    - 2. By utilizing FLA (Flash Linear Attention) for simultaneous multiple inferences, we can minimize the processing speed reduction even when applying MRSS.
    - 3. For example, by using MRSS to perform inference with both a TimeState tuned for specialized knowledge and a TimeState tuned for conversational tone, it becomes possible to achieve inference that balances both knowledge and tone.
    - 4. The Gating Weights in MRSS can be adjusted for each inference batch. This allows for dynamic control of the dependency ratio for each State. In the future, we plan to implement dynamic Gating Weight adjustment using a neural network.
-   ![mrss](mrss.png)
+![mrss](mrss.png)
 
 ## How To Use
    - 1. Install Latest? Pytorch with Cuda(2.2+ tested)
