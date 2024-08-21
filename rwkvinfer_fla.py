@@ -343,8 +343,8 @@ class LLMWorker:
                                 if mrss_info[i]['use_contain_originalstate'] == True:
                                     if len(b_wkv_states[i]) == mrss_state_count + 1:
                                         wkv_states[NowTensorPosition + mrss_state_count] = b_wkv_states[i][mrss_state_count]
-                                    else:
-                                        print('through')
+                                    #else:
+                                    #    print('through')
 
                                 if b_shift_states[i] is not None:
                                     if type(b_shift_states[i])==list:
@@ -357,7 +357,7 @@ class LLMWorker:
                                     NowTensorPosition = NowTensorPosition + 1
 
                             else:
-                                print('Normal Mode')
+                                #print('Normal Mode')
                                 if b_wkv_states[i] is not None:
                                     if type(b_wkv_states[i])==list:
                                         b_wkv_states[i] = torch.stack(b_wkv_states[i],dim=0)
@@ -500,15 +500,15 @@ class LLMWorker:
                                     current_gating_param_count  = len(mrss_info[j]['mrss_gating_param'])
                                     for k in range(mrss_state_count - current_gating_param_count):
                                         mrss_info[j]['mrss_gating_param'].append(0.0) #add dummy gating weight
-                                print(f"Current GatingWeightCount = {len(mrss_info[j]['mrss_gating_param'])}")
+                                #print(f"Current GatingWeightCount = {len(mrss_info[j]['mrss_gating_param'])}")
 
                                 logits_combined = None
                                 totalweight = 0
-                                print(f'mrss_state_count = {mrss_state_count}')
+                                #print(f'mrss_state_count = {mrss_state_count}')
                                 for k in range(mrss_state_count):
                                     for n in occurrence[j]:
                                         current_prob[j][k][-1][n] -= 0 + occurrence[j][n] * 1.0
-                                    print(f'current_prob[j] length = {len(current_prob[j])}')
+                                    #print(f'current_prob[j] length = {len(current_prob[j])}')
                                     current_prob[j][k][-1][0] -= 1e10
                                     if logits_combined is None:
                                         logits_combined = current_prob[j][k][-1] * mrss_info[j]['mrss_gating_param'][k]
@@ -519,7 +519,7 @@ class LLMWorker:
 
                                 logits_combined = logits_combined / totalweight
 
-                                print(f'logits_combined = {logits_combined}')
+                                #print(f'logits_combined = {logits_combined}')
 
                                 if self.time_debug:
                                     start_time_sample = time.time()
@@ -602,6 +602,8 @@ class LLMWorker:
 
                         self.States = self.model.new_state((realbatchcount))
 
+                        #print(f'realbatchcount={realbatchcount}')
+
                         shift_states = self.States.shift_states.permute(1, 0, 2, 3)
                         wkv_states = self.States.wkv_states.permute(1, 0, 2, 3, 4)
 
@@ -617,7 +619,7 @@ class LLMWorker:
                         NowTensorPosition = 0
                         for i in range(len(token_ids)):
                             if mrss_info[i]['use_mrss'] == True:
-                                print('MRSS Mode')
+                                #print('MRSS Mode')
                                 if type(b_wkv_states[i])==list:
                                     b_wkv_states[i] = torch.stack(b_wkv_states[i],dim=0)
 
@@ -628,8 +630,8 @@ class LLMWorker:
                                 if mrss_info[i]['use_contain_originalstate'] == True:
                                     if len(b_wkv_states[i]) == mrss_state_count + 1:
                                         wkv_states[NowTensorPosition + mrss_state_count] = b_wkv_states[i][mrss_state_count]
-                                    else:
-                                        print('through')
+                                    #else:
+                                    #    print('through')
 
                                 if b_shift_states[i] is not None:
                                     if type(b_shift_states[i])==list:
@@ -638,8 +640,8 @@ class LLMWorker:
                                         shift_states[NowTensorPosition + j] = b_shift_states[i][j]
 
                                 NowTensorPosition = NowTensorPosition + mrss_state_count
-                                if mrss_info[i]['use_contain_originalstate'] == True:
-                                    NowTensorPosition = NowTensorPosition + 1
+                                #if mrss_info[i]['use_contain_originalstate'] == True and mrss_state_count != mrss_info[i]['fixed_state_count']:
+                                #    NowTensorPosition = NowTensorPosition + 1
 
                             else:
                                 #print('Normal Mode')
@@ -733,7 +735,7 @@ class LLMWorker:
                                     self.llM_current_batch_info[i]['out_last'] = out_last[j]
                                     self.llM_current_batch_info[i]['occurrence'] = occurrence[j]
                                     self.llM_current_batch_info[i]['count'] = counts[j] + 1
-                                    self.llM_current_batch_info[i]['mrss_state_count'] = mrss_info[j]['mrss_state_count']
+                                    #self.llM_current_batch_info[i]['mrss_state_count'] = mrss_info[j]['mrss_state_count']
                                     break
                         if self.time_debug:
                             start_time4 = time.time()
