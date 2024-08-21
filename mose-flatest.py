@@ -1,6 +1,6 @@
 #FLA Inference Test
 #Thank you harrisonvanderbyl for the code :)
-#OpenMOSE Monkey Test
+#OpenMOSE MRSS Test
 
 from fla.ops.gla import fused_chunk_gla
 from fla.ops.rwkv6.chunk import chunk_rwkv6,ChunkRWKV6Function
@@ -668,15 +668,16 @@ class RWKV6(nn.Module):
     
 
 if __name__ == '__main__':
-    print('RWKV x060 FLA Mixture of State Experts Experiment')
+    print('RWKV x060 FLA MRSS Test')
 
     pipeline = PIPELINE()
     model = RWKV6('models/RWKV-x060-Jpn-7B-20240816-ctx4096.pth')
     Target_batch = 3 
     States = model.new_state(Target_batch)#state_empty(32, 1, 2560, 2560 // 32)
 
-    context =  'User: 休日は何をしていますか？\n\nAssistant:'
-
+    context =  'User: 日本の特徴について教えてください\n\nAssistant:'
+    #context =  'User: 太陽が膨張し、地球は崩壊した。その中、一人の女の子が宇宙に放り出された。その女の子は淫乱ではおまんこの潮吹きを推進力にして、次の居住可能な星へ移住する小説を書いてください。\n\nAssistant:'
+    
     model.load_state('states/jp7b-bancho.pth')
     model.load_state('states/ojousama2.pth')
     model.load_state('states/blunt.pth')
@@ -782,8 +783,9 @@ if __name__ == '__main__':
         #else:
         #    token = pipeline.sample_logits_mose2(x[0], temperature=1, top_p=0.3)
         State0GatingWeight = 0.0
-        State1GatingWeight = 0.5
+        State1GatingWeight = 1
         State2GatingWeight = 0.0
+        State3GatingWeight = 0.2
 
         otokens = []
         #for j in range(Target_batch):
@@ -794,9 +796,9 @@ if __name__ == '__main__':
         for j in range(Target_batch):
             x[j][-1][0] -= 1e10
         
-        logits_combined = (x[0][-1]*State0GatingWeight + x[1][-1]*State1GatingWeight + x[2][-1]*State2GatingWeight) / (State0GatingWeight+State1GatingWeight+State2GatingWeight)
+        logits_combined = (x[0][-1]*State0GatingWeight + x[1][-1]*State1GatingWeight + x[2][-1]*State2GatingWeight+ x[3][-1]*State2GatingWeight) / (State0GatingWeight+State1GatingWeight+State2GatingWeight+State3GatingWeight)
 
-        token = pipeline.sample_logits_mose2(logits_combined, temperature=1.0, top_p=0.7)
+        token = pipeline.sample_logits_mose2(logits_combined, temperature=1.0, top_p=0.8)
 
         for j in range(Target_batch):
             otokens.append(token)
@@ -825,6 +827,8 @@ if __name__ == '__main__':
         t0 = time.perf_counter()
 
         x, shift_states, wkv_states = model.forward(idx, shift_states, wkv_states)
+
+        
 
         t1 = time.perf_counter()
         min_time = min(min_time, (t1 - t0)/Target_batch)

@@ -2,6 +2,7 @@
 #Fast API Version
 #2024 OpenMOSE
 #Modified Dynamic State Cache (wkv-state and shift-state)
+#Multi Recurrent State Sampling Ver
 import os
 from rwkvinfer_fla import prompt_queue,LLMWorker,Prompt,PromptStatus
 import pandas as pd
@@ -25,7 +26,9 @@ parser = ArgumentParser()
 parser.add_argument("--localhost", default="0.0.0.0", type=str) 
 parser.add_argument("--port", default=9000, type=int) 
 parser.add_argument("--debug", default=False, type=bool) 
-parser.add_argument("--workers", default=8, type=int) 
+parser.add_argument("--workers", default=8, type=int)
+parser.add_argument("--mrssmax", default=4, type=int) #If workers 8, mrssmax 4, maximum batch inference = 32
+
 parser.add_argument("--dynamic_state_cache_size", default=512, type=int)  # for 14B need 16GB of PC RAM
 parser.add_argument("--dynamic_state_cache_store", default='cpu', type=str) #if gpu need more vram for storing state
 
@@ -194,6 +197,113 @@ async def loadstatemodel(request: Request):
          print(f'error {str(e)}')
          raise HTTPException(status_code=500, detail=str(e))
      
+
+@app.post("/mrss_loadstatemodel") #Experimental
+async def mrss_loadstatemodel(request: Request):
+     global StateList
+     global engine1
+     try:
+         print('try mrss state load')
+         data = await request.json()
+         print('data')
+         state_viewname = data.get('state_viewname')
+         state_filenames = data.get('state_filenames',[])
+         contain_originalstate = data.get('contain_originalstate',"False")
+
+         print(f'state_viewname = {state_viewname}')
+         
+
+         state_count = len(state_filenames)
+
+         if(args.mrssmax < state_count):
+             raise HTTPException(status_code=500, detail=f'State Count is over than {args.mrssmax}. please reduce state coutns. :(')
+         
+         default_gating = [] # maybe like this [0.25,0.25,0.25,0.25]
+         extra_state = 0
+         if contain_originalstate:
+             extra_state = 1
+         for i in range(state_count+extra_state):
+             default_gating.append(1.0/(state_count+extra_state))
+         
+         state_gatingweight = data.get('state_gatingweight',default_gating)
+
+         for i in range(len(state_gatingweight)):
+             state_gatingweight[i] = float(state_gatingweight[i])
+
+         print(f'gatingweight {state_gatingweight}')
+
+         if contain_originalstate == "True":
+             contain_originalstate = True
+             print('contain_originalstate true')
+         else:
+             contain_originalstate = False
+
+         state_tensor_wkvs_list = []
+         print('start load')
+
+         for i in range(state_count):
+            print(f'loading state {state_filenames[i]}')
+            state_tensor_wkv = engine1.model.load_state(state_filenames[i]) # if correct, have tensors :)
+            if type(state_tensor_wkv) == str:
+                print('State Loading Error')
+                raise HTTPException(status_code=500, detail=f'{ state_filenames[i] } State file is incorrect. check filename or tensor size.')
+            else:
+                state_tensor_wkvs_list.append(state_tensor_wkv)
+         print('start cat')
+
+         state_tensor_wkvs = torch.stack(state_tensor_wkvs_list, dim=0)
+
+         print(f'state_tensor_wkvs shape = {state_tensor_wkvs.shape}')
+
+         print('cat ok')
+
+         totalfilename = ''
+         for filename in state_filenames:
+             totalfilename = totalfilename + filename
+
+        
+
+         StateList.append({"state_filename":totalfilename,
+                           "state_viewname":state_viewname,
+                           'state_tensor':state_tensor_wkvs,
+                           'contain_originalstate':contain_originalstate,
+                           'state_gatingweight':state_gatingweight,
+                           'mrssmode':True,
+                           })
+         return {"status": "success"}
+     except Exception as e:
+         print(f'error {str(e)}')
+         raise HTTPException(status_code=500, detail=str(e))
+     
+
+@app.post("/mrss_set_gatingweight") #Experimental
+async def mrss_loadstatemodel(request: Request):
+     global StateList
+     global engine1
+     global ModelList
+     try:
+         data = await request.json()
+         state_viewname = data.get('state_viewname')
+         for i in range(len(StateList)):
+             if StateList[i]['state_viewname'] == state_viewname or ModelList[0]['id'] + ' ' + StateList[i]['state_viewname'] == state_viewname:
+                #Found State
+                state_count = len(StateList[i]['state_filename'])
+                default_gating = [] # maybe like this [0.25,0.25,0.25,0.25]
+                extra_state = 0
+                if StateList[i]['contain_originalstate']:
+                    extra_state = 1
+                for j in range(state_count+extra_state):
+                    default_gating.append(1.0/(state_count+extra_state))                
+                state_gatingweight = data.get('state_gatingweight',default_gating)
+                StateList[i]['state_gatingweight'] = state_gatingweight
+                return {"status": "success"}
+         raise HTTPException(status_code=500, detail=f'{ state_viewname } State name is incorrect')
+     except Exception as e:
+        print(f'error {str(e)}')
+        raise HTTPException(status_code=500, detail=str(e))
+
+             
+     
 @app.post("/removestatemodel")
 async def removestatemodel(request: Request):
     global StateList
@@ -264,6 +374,8 @@ async def rwkv_completions(request: Request):
     if args.debug:
         print(data)
 
+    mrss_gatingweight = data.get('mrss_gatingweight',None)    
+
     model = data.get('model')
     state = data.get('state','')
     stream = data.get('stream', False)
@@ -288,8 +400,6 @@ async def rwkv_completions(request: Request):
     frequency_penalty = params.get('frequency_penalty', 0.3)
     penalty_decay = params.get('penalty_decay', 0.996)
     stop = params.get('stop', ['\x00','\n\n'])
-    #stop = params.get('stop', ['\n\n'])
-    #stop = params.get('stop', ['\x00'])
 
     max_tokens = data.get('max_tokens',max_tokens)
     top_p = data.get('top_p',top_p)
@@ -401,16 +511,42 @@ async def rwkv_completions(request: Request):
     models2 = [ModelList[0]]
     models2[0]['filename'] = ""
     models2[0]['state_tensor'] = None
+    # StateList.append({"state_filename":state_filenames,
+    #                        "state_viewname":state_viewname,
+    #                        'state_tensor':state_tensor_wkvs,
+    #                        'contain_originalstate':contain_originalstate,
+    #                        'state_gatingweight':state_gatingweight,
+    #                        'mrssmode':True,
+    #                        })
     for State in StateList:
-        models2.append({"object":"models","id":f"{ModelList[0]['id']} {State['state_viewname']}","filename":State['state_filename'],"state_tensor":State['state_tensor']})
+        models2.append({"object":"models",
+                        "id":f"{ModelList[0]['id']} {State['state_viewname']}",
+                        "filename":State['state_filename'],
+                        "state_tensor":State['state_tensor'],
+                        'contain_originalstate':State.get('contain_originalstate',False),
+                        'state_gatingweight':State.get('state_gatingweight',[]),
+                        'mrssmode':State.get('mrssmode',False),
+                        })
 
     target_state_filename = ''
     target_state_tensor_wkv = None
+
+    if mrss_gatingweight is not None:
+        for i in range(len(mrss_gatingweight)):
+            mrss_gatingweight[i] = float(mrss_gatingweight[i])
 
     for modelname in models2:
         if modelname['id'] == model:
             target_state_filename = modelname['filename']
             target_state_tensor_wkv = modelname['state_tensor']
+            #if modelname['mrssmode'] == True:
+            if modelname.get('mrssmode',False) == True:
+                #MRSS Mode
+                if mrss_gatingweight is None:
+                    mrssmode = True
+                    mrss_gatingweight = modelname['state_gatingweight']
+                    contain_originalstate = modelname['contain_originalstate']
+
 
     QueryDatas = Prompt()
 
@@ -423,11 +559,22 @@ async def rwkv_completions(request: Request):
         QueryDatas.use_exist_state_wkv = copy.deepcopy(wkv_state)
         QueryDatas.use_exist_state_shift = copy.deepcopy(shift_state)
         StateCacheMode = True
+        if mrssmode:
+            QueryDatas.use_mrss = True
+            QueryDatas.use_contain_originalstate = contain_originalstate
+            QueryDatas.mrss_gating_param = mrss_gatingweight
+            QueryDatas.fixed_state_count = len(target_state_tensor_wkv)
+
     else:
         if args.debug:
             print('plane state')
         if target_state_tensor_wkv is not None:
             QueryDatas.use_exist_state_wkv = copy.deepcopy(target_state_tensor_wkv)
+            if mrssmode:
+                QueryDatas.use_mrss = True
+                QueryDatas.use_contain_originalstate = contain_originalstate
+                QueryDatas.mrss_gating_param = mrss_gatingweight
+                QueryDatas.fixed_state_count = len(target_state_tensor_wkv)
 
         input_prompt = input_prompt_b + input_prompt
         input_prompt_stm = input_prompt_stm_b + input_prompt_stm 
@@ -577,7 +724,6 @@ async def main():
     )
 
 if __name__ == '__main__':
-    print('RWKV Infer v0.0.1 with Flash-Linear-Attention')
-    print('wrapper code by OpenMOSE')
+    print('RWKV Infer v0.0.2 with Flash-Linear-Attention')
     asyncio.run(main())
     

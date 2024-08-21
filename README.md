@@ -1,9 +1,10 @@
 # RWKV-Infer with Flash-Linear-Attention
 
-## Test Branch - Mixture of State Experts
-
-### Monkey Idea
-   - 1. Set 4
+## Implement - Multi Recurrent State Sampling (MRSS)
+   - 1. For a single model, we apply multiple RNN timestates and set Gating Weights. We perform inference for each of these states, merge the resulting probability spaces using the Gating Weights, and then sample from this merged space. This enables inference that takes into account the learning results from multiple states.
+   - 2. By utilizing FLA (Flash Linear Attention) for simultaneous multiple inferences, we can minimize the processing speed reduction even when applying MRSS.
+   - 3. For example, by using MRSS to perform inference with both a TimeState tuned for specialized knowledge and a TimeState tuned for conversational tone, it becomes possible to achieve inference that balances both knowledge and tone.
+   - 4. The Gating Weights in MRSS can be adjusted for each inference batch. This allows for dynamic control of the dependency ratio for each State. In the future, we plan to implement dynamic Gating Weight adjustment using a neural network.
 
 ## How To Use
    - 1. Install Latest? Pytorch with Cuda(2.2+ tested)
@@ -48,12 +49,11 @@ curl http://127.0.0.1:9000/models -X GET
    - RWKV-PEFT @Jl-er
    - flash-linear-attention @ sustcsonglin
 
-## known issues
-   - Slightly degradation model perplexity. - solved on 2024.08.17 fix prob select of 1st token
 
 ## ToDo for me
    - Improve FLA Stability on bf16 - maybe done.
-   - Mixture of State Experts. in coding.
-   - Speculative Decoding(In Experiment. but hit rate is low..... 14b + 0.4b(hitrate only below 10%..)) 
+   - Implement Multi Recurrent State Sampling - in experiment
+   - Implement MRSS GatingLayer in coding.
+   - Speculative Decoding - In Experiment. but currently suspended.
    
 2024 OpenMOSE
