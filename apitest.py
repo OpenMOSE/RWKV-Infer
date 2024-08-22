@@ -74,9 +74,10 @@ if __name__ == '__main__':
             "model": "RWKV x060 7B JPN MRSS Test",
             "messages": "", #set model viewname. if model+state(set '{ModelViewname} {StateViewname}')
             "max_tokens": 500,
-            "temperature": 1,
+            #"temperature": 1,
             "stream": True,
-            "names": {'system': 'system', 'user': 'user', 'assistant': 'assistant'}
+            "names": {'system': 'system', 'user': 'user', 'assistant': 'assistant'},
+            #"mrss_gatingweight":['0.01','0.01','0.9','0.1']
         }
     
     for message in BaseEngine.initial_prompt:

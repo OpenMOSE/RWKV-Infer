@@ -317,6 +317,12 @@ async def mrss_loadstatemodel(request: Request):
      try:
          data = await request.json()
          state_viewname = data.get('state_viewname')
+         default_temperature = data.get('default_temperature',None)
+         default_top_p = data.get('default_top_p',None)
+         if default_temperature is not None:
+             default_temperature = float(default_temperature)
+         if default_top_p is not None:
+             default_top_p = float(default_top_p)
          for i in range(len(StateList)):
              if StateList[i]['state_viewname'] == state_viewname or ModelList[0]['id'] + ' ' + StateList[i]['state_viewname'] == state_viewname:
                 #Found State
@@ -329,6 +335,13 @@ async def mrss_loadstatemodel(request: Request):
                     default_gating.append(1.0/(state_count+extra_state))                
                 state_gatingweight = data.get('state_gatingweight',default_gating)
                 StateList[i]['state_gatingweight'] = state_gatingweight
+                for j in range(len(state_gatingweight)):
+                    state_gatingweight[j] = float(state_gatingweight[j])
+                if default_temperature is not None:
+                    StateList[i]['default_temperature'] = default_temperature
+                if default_top_p is not None:
+                    StateList[i]['default_top_p'] = default_top_p
+
                 return {"status": "success"}
          raise HTTPException(status_code=500, detail=f'{ state_viewname } State name is incorrect')
      except Exception as e:
@@ -583,6 +596,9 @@ async def rwkv_completions(request: Request):
                     mrssmode = True
                     mrss_gatingweight = modelname['state_gatingweight']
                     contain_originalstate = modelname['contain_originalstate']
+                else:
+                    mrssmode = True
+                    contain_originalstate = modelname['contain_originalstate']
             else:
                 mrssmode = False
             break
@@ -623,6 +639,7 @@ async def rwkv_completions(request: Request):
             QueryDatas.use_contain_originalstate = contain_originalstate
             QueryDatas.mrss_gating_param = mrss_gatingweight
             QueryDatas.fixed_state_count = len(target_state_tensor_wkv)
+            print(f'MRSS GatingParam = {QueryDatas.mrss_gating_param}')
 
     else:
         if args.debug:
@@ -634,6 +651,7 @@ async def rwkv_completions(request: Request):
                 QueryDatas.use_contain_originalstate = contain_originalstate
                 QueryDatas.mrss_gating_param = mrss_gatingweight
                 QueryDatas.fixed_state_count = len(target_state_tensor_wkv)
+                print(f'MRSS GatingParam = {QueryDatas.mrss_gating_param}')
 
         input_prompt = input_prompt_b + input_prompt
         input_prompt_stm = input_prompt_stm_b + input_prompt_stm 
