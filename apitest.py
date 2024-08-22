@@ -81,12 +81,16 @@ if __name__ == '__main__':
     
     for message in BaseEngine.initial_prompt:
         if message['role'] == 'system':
-            print(f"System: f{message['content']}")
-        if message['role'] == 'system':
-            print(f"System: f{message['content']}")
-        if message['role'] == 'system':
-            print(f"System: f{message['content']}")
+            print(f"System : {message['content']}")
+        if message['role'] == 'user':
+            print(f"User : {message['content']}")
+        if message['role'] == 'assistant':
+            print(f"Assistant : {message['content']}")
     
     while True:
+        user_input = input("User: ")
+        print('Assistant :', end='',flush=True)
+        for output in BaseEngine.chat(user_input):
+            print(output, end='',flush=True)
 
     
