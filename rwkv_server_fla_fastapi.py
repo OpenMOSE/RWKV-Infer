@@ -27,7 +27,7 @@ parser.add_argument("--localhost", default="0.0.0.0", type=str)
 parser.add_argument("--port", default=9000, type=int) 
 parser.add_argument("--debug", default=False, type=bool) 
 parser.add_argument("--workers", default=8, type=int)
-parser.add_argument("--mrssmax", default=4, type=int) #If workers 8, mrssmax 4, maximum batch inference = 32
+parser.add_argument("--mrssmax", default=4, type=int) #If workers 8, mrssmax 4, maximum batch inference = 8 * (4 + 1) = 40
 
 parser.add_argument("--dynamic_state_cache_size", default=512, type=int)  # for 14B need 16GB of PC RAM
 parser.add_argument("--dynamic_state_cache_store", default='cpu', type=str) #if gpu need more vram for storing state
@@ -130,7 +130,7 @@ params_base = {
             "assistant_name": "Assistant",
             "model": 'model',
             "max_tokens": 1024,
-            "top_p": 0.6,
+            "top_p": 0.3,
             "temperature": 1,
             "presence_penalty": 0.5,
             "frequency_penalty": 0.5,
@@ -165,6 +165,16 @@ async def loadmodel(request: Request):
         model_filename = data.get('model_filename')
         model_viewname = data.get('model_viewname','default model')
         model_strategy = data.get('model_strategy','None')
+        default_temperature = data.get('default_temperature',None)
+        default_top_p = data.get('default_top_p',None)
+
+        if default_temperature is not None:
+            params_base['temperature'] = float(default_temperature)
+        if default_top_p is not None:
+            params_base['top_p'] = float(default_top_p)
+
+
+
         #wrappers[0].load_model(model_filename,model_strategy)
         Quant = False
         if model_strategy == 'quant':
@@ -186,12 +196,25 @@ async def loadstatemodel(request: Request):
          data = await request.json()
          state_filename = data.get('state_filename')
          state_viewname = data.get('state_viewname')
+         default_temperature = data.get('default_temperature',None)
+         default_top_p = data.get('default_top_p',None)
+         if default_temperature is not None:
+             default_temperature = float(default_temperature)
+         if default_top_p is not None:
+             default_top_p = float(default_top_p)
+
+
          state_tensor_wkv = engine1.model.load_state(state_filename) # if correct, have tensors :)
          if type(state_tensor_wkv) == str:
              print('State Loading Error')
              raise HTTPException(status_code=500, detail='State file is incorrect. check filename or tensor size.')
 
-         StateList.append({"state_filename":state_filename,"state_viewname":state_viewname,'state_tensor':state_tensor_wkv})
+         StateList.append({"state_filename":state_filename,
+                           "state_viewname":state_viewname,
+                           'state_tensor':state_tensor_wkv,
+                           'default_temperature':(default_temperature),
+                           'default_top_p':(default_top_p)                           
+                           })
          return {"status": "success"}
      except Exception as e:
          print(f'error {str(e)}')
@@ -209,6 +232,14 @@ async def mrss_loadstatemodel(request: Request):
          state_viewname = data.get('state_viewname')
          state_filenames = data.get('state_filenames',[])
          contain_originalstate = data.get('contain_originalstate',"False")
+
+         default_temperature = data.get('default_temperature',None)
+         default_top_p = data.get('default_top_p',None)
+
+         if default_temperature is not None:
+             default_temperature = float(default_temperature)
+         if default_top_p is not None:
+             default_top_p = float(default_top_p)
 
          print(f'state_viewname = {state_viewname}')
          
@@ -259,7 +290,7 @@ async def mrss_loadstatemodel(request: Request):
 
          totalfilename = ''
          for filename in state_filenames:
-             totalfilename = totalfilename + filename
+             totalfilename = totalfilename + filename + str(len(StateList))
 
         
 
@@ -269,6 +300,8 @@ async def mrss_loadstatemodel(request: Request):
                            'contain_originalstate':contain_originalstate,
                            'state_gatingweight':state_gatingweight,
                            'mrssmode':True,
+                           'default_temperature':default_temperature,
+                           'default_top_p':default_top_p
                            })
          return {"status": "success"}
      except Exception as e:
@@ -394,16 +427,16 @@ async def rwkv_completions(request: Request):
 
 
     max_tokens = params.get('max_tokens', 1000)  
-    top_p = params.get('top_p', 0.3)
-    temperature = params.get('temperature', 1.0)
+    #top_p = params.get('top_p', 0.3)
+    #temperature = params.get('temperature', 1.0)
     presence_penalty = params.get('presence_penalty', 0.3)
     frequency_penalty = params.get('frequency_penalty', 0.3)
     penalty_decay = params.get('penalty_decay', 0.996)
     stop = params.get('stop', ['\x00','\n\n'])
 
     max_tokens = data.get('max_tokens',max_tokens)
-    top_p = data.get('top_p',top_p)
-    temperature = data.get('temperature',temperature)
+    #top_p = data.get('top_p',top_p)
+    #temperature = data.get('temperature',temperature)
     presence_penalty = data.get('presence_penalty',presence_penalty)
     frequency_penalty = data.get('frequency_penalty',frequency_penalty)
     penalty_decay = data.get('penalty_decay',penalty_decay)
@@ -526,6 +559,8 @@ async def rwkv_completions(request: Request):
                         'contain_originalstate':State.get('contain_originalstate',False),
                         'state_gatingweight':State.get('state_gatingweight',[]),
                         'mrssmode':State.get('mrssmode',False),
+                        'default_temperature':State.get('default_temperature',None),
+                        'default_top_p':State.get('default_top_p',None),
                         })
 
     target_state_filename = ''
@@ -539,6 +574,8 @@ async def rwkv_completions(request: Request):
         if modelname['id'] == model:
             target_state_filename = modelname['filename']
             target_state_tensor_wkv = modelname['state_tensor']
+            default_temperature = modelname.get('default_temperature',None)#['default_temperature']
+            default_top_p = modelname.get('default_top_p',None)#['default_top_p']
             #if modelname['mrssmode'] == True:
             if modelname.get('mrssmode',False) == True:
                 #MRSS Mode
@@ -546,6 +583,28 @@ async def rwkv_completions(request: Request):
                     mrssmode = True
                     mrss_gatingweight = modelname['state_gatingweight']
                     contain_originalstate = modelname['contain_originalstate']
+            else:
+                mrssmode = False
+            break
+    
+    if default_temperature is not None:
+        temperature = default_temperature
+    else:
+        temperature = params.get('temperature', 1.0)
+    
+    if default_top_p is not None:
+        top_p = default_top_p
+    else:
+        top_p = params.get('top_p', 0.3)
+
+
+    #prioritize temp top_p from batch
+    top_p = data.get('top_p',top_p)
+    temperature = data.get('temperature',temperature)
+
+    print(f'Target Temperature = {temperature}')
+    print(f'Target Top_p = {top_p}')
+
 
 
     QueryDatas = Prompt()
