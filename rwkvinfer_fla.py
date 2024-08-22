@@ -169,7 +169,7 @@ class LLMWorker:
                 yield "", copy.deepcopy(prompt_queue.prompts[queue_id].use_exist_state_wkv.to('cpu')), copy.deepcopy(prompt_queue.prompts[queue_id].use_exist_state_shift.to('cpu'))
                 prompt_queue.prompts[queue_id] = None
                 break
-            await asyncio.sleep(0.01)
+            await asyncio.sleep(0.02)
 
 
 
@@ -320,7 +320,7 @@ class LLMWorker:
                                 realbatchcount = realbatchcount + 1
                                 prompts_tensor.append(torch.tensor(prompts[i]).unsqueeze(0).to('cuda'))
                         
-                        print(f'realbatchcount = {realbatchcount}')
+                        #print(f'realbatchcount = {realbatchcount}')
 
                         idx = torch.cat(prompts_tensor, dim=0) # same realbatchcount
         
@@ -371,30 +371,6 @@ class LLMWorker:
                                 NowTensorPosition = NowTensorPosition + 1
 
 
-
-                            # if b_wkv_states[i] is not None:
-
-                            #     if type(b_wkv_states[i])==list:
-                            #         b_wkv_states[i] = torch.stack(b_wkv_states[i],dim=0)
-                            #     #print(f'reference shape = {b_wkv_states[i].shape}')
-
-                            #     if mrss_info[i]['use_mrss'] == True:
-                            #         mrss_state_count = len(b_wkv_states[i])
-                            #         for j in range(mrss_state_count):
-                            #             wkv_states[NowTensorPosition + j] = b_wkv_states[i][j]
-                            #         NowTensorPosition = NowTensorPosition + mrss_state_count
-                            #     else:
-                            #         wkv_states[NowTensorPosition] = b_wkv_states[i]#prompts['wkv_states']
-                            #         NowTensorPosition = NowTensorPosition + 1
-                            # else:
-                            #     print('wkv is none')
-                            #     NowTensorPosition = NowTensorPosition + 1
-                            # if b_shift_states[i] is not None:
-                            #     if type(b_shift_states[i])==list:
-                            #         b_shift_states[i] = torch.stack(b_shift_states[i],dim=0)
-                            #     shift_states[i] = b_shift_states[i]#prompts['shift_states']
-                            #else:
-                            #    print('shift is none')
 
                         shift_states = shift_states.permute(1,0,2,3)
                         wkv_states = wkv_states.permute(1, 0, 2, 3, 4)
@@ -686,6 +662,9 @@ class LLMWorker:
                                         mrss_state_count = mrss_info[j]['mrss_state_count']
                                         if statuss[j] == 'processing':
                                             prompt_queue.update_prompt(id,PromptStatus.PROCESSING,result=outputs[j])
+                                            self.llM_current_batch_info[i]['wkv_states'] = wkv_states[NowTensorPosition:(NowTensorPosition+mrss_state_count)]
+                                            self.llM_current_batch_info[i]['shift_states'] = shift_states[NowTensorPosition:(NowTensorPosition+mrss_state_count)]
+                                            self.llM_current_batch_info[i]['current_prob'] = x[NowTensorPosition:(NowTensorPosition+mrss_state_count)]
                                         else:
                                             if end_times[j] is None:
                                                 end_times[j] = time.time()
@@ -695,11 +674,12 @@ class LLMWorker:
                                                 print(f'batch{i} : finished. {token_performance:0.2f} t/s')
 
                                             prompt_queue.update_prompt(id,PromptStatus.COMPLETED,result=outputs[j],wkv_state=wkv_states[NowTensorPosition:(NowTensorPosition+mrss_state_count)].to('cpu'),shift_state=shift_states[NowTensorPosition:(NowTensorPosition+mrss_state_count)].to('cpu'))
+                                            self.llM_current_batch_info[i]['wkv_states'] = None
+                                            self.llM_current_batch_info[i]['shift_states'] = None
+                                            self.llM_current_batch_info[i]['current_prob'] = None
                                             statuss[j] == 'idle'
                                         
-                                        self.llM_current_batch_info[i]['wkv_states'] = wkv_states[NowTensorPosition:(NowTensorPosition+mrss_state_count)]
-                                        self.llM_current_batch_info[i]['shift_states'] = shift_states[NowTensorPosition:(NowTensorPosition+mrss_state_count)]
-                                        self.llM_current_batch_info[i]['current_prob'] = x[NowTensorPosition:(NowTensorPosition+mrss_state_count)]
+                                        
 
                                         NowTensorPosition = NowTensorPosition + mrss_state_count
 

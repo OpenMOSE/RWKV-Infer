@@ -130,7 +130,7 @@ params_base = {
             "assistant_name": "Assistant",
             "model": 'model',
             "max_tokens": 1024,
-            "top_p": 0.3,
+            "top_p": 0.6,
             "temperature": 1,
             "presence_penalty": 0.5,
             "frequency_penalty": 0.5,
