@@ -382,7 +382,7 @@ class RWKV6_TimeMix(torch.nn.Module):
         self.key =HybridLinear(n_embd, dim_att, bias=False)
         self.value =HybridLinear(n_embd, dim_att, bias=False)
 
-        self.output =nn.Linear(dim_att, n_embd, bias=False)
+        self.output =HybridLinear(dim_att, n_embd, bias=False)
 
         self.gate =HybridLinear(n_embd, dim_att, bias=False)
         self.ln_x = nn.GroupNorm(self.n_head, dim_att, eps=(1e-5)*(head_size_divisor**2))
@@ -573,15 +573,15 @@ class RWKV6(nn.Module):
             keys = list(file.keys())
             print("keys", keys)
             # remove _orig_mod from keys for compatibility with torch.compile
-            newObj = {}
-            for key in keys:
-                if "_orig_mod." in key:
-                    newKey = key.replace("_orig_mod.", "")
-                    newObj[newKey] = file[key]
-                else:
-                    newObj[key] = file[key]
-            file = newObj
-            keys = list(file.keys())
+            # newObj = {}
+            # for key in keys:
+            #     if "_orig_mod." in key:
+            #         newKey = key.replace("_orig_mod.", "")
+            #         newObj[newKey] = file[key]
+            #     else:
+            #         newObj[key] = file[key]
+            # file = newObj
+            # keys = list(file.keys())
 
             # detect model details
             vocab_size, n_embd = file["emb.weight"].shape
@@ -651,7 +651,7 @@ class RWKV6(nn.Module):
         quant_layers = 0
 
         if quantize:
-            quant_layers = 40
+            quant_layers = 61
 
 
         for name, m in self.named_modules():
@@ -660,7 +660,7 @@ class RWKV6(nn.Module):
                 for i in range(self.n_layer):
                     if f'blocks.{i}.' in name:
                         if i < quant_layers:
-                            m.quant('nf4')
+                            m.quant('fp4')
                             print(f'Quant {name}')
                             ThroughFound = True
 

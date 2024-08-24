@@ -204,7 +204,7 @@ async def loadstatemodel(request: Request):
              default_top_p = float(default_top_p)
 
 
-         state_tensor_wkv = engine1.model.load_state(state_filename) # if correct, have tensors :)
+         state_tensor_wkv = engine1.model.load_state(state_filename).to('cpu') # if correct, have tensors :)
          if type(state_tensor_wkv) == str:
              print('State Loading Error')
              raise HTTPException(status_code=500, detail='State file is incorrect. check filename or tensor size.')
@@ -274,7 +274,7 @@ async def mrss_loadstatemodel(request: Request):
 
          for i in range(state_count):
             print(f'loading state {state_filenames[i]}')
-            state_tensor_wkv = engine1.model.load_state(state_filenames[i]) # if correct, have tensors :)
+            state_tensor_wkv = engine1.model.load_state(state_filenames[i]).to('cpu') # if correct, have tensors :)
             if type(state_tensor_wkv) == str:
                 print('State Loading Error')
                 raise HTTPException(status_code=500, detail=f'{ state_filenames[i] } State file is incorrect. check filename or tensor size.')
@@ -645,7 +645,7 @@ async def rwkv_completions(request: Request):
         if args.debug:
             print('plane state')
         if target_state_tensor_wkv is not None:
-            QueryDatas.use_exist_state_wkv = copy.deepcopy(target_state_tensor_wkv)
+            QueryDatas.use_exist_state_wkv = copy.deepcopy(target_state_tensor_wkv).to('cuda')
             if mrssmode:
                 QueryDatas.use_mrss = True
                 QueryDatas.use_contain_originalstate = contain_originalstate
