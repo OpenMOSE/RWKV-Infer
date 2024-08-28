@@ -374,9 +374,11 @@ class LLMWorker:
 
                         shift_states = shift_states.permute(1,0,2,3)
                         wkv_states = wkv_states.permute(1, 0, 2, 3, 4)
-                        print(f'{token_max} forwarded')
+                        
 
                         x, shift_states, wkv_states = self.model.forward(idx, shift_states, wkv_states)
+
+                        print(f'{token_max} forwarded')
 
                         #print(f'x = {x}')
                         #print(f'x.shape = {x.shape}')

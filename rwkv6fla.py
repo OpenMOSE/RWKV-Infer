@@ -1,5 +1,6 @@
 #FLA Inference
 #Thank you harrisonvanderbyl for the code :)
+#cuda mm8 kernels from ChatRWKV@BlinkDL
 
 from fla.ops.gla import fused_chunk_gla
 from fla.ops.rwkv6.chunk import chunk_rwkv6,ChunkRWKV6Function
@@ -15,6 +16,221 @@ import os, sys
 import time
 import bitsandbytes as bnb
 import functools
+from torch.utils.cpp_extension import load
+
+current_path = os.path.dirname(os.path.abspath(__file__))
+
+from torch.utils.cpp_extension import load
+
+try:
+    load(
+        name=f"wkv_cuda",
+        sources=[f"{current_path}/cuda/wrapper.cpp", f"{current_path}/cuda/operators.cu", f"{current_path}/cuda/gemm_fp16_cublas.cpp"],
+        verbose=True,
+        extra_ldflags=["cublas.lib" if os.name == "nt" else ""],
+        extra_cuda_cflags=["--use_fast_math", "-O3", "--extra-device-vectorization"],
+        is_python_module=False)
+    DISABLE_CUBLAS_GEMM = False
+except:
+    print("Failed to build cuBLAS matmul, falling back to torch.matmul. Small model with fp16 will overflow.")
+    load(
+        name=f"wkv_cuda",
+        sources=[f"{current_path}/cuda/wrapper.cpp", f"{current_path}/cuda/operators.cu"],
+        verbose=True,
+        extra_cuda_cflags=["--use_fast_math", "-O3", "--extra-device-vectorization"],
+        extra_cflags=["-DDISABLE_CUBLAS_GEMM"],
+        is_python_module=False)
+    DISABLE_CUBLAS_GEMM = True
+
+MyStatic = torch.jit.script
+
+#DISABLE_CUBLAS_GEMM = True
+
+if DISABLE_CUBLAS_GEMM == False:
+    def matmul_float(a, b, output_dtype: Optional[torch.dtype]=None):
+        if output_dtype is None:
+            output_dtype = a.dtype
+        if a.dtype == b.dtype == torch.float16 and a.device.type == 'cuda' and 0:
+            # if len(a.shape) == 1:
+            #     assert len(b.shape) == 2
+            #     c = torch.empty((b.shape[-1],), dtype=output_dtype, device=a.device)
+            #     a = a.unsqueeze(0)
+            # else:
+            #     assert len(a.shape) == len(b.shape)
+            #     assert len(a.shape) == 2 or len(a.shape) == 3
+            #     # torch.empty((*a.shape[:-1], b.shape[-1])) doesn't work with jit
+            #     if len(a.shape) == 2:
+            #         c = torch.empty((a.shape[0], b.shape[-1]), dtype=output_dtype, device=a.device)
+            #     else:
+            #         c = torch.empty((a.shape[0], a.shape[1], b.shape[-1]), dtype=output_dtype, device=a.device)
+            #print(f'a = {a.shape} b = {b.shape}')
+            #a_2d = a.view(-1, a.shape[-1])
+            a_2d = a.reshape((a.shape[0] * a.shape[1]),a.shape[2]).contiguous()#x.view(-1, x.shape[-1])
+
+
+            #print(f'a_2d = {a_2d.shape}')
+
+            #c = torch.empty((a.shape[0], a.shape[1], b.shape[-1]), dtype=output_dtype, device=a.device)
+            c_2d = torch.empty((a.shape[0] * a.shape[1],  b.shape[-1]), dtype=output_dtype, device=a.device)
+
+            #print(f'c_2d = {c_2d.shape}')
+    
+            torch.ops.rwkv.gemm_fp16_cublas(a_2d, b, c_2d)
+            # 結果を3次元に戻す (4*1024, 4096) -> (4, 1024, 4096)
+            #c = c_2d.view(a.shape[0], a.shape[1], b.shape[-1])
+
+            c = c_2d.reshape(a.shape[0], a.shape[1], b.shape[-1]).to(dtype=a.dtype)
+
+            #print(f'c = {c.shape}')
+            return c
+        else:
+            return (a @ b).to(output_dtype)
+
+else:
+    def matmul_float(a, b, output_dtype: Optional[torch.dtype]=None):
+        print(f'a = {a.shape} b = {b.shape}')
+        return (a @ b).to(output_dtype)
+
+
+# def cuda_mm8_seq2(Z:int,B: int, N: int, M: int, x, w, mx, rx, my, ry):
+#     if x.dtype != torch.float16:
+#         x = x.to(dtype=torch.float16)
+#     assert x.dtype == mx.dtype == rx.dtype == my.dtype == ry.dtype
+#     assert x.dtype == torch.float32 or x.dtype == torch.float16
+#     assert w.dtype == torch.uint8
+#     assert x.shape == (Z, B, N)
+#     assert w.shape == (N, M)
+#     print(f'rx shape = {rx.shape}  mx shape = {mx.shape}  Target M = {M}')
+#     assert rx.shape == mx.shape == (M,)
+#     print(f'ry shape = {ry.shape}  mx shape = {my.shape}  Target M = {M}')
+#     assert ry.shape == my.shape == (N, 1)
+#     y = torch.empty((Z, B, M), device=w.device, dtype=x.dtype)
+#     print('cuda 8bit shorikaishi')
+#     torch.ops.rwkv.mm8_seq_(Z, B, N, M, x, w, mx, rx, my, ry, y)
+#     print('shoriend')
+#     print(y)
+#     return y
+@MyStatic
+def cuda_mm8_seq(Z:int,B: int, N: int, M: int, x, w, mx, rx, my, ry):
+    if x.dtype != torch.float16:
+        x = x.to(dtype=torch.float16)
+    # assert x.dtype == mx.dtype == rx.dtype == my.dtype == ry.dtype
+    # assert x.dtype == torch.float32 or x.dtype == torch.float16
+    # assert w.dtype == torch.uint8
+    # assert x.shape == (Z, B, N)
+    # assert w.shape == (N, M)
+    # print(f'rx shape = {rx.shape}  mx shape = {mx.shape}  Target M = {M}')
+    # assert rx.shape == mx.shape == (M,)
+    # print(f'ry shape = {ry.shape}  mx shape = {my.shape}  Target M = {M}')
+    # assert ry.shape == my.shape == (N, 1)
+    # y = torch.empty((Z, B, M), device=w.device, dtype=x.dtype)
+    # print('cuda 8bit shorikaishi')
+    #print(f'x shape = {x.shape}')
+    B = B * Z
+    a_2d = x.reshape((x.shape[0] * x.shape[1]),x.shape[2]).contiguous()#x.view(-1, x.shape[-1])
+
+    #print(f'a_2d shape = {a_2d.shape}')
+
+    y = torch.empty((x.shape[0] * x.shape[1],  w.shape[-1]), dtype=torch.float32, device=x.device)
+
+   # print(f'y shape = {y.shape}')
+
+    #print(f'B = {B} N = {N} M = {M} ')
+    #d_w = torch.empty((w.shape[0],w.shape[1]), dtype=torch.float16, device=x.device).transpose(0, 1).contiguous().transpose(0, 1)
+   # print(f'd_w shape = {d_w.shape}')
+    # torch.ops.rwkv.dequantize_8bit( N ,M,
+    #                                 w,
+    #                                 mx,rx,
+    #                                 my,ry,
+    #                                 d_w
+    #                                 )
+    
+    # #print(d_w)
+
+    # print(f'dw shape = {d_w.shape}')
+
+    # torch.ops.rwkv.gemm_fp16_cublas(a_2d, d_w, y)
+
+    torch.ops.rwkv.mm8_seq(B, N, M, a_2d, w, mx, rx, my, ry, y)
+
+    y = y.reshape(x.shape[0], x.shape[1], w.shape[-1]).to(dtype=x.dtype)
+
+    #y2 = x @ ((w.to(dtype=x.dtype) + 0.5) * ry * rx + my + mx)
+    #y2 = a_2d @ ((w.to(dtype=x.dtype) + 0.5) * ry * rx + my + mx)
+    #y2 = y2.reshape(x.shape[0], x.shape[1], w.shape[-1]).to(dtype=x.dtype)
+
+    #if torch.isnan(y).any():
+    #    print('NaN Detected!')
+    #    print(y)
+    #print(f'reshaped y shape = {y.shape}')
+
+    #suma0 = torch.sum(y[0] - y2[0])
+    #for i in range(x.shape[0]):
+    #    sums = torch.sum(y[i] - y2[i])
+    #    print(f'i = {i} Sum = {sums}')
+
+    #print('shoriend')
+    #print(y-y2)
+    #print(f"差の総数: {suma.item()}")
+    return y
+@MyStatic
+def cuda_mm8_one(N: int, M: int, x, w, mx, rx, my, ry):
+
+    assert x.dtype == mx.dtype == rx.dtype == my.dtype == ry.dtype
+    assert x.dtype == torch.float32 or x.dtype == torch.float16
+    assert w.dtype == torch.uint8
+    assert x.shape == (N,)
+    assert w.shape == (N, M)
+    assert rx.shape == mx.shape == (M,)
+    assert ry.shape == my.shape == (N, 1)
+    y = torch.zeros((M,), device=w.device, dtype=torch.float32)
+    torch.ops.rwkv.mm8_one(N, M, x, w, mx, rx, my, ry, y)
+    return y.to(dtype=x.dtype)
+
+@MyStatic
+def torch_mm8_seq(x, w, mx, rx, my, ry):
+    if x.dtype != torch.float16:
+        x = x.to(dtype=torch.float16)
+    return x @ ((w.to(dtype=x.dtype) + 0.5) * ry * rx + my + mx)
+
+@MyStatic
+def torch_mm8_one(x, w, mx, rx, my, ry):
+    return x @ ((w.to(dtype=x.dtype) + 0.5) * ry * rx + my + mx)
+
+@MyStatic
+def mm8_seq(x, w, mx, rx, my, ry):
+    if w.device.type == 'cuda' and x.dtype == torch.float16 and x.shape[1] == 1:
+        Z, B, N, M = x.shape[0], x.shape[1], w.shape[0], w.shape[1]
+        return cuda_mm8_seq(Z, B, N, M, x, w, mx, rx, my, ry)
+    else:
+        return torch_mm8_seq(x, w, mx, rx, my, ry)
+@MyStatic
+def mm8_one(x, w, mx, rx, my, ry):
+    if w.device.type == 'cuda':
+        N, M = w.shape[0], w.shape[1]
+        return cuda_mm8_one(N, M, x, w, mx, rx, my, ry)
+    else:
+        return torch_mm8_one(x, w, mx, rx, my, ry)
+
+def mm8(x: torch.Tensor, w: torch.Tensor, mx: torch.Tensor, rx: torch.Tensor, my: torch.Tensor, ry: torch.Tensor):
+    #i#f len(x.shape) == 1:
+    #    return mm8_one(x, w, mx, rx, my, ry)
+    return mm8_seq(x, w, mx, rx, my, ry)
+
+def matmul(a, b, mx: Optional[torch.Tensor]=None, rx: Optional[torch.Tensor]=None, my: Optional[torch.Tensor]=None, ry: Optional[torch.Tensor]=None, output_dtype: Optional[torch.dtype]=None) -> torch.Tensor:
+    if output_dtype is None:
+        output_dtype = a.dtype
+    if b.dtype in [torch.float16, torch.bfloat16, torch.float32]:
+        assert a.dtype == b.dtype
+        return matmul_float(a, b, output_dtype=output_dtype)
+    elif b.dtype == torch.uint8:
+        assert mx is not None
+        assert rx is not None
+        assert my is not None
+        assert ry is not None
+        return mm8(a, b, mx, rx, my, ry).to(output_dtype)
+    else:
+        raise ValueError("Unsupported dtype")
 
 #@torch.jit.ignore
 class QuantLinear(nn.Module): # inspired by RWKV-PEFT @JL-er Thanks! 
@@ -25,6 +241,13 @@ class QuantLinear(nn.Module): # inspired by RWKV-PEFT @JL-er Thanks!
         assert bias == False, "Biased QuantLinear not supported"
         self.is_quant = False
         self.grad = None
+
+        self.mx = None
+        self.my = None
+        self.rx = None
+        self.ry = None
+    def shape(self):
+        return self.weight.data.shape
 
     def quant(self, quant_type):
         self.is_quant = True
@@ -239,10 +462,11 @@ class PIPELINE():
 
 class RWKV6_ChannelMix(torch.nn.Module):
     
-    def __init__(self, layer_id, n_layer, n_embd, dim_ffn):
+    def __init__(self, layer_id, n_layer, n_embd, dim_ffn,precision=torch.bfloat16):
         super().__init__()
         # self.layer_id = layer_id
         # self.time_shift = nn.ZeroPad2d((0, 0, 1, -1))
+        self.precision = precision
 
         with torch.no_grad():  # fancy init of time_mix
             ratio_1_to_almost0 = 1.0 - (layer_id / n_layer)  # 1 to ~0
@@ -279,42 +503,77 @@ class RWKV6_ChannelMix(torch.nn.Module):
         
         xk = xx * self.time_maa_k + x * (1 - self.time_maa_k)
         xr = xx * self.time_maa_r + x * (1 - self.time_maa_r)
-        kv = self.value( torch.relu( self.key(xk) ) ** 2 )
-        return (torch.sigmoid(self.receptance(xr)) * kv), last_state
+        #kv = self.value( torch.relu( self.key(xk.to(dtype=self.precision)) ) ** 2 )
+        kv = matmul(torch.relu(matmul(xk.to(dtype=self.precision),self.key.weight,
+                                      mx=self.key.mx,
+                                      my=self.key.my,
+                                      rx=self.key.rx,
+                                      ry=self.key.ry,
+                                      )) ** 2,self.value.weight,
+                                      mx=self.value.mx,
+                                      my=self.value.my,
+                                      rx=self.value.rx,
+                                      ry=self.value.ry)
+        return (torch.sigmoid(matmul(xr.to(dtype=self.precision),self.receptance.weight,
+                                     mx=self.receptance.mx,
+                                      my=self.receptance.my,
+                                      rx=self.receptance.rx,
+                                      ry=self.receptance.ry,
+                                     )) * kv), last_state
+        #return (torch.sigmoid(self.receptance(xr.to(dtype=self.precision))) * kv), last_state
     
 
 
 class Block6(nn.Module):
 
-    def __init__(self, layer_id, n_layer, n_embd, n_head, head_size, dim_att, dim_ffn):
+    def __init__(self, layer_id, n_layer, n_embd, n_head, head_size, dim_att, dim_ffn,precision):
         super().__init__()
         self.layer_id = layer_id
 
         self.ln1 = nn.LayerNorm(n_embd)
         self.ln2 = nn.LayerNorm(n_embd)
 
-        self.att = RWKV6_TimeMix(layer_id, n_layer, n_embd, n_head, head_size, dim_att)
-        self.ffn = RWKV6_ChannelMix(layer_id, n_layer, n_embd, dim_ffn)
+        self.precision = precision
+
+        self.att = RWKV6_TimeMix(layer_id, n_layer, n_embd, n_head, head_size, dim_att,precision=precision)
+        self.ffn = RWKV6_ChannelMix(layer_id, n_layer, n_embd, dim_ffn,precision=precision)
+        self.time_debug = True
         
     
         # Setup droupout at block level
 
     def forward(self, x, time_mix_shift, channel_mix_state, time_mix_state):
 
+        if self.time_debug:
+            start_time1 = time.time()
+
         att_out, time_mix_shift, time_mix_state = self.att(
-                self.ln1(x),
+                self.ln1(x.to(dtype=torch.bfloat16)),
+                #self.ln1(x),
                 time_mix_shift,
                 time_mix_state
             )
+        
+        if self.time_debug:
+            start_time2 = time.time()
 
         
             # Handle without dropout
         x = x + att_out
         ffn_out, channel_mix_state = self.ffn(
-            self.ln2(x),
+            self.ln2(x.to(dtype=torch.bfloat16)),
+            #self.ln2(x),
             channel_mix_state,
         )
         x = x + ffn_out
+
+        if self.time_debug:
+            start_time3 = time.time()
+            time_ffn = start_time3 - start_time2
+            time_att = start_time2 - start_time1
+            print(f'time_ffn = {time_ffn*1000*1000:0.3f}us')    
+            print(f'time_att = {time_att*1000*1000:0.3f}us')  
+
         
         return x, time_mix_shift, channel_mix_state, time_mix_state
 
@@ -325,13 +584,15 @@ class Block6(nn.Module):
 # RWKV TimeMix module
 class RWKV6_TimeMix(torch.nn.Module):
     #chunk_len:int = 128, precision:int = 64
-    def __init__(self, layer_id, n_layer, n_embd, n_head, head_size, dim_att, chunk_len:int = 1, precision:int = 64):
+    def __init__(self, layer_id, n_layer, n_embd, n_head, head_size, dim_att, chunk_len:int = 1, precision=torch.bfloat16):
         super().__init__()
         
                 
         self.layer_id = layer_id
+        self.time_debug = False
 
         self.head_size = head_size
+        self.precision = precision
         self.n_head = n_head
         head_size_divisor = 8
         assert dim_att % self.n_head == 0
@@ -463,10 +724,38 @@ class RWKV6_TimeMix(torch.nn.Module):
     
     def jit_func_parts2(self,xw,xk,xv,xr,xg):
 
-        r = self.receptance(xr)
-        k = self.key(xk)
-        v = self.value(xv)
-        g = torch.nn.functional.silu(self.gate(xg))
+        #print(f'xr shape = {xr.shape}')
+
+        #r = self.receptance(xr.to(dtype=self.precision))#.to(dtype=torch.bfloat16)
+        r = matmul(xr.to(dtype=self.precision),
+                    self.receptance.weight,
+                    mx=self.receptance.mx,
+                    my=self.receptance.my,
+                    rx=self.receptance.rx,
+                    ry=self.receptance.ry,
+                    #output_dtype = torch.float32
+                    )#.to(dtype=torch.bfloat16)
+        #r = matmul(xr,self.receptance.weight)
+        #print(r)
+        #k = self.key(xk.to(dtype=self.precision))
+        k = matmul(xk.to(dtype=self.precision),self.key.weight,
+                   mx=self.key.mx,
+                    my=self.key.my,
+                    rx=self.key.rx,
+                    ry=self.key.ry,
+                   )
+        #v = self.value(xv.to(dtype=self.precision))
+        v = matmul(xv.to(dtype=self.precision),self.value.weight,
+                   mx=self.value.mx,
+                    my=self.value.my,
+                    rx=self.value.rx,
+                    ry=self.value.ry,)
+        #g = torch.nn.functional.silu(self.gate(xg.to(dtype=self.precision)))
+        g = torch.nn.functional.silu(matmul(xg.to(dtype=self.precision),self.gate.weight,
+                                            mx=self.gate.mx,
+                                            my=self.gate.my,
+                                            rx=self.gate.rx,
+                                            ry=self.gate.ry,))#)self.gate(xg.to(dtype=self.precision)))
         return r, k, v, g
     
     
@@ -476,7 +765,8 @@ class RWKV6_TimeMix(torch.nn.Module):
         x = x.view(B * T, C)
         
         x = self.ln_x(x).view(B, T, C)
-        x = self.output(x * g)
+        #x = self.output(x * g)
+        x = matmul(x * g, self.output.weight.t())
         return x
  
 
@@ -484,6 +774,8 @@ class RWKV6_TimeMix(torch.nn.Module):
         #print("x shape:", x.shape)
         B, T, C = x.size()
         H = self.n_head
+        if self.time_debug:
+            start_time1 = time.time()
 
         xw,xk,xv,xr,xg,ww,w  = self.jit_func_parts(x=x, last_state_shift=last_state_shift,
                        time_maa_x=self.time_maa_x,
@@ -499,7 +791,19 @@ class RWKV6_TimeMix(torch.nn.Module):
                        time_decay=self.time_decay
                        )
         
+        if self.time_debug:
+            start_time2 = time.time()
+        
         r, k, v, g = self.jit_func_parts2(xw,xk,xv,xr,xg)
+
+        r= r.to(dtype=torch.bfloat16)
+        k= k.to(dtype=torch.bfloat16)
+        v= v.to(dtype=torch.bfloat16)
+        g= g.to(dtype=torch.bfloat16)
+
+        if self.time_debug:
+            start_time3 = time.time()
+        
 
         if T > 1:
             #print(f'T = {T}')
@@ -523,6 +827,18 @@ class RWKV6_TimeMix(torch.nn.Module):
                 last_state_wkv,True, 0)
 
         x = x.reshape(B,T,C)
+        if self.time_debug:
+            start_time4 = time.time()
+            time_fla = start_time4 - start_time3
+            time_jitfunc_parts2 = start_time3 - start_time2
+            time_jitfunc_parts1 = start_time2 - start_time1
+
+            print(f'time_jitfunc_parts1 = {time_jitfunc_parts1*1000*1000:0.3f}us')    
+            print(f'time_jitfunc_parts2 = {time_jitfunc_parts2*1000*1000:0.3f}us')    
+            print(f'time_fla = {time_fla*1000*1000:0.3f}us')   
+            # print(f'time_block = {time_block*1000:0.3f}ms')   
+            # print(f'time_lnout = {time_lnout*1000:0.3f}ms')   
+            # print(f'time_head = {time_head*1000:0.3f}ms')   
 
         return self.jit_func_2(x, g), last_state_shift, last_state_wkv
  
@@ -537,6 +853,8 @@ class RWKV6(nn.Module):
                  load_model: str,
                  # Model size settings, which we either
                  quantize: bool = False,
+
+                 base_precision: str = 'fp16'
              
                  ):
 
@@ -544,7 +862,15 @@ class RWKV6(nn.Module):
         # Setup the parent class
         super().__init__()
 
-        self.time_debug = False
+        self.time_debug = True
+
+        if base_precision == 'fp16':
+            self.base_precision = torch.float16
+        elif base_precision == 'int8':
+            self.base_precision = torch.uint8
+        else:
+            self.base_precision = torch.bfloat16
+
            
         try:
             self.batches = micro_bsz
@@ -631,7 +957,7 @@ class RWKV6(nn.Module):
         
         self.blocks = nn.ModuleList([
         
-            Block6(i, n_layer, n_embd, n_head, self.head_size, n_embd, dim_ffn) for i in range(n_layer)
+            Block6(i, n_layer, n_embd, n_head, self.head_size, n_embd, dim_ffn,precision=self.base_precision) for i in range(n_layer)
         ])
         
         self.head = nn.Linear(n_embd, vocab_size,bias=False)
@@ -667,19 +993,73 @@ class RWKV6(nn.Module):
 
 
                 
-
+ 
             
 
             for i in range(self.n_layer):
                 if name == f'blocks.{i}':
                     ThroughFound = True
 
-            if name == 'blocks' or name == '':
+            if name == 'blocks' or name == '':# or name.endswith('.ffn') or name.endswith('.att'):
                 ThroughFound = True
 
+            #if '.att.' in name or '.ffn.' in name:
+            #    ThroughFound = False
+
             if ThroughFound == False:
-                m=m.to('cuda',dtype=torch.bfloat16)
-                print(f'Pass through to cuda:{name}')
+
+                #print('jikken')
+                #if ('receptance' in name  or 'output' in name or 'key' in name or 'value' in name ) and ('.att' in name or '.ffn' in name ):
+                #jikken
+                if ('receptance' in name or 'key' in name or 'value' in name or 'gate' in name) and ('.att' in name or '.ffn' in name):
+                #if ('receptance' in name ) and ('.att' in name ):
+                    print(f'{name} is quant to int8')
+                    m.weight.data = m.weight.data.t()
+                    m.weight.data = m.weight.data.float()
+                    if m.weight.data.shape[0] > m.weight.data.shape[1]:
+                        print('ugyu')
+                        m.my = torch.amin(m.weight.data, dim=1).unsqueeze(1)
+                        m.weight.data = m.weight.data - m.my
+                        m.mx = torch.amin(m.weight.data, dim=0)
+                        m.weight.data = m.weight.data - m.mx
+                        m.rx = torch.amax(m.weight.data, dim=0)
+                        m.weight.data = m.weight.data / m.rx
+                        m.ry = torch.amax(m.weight.data, dim=1).unsqueeze(1)
+                        m.weight.data = m.weight.data / m.ry
+                    else:
+                        print('agi')
+                        m.mx = torch.amin(m.weight.data, dim=0)
+                        m.weight.data = m.weight.data - m.mx
+                        m.my = torch.amin(m.weight.data, dim=1).unsqueeze(1)
+                        m.weight.data = m.weight.data - m.my
+                        m.rx = torch.amax(m.weight.data, dim=0)
+                        m.weight.data = m.weight.data / m.rx
+                        m.ry = torch.amax(m.weight.data, dim=1).unsqueeze(1)
+                        m.weight.data = m.weight.data / m.ry
+                    m.weight.data = torch.clip(torch.floor(m.weight.data * 256), min=0, max=255).to(dtype=torch.uint8)
+
+                    m.my = m.my.to(dtype=torch.float16).contiguous()
+                    m.mx = m.mx.to(dtype=torch.float16).contiguous()
+                    m.rx = (m.rx/16).to(dtype=torch.float16).contiguous()
+                    m.ry = (m.ry/16).to(dtype=torch.float16).contiguous()
+
+                    m=m.to('cuda')#.contiguous()
+
+                    m.weight.data = m.weight.data.contiguous()
+                    
+
+
+                    #self.base_precision
+                else:
+                    #if 'ln_in' in name or 'ln_out' in name or 'emb' in name or 'head' in name or 'ln1' in name or 'ln2' in name:
+                    #    m=m.to('cuda',dtype=torch.bfloat16)
+                    if ( 'receptance' in name or 'key' in name  or 'value' in name or  'value' in name or 'gate' in name ) and ('.att' in name or '.ffn' in name):
+                        m=m.to('cuda',dtype=torch.float16)#.t()
+                        m.weight.data = m.weight.data.t().contiguous()
+                        print(f'special mode {name}')
+                    else:
+                        m=m.to('cuda',dtype=torch.bfloat16)
+                    print(f'Pass through to cuda:{name}')
 
 
             
@@ -715,7 +1095,7 @@ class RWKV6(nn.Module):
             x = self.emb(idx)
         if self.time_debug:
             start_time1 = time.time()
-        x = self.ln_in(x)
+        x = self.ln_in(x.to(dtype=torch.bfloat16))
 
         if self.time_debug:
             start_time2 = time.time()
@@ -727,7 +1107,7 @@ class RWKV6(nn.Module):
         if self.time_debug:
             start_time3 = time.time()
 
-        x = self.ln_out(x)
+        x = self.ln_out(x.to(dtype=torch.bfloat16))
         if self.time_debug:
             start_time4 = time.time()
         x = self.head(x)
@@ -741,11 +1121,11 @@ class RWKV6(nn.Module):
             time_lnin = start_time2 - start_time1
             time_emb = start_time1 - start_time
 
-            print(f'time_emb = {time_emb*1000:0.3f}ms')    
-            print(f'time_lnin = {time_lnin*1000:0.3f}ms')   
-            print(f'time_block = {time_block*1000:0.3f}ms')   
-            print(f'time_lnout = {time_lnout*1000:0.3f}ms')   
-            print(f'time_head = {time_head*1000:0.3f}ms')   
+            # print(f'time_emb = {time_emb*1000:0.3f}ms')    
+            # print(f'time_lnin = {time_lnin*1000:0.3f}ms')   
+            # print(f'time_block = {time_block*1000:0.3f}ms')   
+            # print(f'time_lnout = {time_lnout*1000:0.3f}ms')   
+            # print(f'time_head = {time_head*1000:0.3f}ms')   
 
         return x, last_shift_states, last_wkv_states
     
@@ -800,4 +1180,4 @@ class RWKV6(nn.Module):
         for i in range(self.n_layer):
             wkv_states[i] = model_current_statetuned[i*3 + 1]
 
-        return wkv_states
+        return wkv_states#.to(dtype=torch.float16)

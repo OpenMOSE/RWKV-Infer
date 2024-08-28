@@ -314,7 +314,7 @@ class FusedRecurrentRWKV6Function(torch.autograd.Function):
         q = r
         B, H, T, K, V = *q.shape, v.shape[-1]
 
-        BK, BV = min(triton.next_power_of_2(K), 32), min(triton.next_power_of_2(V), 32)
+        BK, BV = min(triton.next_power_of_2(K), 128), min(triton.next_power_of_2(V), 128)
         NK, NV = triton.cdiv(K, BK), triton.cdiv(V, BV)
         num_stages = 1
         num_warps = 1
