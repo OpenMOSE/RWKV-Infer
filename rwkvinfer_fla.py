@@ -135,11 +135,11 @@ class LLMWorker:
 
         
 
-    def LoadModel(self,modelpath,quantize=False):
+    def LoadModel(self,modelpath,quantize=False,precision='fp16'):
         self.model = None
         gc.collect()
         torch.cuda.empty_cache()
-        self.model = RWKV6(modelpath,quantize=quantize)
+        self.model = RWKV6(modelpath,quantize=quantize,base_precision=precision)
         print('model loaded')
 
     def UnloadModel(self):

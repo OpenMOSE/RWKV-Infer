@@ -18,6 +18,11 @@ import bitsandbytes as bnb
 import functools
 from torch.utils.cpp_extension import load
 
+torch.backends.cudnn.benchmark = True
+torch.backends.cudnn.allow_tf32 = True
+torch.backends.cuda.matmul.allow_tf32 = True
+torch.set_flush_denormal(True)
+
 current_path = os.path.dirname(os.path.abspath(__file__))
 
 from torch.utils.cpp_extension import load
@@ -43,149 +48,58 @@ except:
     DISABLE_CUBLAS_GEMM = True
 
 MyStatic = torch.jit.script
+MyModule = torch.jit.ScriptModule
+MyFunction = torch.jit.script_method
+MyCompile = torch.compile()
 
 #DISABLE_CUBLAS_GEMM = True
 
 if DISABLE_CUBLAS_GEMM == False:
+    @MyStatic
     def matmul_float(a, b, output_dtype: Optional[torch.dtype]=None):
         if output_dtype is None:
             output_dtype = a.dtype
         if a.dtype == b.dtype == torch.float16 and a.device.type == 'cuda' and 0:
-            # if len(a.shape) == 1:
-            #     assert len(b.shape) == 2
-            #     c = torch.empty((b.shape[-1],), dtype=output_dtype, device=a.device)
-            #     a = a.unsqueeze(0)
-            # else:
-            #     assert len(a.shape) == len(b.shape)
-            #     assert len(a.shape) == 2 or len(a.shape) == 3
-            #     # torch.empty((*a.shape[:-1], b.shape[-1])) doesn't work with jit
-            #     if len(a.shape) == 2:
-            #         c = torch.empty((a.shape[0], b.shape[-1]), dtype=output_dtype, device=a.device)
-            #     else:
-            #         c = torch.empty((a.shape[0], a.shape[1], b.shape[-1]), dtype=output_dtype, device=a.device)
-            #print(f'a = {a.shape} b = {b.shape}')
-            #a_2d = a.view(-1, a.shape[-1])
+
             a_2d = a.reshape((a.shape[0] * a.shape[1]),a.shape[2]).contiguous()#x.view(-1, x.shape[-1])
 
-
-            #print(f'a_2d = {a_2d.shape}')
-
-            #c = torch.empty((a.shape[0], a.shape[1], b.shape[-1]), dtype=output_dtype, device=a.device)
             c_2d = torch.empty((a.shape[0] * a.shape[1],  b.shape[-1]), dtype=output_dtype, device=a.device)
-
-            #print(f'c_2d = {c_2d.shape}')
     
             torch.ops.rwkv.gemm_fp16_cublas(a_2d, b, c_2d)
-            # 結果を3次元に戻す (4*1024, 4096) -> (4, 1024, 4096)
-            #c = c_2d.view(a.shape[0], a.shape[1], b.shape[-1])
 
             c = c_2d.reshape(a.shape[0], a.shape[1], b.shape[-1]).to(dtype=a.dtype)
 
-            #print(f'c = {c.shape}')
             return c
         else:
-            return (a @ b).to(output_dtype)
+            return (a @ b.t()).to(output_dtype)
 
 else:
+    @MyStatic
     def matmul_float(a, b, output_dtype: Optional[torch.dtype]=None):
-        print(f'a = {a.shape} b = {b.shape}')
-        return (a @ b).to(output_dtype)
+        #print(f'a = {a.shape} b = {b.shape}')
+        return (a @ b.t()).to(output_dtype)
 
 
-# def cuda_mm8_seq2(Z:int,B: int, N: int, M: int, x, w, mx, rx, my, ry):
-#     if x.dtype != torch.float16:
-#         x = x.to(dtype=torch.float16)
-#     assert x.dtype == mx.dtype == rx.dtype == my.dtype == ry.dtype
-#     assert x.dtype == torch.float32 or x.dtype == torch.float16
-#     assert w.dtype == torch.uint8
-#     assert x.shape == (Z, B, N)
-#     assert w.shape == (N, M)
-#     print(f'rx shape = {rx.shape}  mx shape = {mx.shape}  Target M = {M}')
-#     assert rx.shape == mx.shape == (M,)
-#     print(f'ry shape = {ry.shape}  mx shape = {my.shape}  Target M = {M}')
-#     assert ry.shape == my.shape == (N, 1)
-#     y = torch.empty((Z, B, M), device=w.device, dtype=x.dtype)
-#     print('cuda 8bit shorikaishi')
-#     torch.ops.rwkv.mm8_seq_(Z, B, N, M, x, w, mx, rx, my, ry, y)
-#     print('shoriend')
-#     print(y)
-#     return y
 @MyStatic
-def cuda_mm8_seq(Z:int,B: int, N: int, M: int, x, w, mx, rx, my, ry):
+def cuda_mm8_batch_one(Z:int,B: int, N: int, M: int, x, w, mx, rx, my, ry):
     if x.dtype != torch.float16:
         x = x.to(dtype=torch.float16)
-    # assert x.dtype == mx.dtype == rx.dtype == my.dtype == ry.dtype
-    # assert x.dtype == torch.float32 or x.dtype == torch.float16
-    # assert w.dtype == torch.uint8
-    # assert x.shape == (Z, B, N)
-    # assert w.shape == (N, M)
-    # print(f'rx shape = {rx.shape}  mx shape = {mx.shape}  Target M = {M}')
-    # assert rx.shape == mx.shape == (M,)
-    # print(f'ry shape = {ry.shape}  mx shape = {my.shape}  Target M = {M}')
-    # assert ry.shape == my.shape == (N, 1)
-    # y = torch.empty((Z, B, M), device=w.device, dtype=x.dtype)
-    # print('cuda 8bit shorikaishi')
-    #print(f'x shape = {x.shape}')
+
     B = B * Z
     a_2d = x.reshape((x.shape[0] * x.shape[1]),x.shape[2]).contiguous()#x.view(-1, x.shape[-1])
 
-    #print(f'a_2d shape = {a_2d.shape}')
+    #a_2d = x.view(-1, x.shape[-1])
 
     y = torch.empty((x.shape[0] * x.shape[1],  w.shape[-1]), dtype=torch.float32, device=x.device)
-
-   # print(f'y shape = {y.shape}')
-
-    #print(f'B = {B} N = {N} M = {M} ')
-    #d_w = torch.empty((w.shape[0],w.shape[1]), dtype=torch.float16, device=x.device).transpose(0, 1).contiguous().transpose(0, 1)
-   # print(f'd_w shape = {d_w.shape}')
-    # torch.ops.rwkv.dequantize_8bit( N ,M,
-    #                                 w,
-    #                                 mx,rx,
-    #                                 my,ry,
-    #                                 d_w
-    #                                 )
-    
-    # #print(d_w)
-
-    # print(f'dw shape = {d_w.shape}')
-
-    # torch.ops.rwkv.gemm_fp16_cublas(a_2d, d_w, y)
 
     torch.ops.rwkv.mm8_seq(B, N, M, a_2d, w, mx, rx, my, ry, y)
 
     y = y.reshape(x.shape[0], x.shape[1], w.shape[-1]).to(dtype=x.dtype)
+    #y = y.view(x.shape[0], x.shape[1], w.shape[-1]).to(dtype=x.dtype)
 
-    #y2 = x @ ((w.to(dtype=x.dtype) + 0.5) * ry * rx + my + mx)
-    #y2 = a_2d @ ((w.to(dtype=x.dtype) + 0.5) * ry * rx + my + mx)
-    #y2 = y2.reshape(x.shape[0], x.shape[1], w.shape[-1]).to(dtype=x.dtype)
 
-    #if torch.isnan(y).any():
-    #    print('NaN Detected!')
-    #    print(y)
-    #print(f'reshaped y shape = {y.shape}')
-
-    #suma0 = torch.sum(y[0] - y2[0])
-    #for i in range(x.shape[0]):
-    #    sums = torch.sum(y[i] - y2[i])
-    #    print(f'i = {i} Sum = {sums}')
-
-    #print('shoriend')
-    #print(y-y2)
-    #print(f"差の総数: {suma.item()}")
     return y
-@MyStatic
-def cuda_mm8_one(N: int, M: int, x, w, mx, rx, my, ry):
 
-    assert x.dtype == mx.dtype == rx.dtype == my.dtype == ry.dtype
-    assert x.dtype == torch.float32 or x.dtype == torch.float16
-    assert w.dtype == torch.uint8
-    assert x.shape == (N,)
-    assert w.shape == (N, M)
-    assert rx.shape == mx.shape == (M,)
-    assert ry.shape == my.shape == (N, 1)
-    y = torch.zeros((M,), device=w.device, dtype=torch.float32)
-    torch.ops.rwkv.mm8_one(N, M, x, w, mx, rx, my, ry, y)
-    return y.to(dtype=x.dtype)
 
 @MyStatic
 def torch_mm8_seq(x, w, mx, rx, my, ry):
@@ -194,29 +108,14 @@ def torch_mm8_seq(x, w, mx, rx, my, ry):
     return x @ ((w.to(dtype=x.dtype) + 0.5) * ry * rx + my + mx)
 
 @MyStatic
-def torch_mm8_one(x, w, mx, rx, my, ry):
-    return x @ ((w.to(dtype=x.dtype) + 0.5) * ry * rx + my + mx)
-
-@MyStatic
-def mm8_seq(x, w, mx, rx, my, ry):
+def mm8(x, w, mx, rx, my, ry):
     if w.device.type == 'cuda' and x.dtype == torch.float16 and x.shape[1] == 1:
         Z, B, N, M = x.shape[0], x.shape[1], w.shape[0], w.shape[1]
-        return cuda_mm8_seq(Z, B, N, M, x, w, mx, rx, my, ry)
+        return cuda_mm8_batch_one(Z, B, N, M, x, w, mx, rx, my, ry)
     else:
         return torch_mm8_seq(x, w, mx, rx, my, ry)
+
 @MyStatic
-def mm8_one(x, w, mx, rx, my, ry):
-    if w.device.type == 'cuda':
-        N, M = w.shape[0], w.shape[1]
-        return cuda_mm8_one(N, M, x, w, mx, rx, my, ry)
-    else:
-        return torch_mm8_one(x, w, mx, rx, my, ry)
-
-def mm8(x: torch.Tensor, w: torch.Tensor, mx: torch.Tensor, rx: torch.Tensor, my: torch.Tensor, ry: torch.Tensor):
-    #i#f len(x.shape) == 1:
-    #    return mm8_one(x, w, mx, rx, my, ry)
-    return mm8_seq(x, w, mx, rx, my, ry)
-
 def matmul(a, b, mx: Optional[torch.Tensor]=None, rx: Optional[torch.Tensor]=None, my: Optional[torch.Tensor]=None, ry: Optional[torch.Tensor]=None, output_dtype: Optional[torch.dtype]=None) -> torch.Tensor:
     if output_dtype is None:
         output_dtype = a.dtype
@@ -232,15 +131,16 @@ def matmul(a, b, mx: Optional[torch.Tensor]=None, rx: Optional[torch.Tensor]=Non
     else:
         raise ValueError("Unsupported dtype")
 
-#@torch.jit.ignore
+@torch.jit.ignore
 class QuantLinear(nn.Module): # inspired by RWKV-PEFT @JL-er Thanks! 
-    def __init__(self, in_features: int, out_features: int, bias: bool):
+    def __init__(self, in_features: int, out_features: int, bias: bool, precision=torch.float16 ):
         super().__init__()
 
         self.weight = nn.Parameter(torch.empty((out_features, in_features)))
         assert bias == False, "Biased QuantLinear not supported"
         self.is_quant = False
         self.grad = None
+        self.precision = precision
 
         self.mx = None
         self.my = None
@@ -254,24 +154,24 @@ class QuantLinear(nn.Module): # inspired by RWKV-PEFT @JL-er Thanks!
         self.quant_type = quant_type
         #self.dummy_tensor = nn.Parameter(torch.zeros(1))
         if self.quant_type=='4bit':
-            self.weight.data, self.qstate= bnb.functional.quantize_4bit((self.weight.data).to('cuda'))
+            self.weight.data, self.qstate= bnb.functional.quantize_4bit((self.weight.data.to(dtype=self.precision)).to('cuda'))
         elif self.quant_type=='nf4':
-            self.weight.data, self.qstate= bnb.functional.quantize_nf4((self.weight.data).to('cuda'))
+            self.weight.data, self.qstate= bnb.functional.quantize_nf4((self.weight.data.to(dtype=self.precision)).to('cuda'))
         elif self.quant_type=='fp4':
-            self.weight.data, self.qstate= bnb.functional.quantize_fp4((self.weight.data).to('cuda'))
+            self.weight.data, self.qstate= bnb.functional.quantize_fp4((self.weight.data.to(dtype=self.precision)).to('cuda'))
         elif self.quant_type=='int8':
-            self.weight.data, self.qstate= bnb.functional.quantize((self.weight.data).to('cuda'))
+            self.weight.data, self.qstate= bnb.functional.quantize((self.weight.data.to(dtype=self.precision)).to('cuda'))
     def forward(self, x):
 
         if self.is_quant:
             if self.quant_type=='4bit':
-                return F.linear(x, bnb.functional.dequantize_4bit(self.weight.data,quant_state=self.qstate).to(torch.bfloat16)) 
+                return F.linear(x.to(self.precision), bnb.functional.dequantize_4bit(self.weight.data,quant_state=self.qstate).to(self.precision)) 
             elif self.quant_type=='nf4':
-                return F.linear(x, bnb.functional.dequantize_nf4(self.weight.data,quant_state=self.qstate).to(torch.bfloat16))
+                return F.linear(x.to(self.precision), bnb.functional.dequantize_nf4(self.weight.data,quant_state=self.qstate).to(self.precision))
             elif self.quant_type=='fp4':
-                return F.linear(x, bnb.functional.dequantize_fp4(self.weight.data,quant_state=self.qstate).to(torch.bfloat16))
+                return F.linear(x.to(self.precision), bnb.functional.dequantize_fp4(self.weight.data,quant_state=self.qstate).to(self.precision))
             elif self.quant_type=='int8':
-                return F.linear(x, bnb.functional.dequantize(self.weight.data,state=self.qstate).to(torch.bfloat16))
+                return F.linear(x.to(self.precision), bnb.functional.dequantize(self.weight.data,state=self.qstate).to(self.precision))
         else:
             #print('unquant forward')
             return F.linear(x, self.weight)
@@ -418,8 +318,8 @@ class PIPELINE():
         probs = probs / torch.sum(probs)
         out = torch.multinomial(probs, num_samples=1)[0]
         return int(out)
-    
-    def sample_logits_mose2_optimized(self, logits, temperature=1.0, top_p=0.85, top_k=0):
+    @MyStatic
+    def sample_logits_mose2_optimized(logits, temperature:float=1.0, top_p:float=0.85, top_k:int=0):
         if temperature == 0:
             return int(torch.argmax(logits))
 
@@ -490,11 +390,12 @@ class RWKV6_ChannelMix(torch.nn.Module):
     # - of output embedding of shape [batch_size, seq_len, embedding_size]
     # - and the last output state of shape [batch_size, state_size]
     # @torch.compile(backend="eager")
+    
     def forward(self, x, last_state: torch.Tensor):
  
     
         xx = torch.concat((last_state, x[:, :-1]),
-                          dim=1)
+                          dim=1).to(dtype=self.precision)
         last_state[:] = x[:, -1:]
         
         # if(self.lastlayer):
@@ -504,7 +405,12 @@ class RWKV6_ChannelMix(torch.nn.Module):
         xk = xx * self.time_maa_k + x * (1 - self.time_maa_k)
         xr = xx * self.time_maa_r + x * (1 - self.time_maa_r)
         #kv = self.value( torch.relu( self.key(xk.to(dtype=self.precision)) ) ** 2 )
-        kv = matmul(torch.relu(matmul(xk.to(dtype=self.precision),self.key.weight,
+        if self.value.is_quant and self.key.is_quant:
+            kv = self.value( torch.relu( self.key(xk.to(dtype=self.precision)) ) ** 2 )
+        elif self.key.mx is None and self.value.mx is None:
+            kv = (torch.relu(xk.to(dtype=self.precision) @ self.key.weight.t()) ** 2) @ self.value.weight.t()
+        else:
+            kv = matmul(torch.relu(matmul(xk.to(dtype=self.precision),self.key.weight,
                                       mx=self.key.mx,
                                       my=self.key.my,
                                       rx=self.key.rx,
@@ -514,7 +420,15 @@ class RWKV6_ChannelMix(torch.nn.Module):
                                       my=self.value.my,
                                       rx=self.value.rx,
                                       ry=self.value.ry)
-        return (torch.sigmoid(matmul(xr.to(dtype=self.precision),self.receptance.weight,
+        if self.receptance.is_quant:
+            return (torch.sigmoid(self.receptance(xr.to(dtype=self.precision))) * kv), last_state
+        elif self.receptance.mx is None:
+            return torch.sigmoid(
+                                  xr.to(dtype=self.precision) @ self.receptance.weight.t()  
+                                ) * kv, last_state
+    
+        else:
+            return (torch.sigmoid(matmul(xr.to(dtype=self.precision),self.receptance.weight,
                                      mx=self.receptance.mx,
                                       my=self.receptance.my,
                                       rx=self.receptance.rx,
@@ -537,7 +451,7 @@ class Block6(nn.Module):
 
         self.att = RWKV6_TimeMix(layer_id, n_layer, n_embd, n_head, head_size, dim_att,precision=precision)
         self.ffn = RWKV6_ChannelMix(layer_id, n_layer, n_embd, dim_ffn,precision=precision)
-        self.time_debug = True
+        self.time_debug = False
         
     
         # Setup droupout at block level
@@ -582,6 +496,7 @@ class Block6(nn.Module):
 
 
 # RWKV TimeMix module
+#@MyModule
 class RWKV6_TimeMix(torch.nn.Module):
     #chunk_len:int = 128, precision:int = 64
     def __init__(self, layer_id, n_layer, n_embd, n_head, head_size, dim_att, chunk_len:int = 1, precision=torch.bfloat16):
@@ -643,7 +558,7 @@ class RWKV6_TimeMix(torch.nn.Module):
         self.key =HybridLinear(n_embd, dim_att, bias=False)
         self.value =HybridLinear(n_embd, dim_att, bias=False)
 
-        self.output =nn.Linear(dim_att, n_embd, bias=False)
+        self.output =HybridLinear(dim_att, n_embd, bias=False)
 
         self.gate =HybridLinear(n_embd, dim_att, bias=False)
         self.ln_x = nn.GroupNorm(self.n_head, dim_att, eps=(1e-5)*(head_size_divisor**2))
@@ -681,7 +596,7 @@ class RWKV6_TimeMix(torch.nn.Module):
     #     w = w.exp().neg()
     #     return r, k, v, g, w
     
-    @torch.jit.script    
+    @MyStatic  
     def jit_func_parts(x, last_state_shift,
                        time_maa_x,
                        time_maa_w1,
@@ -727,31 +642,50 @@ class RWKV6_TimeMix(torch.nn.Module):
         #print(f'xr shape = {xr.shape}')
 
         #r = self.receptance(xr.to(dtype=self.precision))#.to(dtype=torch.bfloat16)
-        r = matmul(xr.to(dtype=self.precision),
+        if self.receptance.is_quant:
+            r = self.receptance(xr.to(dtype=self.precision))
+        elif self.receptance.mx is None:
+            r = (xr.to(dtype=self.precision) @ self.receptance.weight.t())
+        else:
+            r = matmul(xr.to(dtype=self.precision),
                     self.receptance.weight,
                     mx=self.receptance.mx,
                     my=self.receptance.my,
                     rx=self.receptance.rx,
                     ry=self.receptance.ry,
-                    #output_dtype = torch.float32
                     )#.to(dtype=torch.bfloat16)
         #r = matmul(xr,self.receptance.weight)
         #print(r)
         #k = self.key(xk.to(dtype=self.precision))
-        k = matmul(xk.to(dtype=self.precision),self.key.weight,
+        if self.key.is_quant:
+            k = self.key(xk.to(dtype=self.precision))
+        elif self.key.mx is None:
+            k = (xk.to(dtype=self.precision) @ self.key.weight.t())
+        else:
+            k = matmul(xk.to(dtype=self.precision),self.key.weight,
                    mx=self.key.mx,
                     my=self.key.my,
                     rx=self.key.rx,
                     ry=self.key.ry,
                    )
         #v = self.value(xv.to(dtype=self.precision))
-        v = matmul(xv.to(dtype=self.precision),self.value.weight,
+        if self.value.is_quant:
+            v = self.value(xv.to(dtype=self.precision))
+        elif self.value.mx is None:
+            v = (xv.to(dtype=self.precision) @ self.value.weight.t())
+        else:
+            v = matmul(xv.to(dtype=self.precision),self.value.weight,
                    mx=self.value.mx,
                     my=self.value.my,
                     rx=self.value.rx,
                     ry=self.value.ry,)
         #g = torch.nn.functional.silu(self.gate(xg.to(dtype=self.precision)))
-        g = torch.nn.functional.silu(matmul(xg.to(dtype=self.precision),self.gate.weight,
+        if self.gate.is_quant:
+            g = torch.nn.functional.silu(self.gate(xg.to(dtype=self.precision)))
+        elif self.gate.mx is None:
+            g = torch.nn.functional.silu((xg.to(dtype=self.precision) @ self.gate.weight.t()))
+        else:
+            g = torch.nn.functional.silu(matmul(xg.to(dtype=self.precision),self.gate.weight,
                                             mx=self.gate.mx,
                                             my=self.gate.my,
                                             rx=self.gate.rx,
@@ -759,14 +693,25 @@ class RWKV6_TimeMix(torch.nn.Module):
         return r, k, v, g
     
     
-   # @torch.jit.script
+   # @torch.jit.scrip
+    #@MyFunction
     def jit_func_2(self, x, g):
         B, T, C = x.size()
         x = x.view(B * T, C)
         
         x = self.ln_x(x).view(B, T, C)
         #x = self.output(x * g)
-        x = matmul(x * g, self.output.weight.t())
+        #x = matmul(x * g, self.output.weight.t())
+        if self.gate.is_quant:
+            x = self.output(x * g)
+        elif self.output.mx is None:
+            x = (x * g).to(dtype=self.precision) @ self.output.weight.t()
+        else:
+            x = matmul((x * g).to(dtype=self.precision),self.output.weight,
+                   mx=self.output.mx,
+                    my=self.output.my,
+                    rx=self.output.rx,
+                    ry=self.output.ry,)
         return x
  
 
@@ -854,7 +799,7 @@ class RWKV6(nn.Module):
                  # Model size settings, which we either
                  quantize: bool = False,
 
-                 base_precision: str = 'fp16'
+                 base_precision: str = 'int8'
              
                  ):
 
@@ -863,11 +808,13 @@ class RWKV6(nn.Module):
         super().__init__()
 
         self.time_debug = True
+        self.bit8quant = False
 
         if base_precision == 'fp16':
             self.base_precision = torch.float16
         elif base_precision == 'int8':
-            self.base_precision = torch.uint8
+            self.base_precision = torch.float16
+            self.bit8quant = True
         else:
             self.base_precision = torch.bfloat16
 
@@ -960,7 +907,7 @@ class RWKV6(nn.Module):
             Block6(i, n_layer, n_embd, n_head, self.head_size, n_embd, dim_ffn,precision=self.base_precision) for i in range(n_layer)
         ])
         
-        self.head = nn.Linear(n_embd, vocab_size,bias=False)
+        self.head = HybridLinear(n_embd, vocab_size,bias=False)
         
         file["ln_in.weight"] = file.pop("blocks.0.ln0.weight")
         file["ln_in.bias"] = file.pop("blocks.0.ln0.bias")
@@ -977,7 +924,7 @@ class RWKV6(nn.Module):
         quant_layers = 0
 
         if quantize:
-            quant_layers = 40
+            quant_layers = 61
 
 
         for name, m in self.named_modules():
@@ -1011,7 +958,7 @@ class RWKV6(nn.Module):
                 #print('jikken')
                 #if ('receptance' in name  or 'output' in name or 'key' in name or 'value' in name ) and ('.att' in name or '.ffn' in name ):
                 #jikken
-                if ('receptance' in name or 'key' in name or 'value' in name or 'gate' in name) and ('.att' in name or '.ffn' in name):
+                if ((('receptance' in name or 'key' in name or 'value' in name or 'gate' in name or 'output' in name) and ('.att' in name or '.ffn' in name)) or 'head' == name) and self.bit8quant:
                 #if ('receptance' in name ) and ('.att' in name ):
                     print(f'{name} is quant to int8')
                     m.weight.data = m.weight.data.t()
@@ -1038,10 +985,10 @@ class RWKV6(nn.Module):
                         m.weight.data = m.weight.data / m.ry
                     m.weight.data = torch.clip(torch.floor(m.weight.data * 256), min=0, max=255).to(dtype=torch.uint8)
 
-                    m.my = m.my.to(dtype=torch.float16).contiguous()
-                    m.mx = m.mx.to(dtype=torch.float16).contiguous()
-                    m.rx = (m.rx/16).to(dtype=torch.float16).contiguous()
-                    m.ry = (m.ry/16).to(dtype=torch.float16).contiguous()
+                    m.my = m.my.to(dtype=torch.float16,device='cuda').contiguous()
+                    m.mx = m.mx.to(dtype=torch.float16,device='cuda').contiguous()
+                    m.rx = (m.rx/16).to(dtype=torch.float16,device='cuda').contiguous()
+                    m.ry = (m.ry/16).to(dtype=torch.float16,device='cuda').contiguous()
 
                     m=m.to('cuda')#.contiguous()
 
@@ -1053,9 +1000,9 @@ class RWKV6(nn.Module):
                 else:
                     #if 'ln_in' in name or 'ln_out' in name or 'emb' in name or 'head' in name or 'ln1' in name or 'ln2' in name:
                     #    m=m.to('cuda',dtype=torch.bfloat16)
-                    if ( 'receptance' in name or 'key' in name  or 'value' in name or  'value' in name or 'gate' in name ) and ('.att' in name or '.ffn' in name):
-                        m=m.to('cuda',dtype=torch.float16)#.t()
-                        m.weight.data = m.weight.data.t().contiguous()
+                    if (( 'receptance' in name or 'key' in name  or 'value' in name or  'value' in name or 'gate' in name or 'output' in name) and ('.att' in name or '.ffn' in name)) or 'head' == name:
+                        m=m.to('cuda',dtype=self.base_precision)#.t()
+                        m.weight.data = m.weight.data#.t().contiguous()
                         print(f'special mode {name}')
                     else:
                         m=m.to('cuda',dtype=torch.bfloat16)
@@ -1107,10 +1054,25 @@ class RWKV6(nn.Module):
         if self.time_debug:
             start_time3 = time.time()
 
-        x = self.ln_out(x.to(dtype=torch.bfloat16))
+        x = self.ln_out(x.to(dtype=torch.bfloat16)).to(dtype=self.base_precision)
         if self.time_debug:
             start_time4 = time.time()
-        x = self.head(x)
+
+
+
+
+        if self.head.is_quant:
+            x = self.head(x)
+        else:
+            #print(f'head device x={x.device} w = {self.head.weight.device} mx = {self.head.mx.device}')
+            x = matmul(x.to(dtype=self.base_precision),self.head.weight,
+                   mx=self.head.mx,
+                    my=self.head.my,
+                    rx=self.head.rx,
+                    ry=self.head.ry,).to(dtype=torch.float32)
+
+
+
         if self.time_debug:
             start_time5 = time.time()
 

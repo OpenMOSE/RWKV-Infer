@@ -177,9 +177,24 @@ async def loadmodel(request: Request):
 
         #wrappers[0].load_model(model_filename,model_strategy)
         Quant = False
+        precision = 'fp16'
+        if model_strategy == 'quantfp16':
+            Quant = True
+            precision = 'fp16'
+        if model_strategy == 'quantfp16i8':
+            Quant = True
+            precision = 'int8'
+        if model_strategy == 'fp16':
+            Quant = False
+            precision = 'fp16'
+        if model_strategy == 'fp16i8':
+            Quant = False
+            precision = 'int8'
         if model_strategy == 'quant':
             Quant = True
-        engine1.LoadModel(model_filename,Quant)
+            precision = 'fp16'
+        
+        engine1.LoadModel(model_filename,Quant,precision)
         ModelList = [{"object":"models","id":f"{model_viewname}"}]
         #return jsonify({"status": "success"}), 200
         return {"status": "success"}
