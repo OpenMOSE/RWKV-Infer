@@ -27,25 +27,37 @@ current_path = os.path.dirname(os.path.abspath(__file__))
 
 from torch.utils.cpp_extension import load
 
-try:
-    load(
-        name=f"wkv_cuda",
-        sources=[f"{current_path}/cuda/wrapper.cpp", f"{current_path}/cuda/operators.cu", f"{current_path}/cuda/gemm_fp16_cublas.cpp"],
-        verbose=True,
-        extra_ldflags=["cublas.lib" if os.name == "nt" else ""],
-        extra_cuda_cflags=["--use_fast_math", "-O3", "--extra-device-vectorization"],
-        is_python_module=False)
-    DISABLE_CUBLAS_GEMM = False
-except:
-    print("Failed to build cuBLAS matmul, falling back to torch.matmul. Small model with fp16 will overflow.")
+if torch.version.hip is not None:
+    print('Rocm Backend Detected. currently, disabled cublas matmul')
     load(
         name=f"wkv_cuda",
         sources=[f"{current_path}/cuda/wrapper.cpp", f"{current_path}/cuda/operators.cu"],
         verbose=True,
-        extra_cuda_cflags=["--use_fast_math", "-O3", "--extra-device-vectorization"],
+        extra_cuda_cflags=["-fopenmp -ffast-math --gpu-max-threads-per-block=120"],
         extra_cflags=["-DDISABLE_CUBLAS_GEMM"],
         is_python_module=False)
     DISABLE_CUBLAS_GEMM = True
+else:
+    print('CUDA Backend Detected.')
+    try:
+        load(
+            name=f"wkv_cuda",
+            sources=[f"{current_path}/cuda/wrapper.cpp", f"{current_path}/cuda/operators.cu", f"{current_path}/cuda/gemm_fp16_cublas.cpp"],
+            verbose=True,
+            extra_ldflags=["cublas.lib" if os.name == "nt" else ""],
+            extra_cuda_cflags=["--use_fast_math", "-O3", "--extra-device-vectorization"],
+            is_python_module=False)
+        DISABLE_CUBLAS_GEMM = False
+    except:
+        print("Failed to build cuBLAS matmul, falling back to torch.matmul. Small model with fp16 will overflow.")
+        load(
+            name=f"wkv_cuda",
+            sources=[f"{current_path}/cuda/wrapper.cpp", f"{current_path}/cuda/operators.cu"],
+            verbose=True,
+            extra_cuda_cflags=["--use_fast_math", "-O3", "--extra-device-vectorization"],
+            extra_cflags=["-DDISABLE_CUBLAS_GEMM"],
+            is_python_module=False)
+        DISABLE_CUBLAS_GEMM = True
 
 MyStatic = torch.jit.script
 MyModule = torch.jit.ScriptModule
