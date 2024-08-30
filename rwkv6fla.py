@@ -578,6 +578,8 @@ class RWKV6_TimeMix(torch.nn.Module):
             self.time_maa_r = nn.Parameter(1.0 - torch.pow(ddd, 0.5 * ratio_1_to_almost0))
             self.time_maa_g = nn.Parameter(1.0 - torch.pow(ddd, 0.5 * ratio_1_to_almost0))
 
+            self.time_wkvrg = None
+
             D_MIX_LORA = 32#n_head # generate TIME_MIX for w,k,v,r,g
             if n_embd==4096:
                 D_MIX_LORA = D_MIX_LORA*2
@@ -623,11 +625,12 @@ class RWKV6_TimeMix(torch.nn.Module):
                        time_maa_x,
                        time_maa_w1,
                        time_maa_w2,
-                       time_maa_w,
-                       time_maa_k,
-                       time_maa_v,
-                       time_maa_r,
-                       time_maa_g,
+                       time_wkvrg,
+                       #time_maa_w,
+                       #time_maa_k,
+                       #time_maa_v,
+                       #time_maa_r,
+                       #time_maa_g,
                        time_decay_w1,
                        time_decay_w2,
                        time_decay
@@ -637,7 +640,7 @@ class RWKV6_TimeMix(torch.nn.Module):
         #print(f'last_state_shift = {last_state_shift.shape}')
         x = x.contiguous()
 
-        output = torch.concat((last_state_shift, x[:, :-1]), dim=1)
+        output = torch.concat((last_state_shift, x[:, :-1]), dim=1).to(dtype=x.dtype)
         last_state_shift[:] = x[:,-1:]
 
         xx = output - x
@@ -646,14 +649,18 @@ class RWKV6_TimeMix(torch.nn.Module):
         #xxx = torch.tanh(xxx @ time_maa_w1).view(B*T, 5, -1).transpose(0, 1)
         #xxx = torch.bmm(xxx, time_maa_w2).view(5, B, T, -1)
         # xxxの計算を最適化
-        #print(f'time_maa_x device = {time_maa_x.device}')
-        xxx = torch.addcmul(x, xx, time_maa_x)
+        #p#rint(f'time_maa_x dtype = {time_maa_w1.dtype}')
+        
+        xxx = torch.addcmul(x, xx, time_maa_x).to(dtype=time_maa_x.dtype)
+        #print(f'xxx dtype = {xxx.dtype}')
         xxx = torch.tanh(xxx @ time_maa_w1).view(B*T, 5, -1).transpose(0, 1)
         xxx = torch.bmm(xxx, time_maa_w2).view(5, B, T, -1)
         #mw, mk, mv, mr, mg = xxx.unbind(dim=0)
 
-        combined = torch.stack([time_maa_w, time_maa_k, time_maa_v, time_maa_r, time_maa_g], dim=0)
-        combined = (xxx + combined) * xx + x
+        #combined = torch.stack([time_maa_w, time_maa_k, time_maa_v, time_maa_r, time_maa_g], dim=0)
+        combined = (xxx + time_wkvrg) * xx + x
+
+
 
 
         # xw = x + xx * (time_maa_w + mw)
@@ -852,15 +859,27 @@ class RWKV6_TimeMix(torch.nn.Module):
         if self.time_debug:
             start_time1 = time.time()
 
-        xw,xk,xv,xr,xg,ww,w  = self.jit_func_parts(x=x, last_state_shift=last_state_shift,
+        if self.time_wkvrg is None:
+            self.time_wkvrg = torch.stack([self.time_maa_w, self.time_maa_k, self.time_maa_v, self.time_maa_r, self.time_maa_g], dim=0)
+            self.time_maa_w = None
+            self.time_maa_k = None
+            self.time_maa_v = None
+            self.time_maa_r = None 
+            self.time_maa_g = None
+
+
+
+
+        xw,xk,xv,xr,xg,ww,w  = self.jit_func_parts(x=x.to(dtype=self.time_maa_x.dtype), last_state_shift=last_state_shift,
                        time_maa_x=self.time_maa_x,
                        time_maa_w1=self.time_maa_w1,
                        time_maa_w2=self.time_maa_w2,
-                       time_maa_w=self.time_maa_w,
-                       time_maa_k=self.time_maa_k,
-                       time_maa_v=self.time_maa_v,
-                       time_maa_r=self.time_maa_r,
-                       time_maa_g=self.time_maa_g,
+                       time_wkvrg=self.time_wkvrg,
+                       #time_maa_w=self.time_maa_w,
+                       #time_maa_k=self.time_maa_k,
+                       #time_maa_v=self.time_maa_v,
+                       #time_maa_r=self.time_maa_r,
+                       #time_maa_g=self.time_maa_g,
                        time_decay_w1=self.time_decay_w1,
                        time_decay_w2=self.time_decay_w2,
                        time_decay=self.time_decay
@@ -944,6 +963,9 @@ class RWKV6(nn.Module):
             self.base_precision = torch.float16
         elif base_precision == 'int8':
             self.base_precision = torch.bfloat16
+            self.bit8quant = True
+        elif base_precision == 'fp16int8':
+            self.base_precision = torch.float16
             self.bit8quant = True
         else:
             self.base_precision = torch.bfloat16
@@ -1068,11 +1090,18 @@ class RWKV6(nn.Module):
                                     ThroughFound = True
                     if key == 'blocks' or key == '':
                                 ThroughFound = True
+
+
+                    print(f'{key} base precision = {file[key].dtype}')
                     
 
 
                     if ThroughFound == False:
-                        param.data = file[key].cuda().contiguous()   
+                        if 'ln' in key or 'emb' in key:
+                            param.data = file[key].cuda().contiguous()  
+                        else:
+                            param.data = file[key].to(dtype=self.base_precision,device='cuda').contiguous() 
+
 
 
 
@@ -1153,7 +1182,7 @@ class RWKV6(nn.Module):
                                 else:
                                     #if 'ln_in' in name or 'ln_out' in name or 'emb' in name or 'head' in name or 'ln1' in name or 'ln2' in name:
                                     #    m=m.to('cuda',dtype=torch.bfloat16)
-                                    if (( 'receptance' in name or 'key' in name  or 'value' in name or  'value' in name or 'gate' in name or 'output' in name) and ('.att' in name or '.ffn' in name)) or 'head' == name:
+                                    if (( 'receptance' in name or 'key' in name  or 'value' in name or  'value' in name or 'gate' in name or 'output' in name ) and ('.att' in name or '.ffn' in name)) or 'head' == name or 'time_maa_x' in name or 'time_maa_w' in name or 'time_maa_k' in name or 'time_maa_v' in name or 'time_maa_r' in name or 'time_maa_g' in name or 'time_maa_w1' in name or 'time_maa_w2' in name or 'time_decay' in name or 'time_decay_w1' in name or 'time_decay_w2' in name or 'time_faaaa' in name:
                                         m=m.to('cuda',dtype=self.base_precision)#.t()
                                         m.weight.data = m.weight.data.contiguous()#.t().contiguous()
                                         print(f'special mode {name}')

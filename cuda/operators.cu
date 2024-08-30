@@ -4,9 +4,9 @@
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
 
-#include <mma.h>
+//#include <mma.h>
 
-using namespace nvcuda;
+//using namespace nvcuda;
 #define MIN_VALUE (-1e38)
 typedef at::Half fp16;
 __half *cast(fp16 *ptr) {
