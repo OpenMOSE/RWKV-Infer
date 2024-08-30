@@ -86,16 +86,16 @@ def cuda_mm8_batch_one(Z:int,B: int, N: int, M: int, x, w, mx, rx, my, ry):
         x = x.to(dtype=torch.float16)
 
     B = B * Z
-    a_2d = x.reshape((x.shape[0] * x.shape[1]),x.shape[2]).contiguous()#x.view(-1, x.shape[-1])
+    #a_2d = x.reshape((x.shape[0] * x.shape[1]),x.shape[2]).contiguous()#x.view(-1, x.shape[-1])
 
-    #a_2d = x.view(-1, x.shape[-1])
+    a_2d = x.view(-1, x.shape[-1])
 
     y = torch.empty((x.shape[0] * x.shape[1],  w.shape[-1]), dtype=torch.float32, device=x.device)
 
     torch.ops.rwkv.mm8_seq(B, N, M, a_2d, w, mx, rx, my, ry, y)
 
-    y = y.reshape(x.shape[0], x.shape[1], w.shape[-1]).to(dtype=x.dtype)
-    #y = y.view(x.shape[0], x.shape[1], w.shape[-1]).to(dtype=x.dtype)
+    #y = y.reshape(x.shape[0], x.shape[1], w.shape[-1]).to(dtype=x.dtype)
+    y = y.view(x.shape[0], x.shape[1], w.shape[-1]).to(dtype=x.dtype)
 
 
     return y
@@ -159,19 +159,18 @@ class QuantLinear(nn.Module): # inspired by RWKV-PEFT @JL-er Thanks!
             self.weight.data, self.qstate= bnb.functional.quantize_nf4((self.weight.data.to(dtype=self.precision)).to('cuda'))
         elif self.quant_type=='fp4':
             self.weight.data, self.qstate= bnb.functional.quantize_fp4((self.weight.data.to(dtype=self.precision)).to('cuda'))
-        elif self.quant_type=='int8':
-            self.weight.data, self.qstate= bnb.functional.quantize((self.weight.data.to(dtype=self.precision)).to('cuda'))
     def forward(self, x):
 
         if self.is_quant:
             if self.quant_type=='4bit':
-                return F.linear(x.to(self.precision), bnb.functional.dequantize_4bit(self.weight.data,quant_state=self.qstate).to(self.precision)) 
+                #return F.linear(x.to(self.precision), bnb.functional.dequantize_4bit(self.weight.data,quant_state=self.qstate).to(self.precision)) 
+                return x.to(self.precision) @ bnb.functional.dequantize_4bit(self.weight.data,quant_state=self.qstate).to(self.precision).t()
             elif self.quant_type=='nf4':
-                return F.linear(x.to(self.precision), bnb.functional.dequantize_nf4(self.weight.data,quant_state=self.qstate).to(self.precision))
+                #return F.linear(x.to(self.precision), bnb.functional.dequantize_nf4(self.weight.data,quant_state=self.qstate).to(self.precision))
+                return x.to(self.precision) @ bnb.functional.dequantize_nf4(self.weight.data,quant_state=self.qstate).to(self.precision).t()
             elif self.quant_type=='fp4':
-                return F.linear(x.to(self.precision), bnb.functional.dequantize_fp4(self.weight.data,quant_state=self.qstate).to(self.precision))
-            elif self.quant_type=='int8':
-                return F.linear(x.to(self.precision), bnb.functional.dequantize(self.weight.data,state=self.qstate).to(self.precision))
+                #return F.linear(x.to(self.precision), bnb.functional.dequantize_fp4(self.weight.data,quant_state=self.qstate).to(self.precision))
+                return x.to(self.precision) @ bnb.functional.dequantize_fp4(self.weight.data,quant_state=self.qstate).to(self.precision).t()
         else:
             #print('unquant forward')
             return F.linear(x, self.weight)
@@ -390,20 +389,31 @@ class RWKV6_ChannelMix(torch.nn.Module):
     # - of output embedding of shape [batch_size, seq_len, embedding_size]
     # - and the last output state of shape [batch_size, state_size]
     # @torch.compile(backend="eager")
+
+    @MyStatic
+    def cmix_jit1(x,last_state,time_maa_k,time_maa_r,precision):
+        xx = torch.concat((last_state, x[:, :-1]),
+                          dim=1).to(dtype=precision.dtype)
+        last_state[:] = x[:, -1:]
+        
+        
+        xk = xx * time_maa_k + x * (1 - time_maa_k)
+        xr = xx * time_maa_r + x * (1 - time_maa_r)
+        return xk,xr,last_state
     
     def forward(self, x, last_state: torch.Tensor):
  
-    
-        xx = torch.concat((last_state, x[:, :-1]),
-                          dim=1).to(dtype=self.precision)
-        last_state[:] = x[:, -1:]
-        
-        # if(self.lastlayer):
-        #     x = x[:,-1:]
-        #     xx = xx[:,-1:]
-        
-        xk = xx * self.time_maa_k + x * (1 - self.time_maa_k)
-        xr = xx * self.time_maa_r + x * (1 - self.time_maa_r)
+
+
+        xk,xr,last_state = self.cmix_jit1(x,
+                                     last_state,
+                                     self.time_maa_k,
+                                     self.time_maa_r,
+                                     torch.ones(1, dtype=self.precision)
+                                     )
+
+
+
         #kv = self.value( torch.relu( self.key(xk.to(dtype=self.precision)) ) ** 2 )
         if self.value.is_quant and self.key.is_quant:
             kv = self.value( torch.relu( self.key(xk.to(dtype=self.precision)) ) ** 2 )
@@ -492,7 +502,9 @@ class Block6(nn.Module):
         return x, time_mix_shift, channel_mix_state, time_mix_state
 
     
-
+@torch.jit.script
+def compute_x(x, xx, time_maa, m):
+        return x + xx * (time_maa + m)
 
 
 # RWKV TimeMix module
@@ -563,38 +575,9 @@ class RWKV6_TimeMix(torch.nn.Module):
         self.gate =HybridLinear(n_embd, dim_att, bias=False)
         self.ln_x = nn.GroupNorm(self.n_head, dim_att, eps=(1e-5)*(head_size_divisor**2))
         self.ctx = 1024#saveBackDummy()
+    
 
-    #@torch.jit.script
-    # def jit_func(self, x, last_state_shift):
-    #     B, T, C = x.size()
 
-    #     #print(f'last_state_shift = {last_state_shift.shape}')
-
-    #     output = torch.concat((last_state_shift, x[:, :-1]), dim=1)
-    #     last_state_shift[:] = x[:,-1:]
-
-    #     xx = output - x
-
-    #     xxx = x + xx * self.time_maa_x
-    #     xxx = torch.tanh(xxx @ self.time_maa_w1).view(B*T, 5, -1).transpose(0, 1)
-    #     xxx = torch.bmm(xxx, self.time_maa_w2).view(5, B, T, -1)
-    #     mw, mk, mv, mr, mg = xxx.unbind(dim=0)
-
-    #     xw = x + xx * (self.time_maa_w + mw)
-    #     xk = x + xx * (self.time_maa_k + mk)
-    #     xv = x + xx * (self.time_maa_v + mv)
-    #     xr = x + xx * (self.time_maa_r + mr)
-    #     xg = x + xx * (self.time_maa_g + mg)
-
-    #     r = self.receptance(xr)
-    #     k = self.key(xk)
-    #     v = self.value(xv)
-    #     g = torch.nn.functional.silu(self.gate(xg))
-
-    #     ww = torch.tanh(xw @ self.time_decay_w1) @ self.time_decay_w2
-    #     w = self.time_decay + ww
-    #     w = w.exp().neg()
-    #     return r, k, v, g, w
     
     @MyStatic  
     def jit_func_parts(x, last_state_shift,
@@ -613,29 +596,136 @@ class RWKV6_TimeMix(torch.nn.Module):
         B, T, C = x.size()
 
         #print(f'last_state_shift = {last_state_shift.shape}')
+        x = x.contiguous()
 
         output = torch.concat((last_state_shift, x[:, :-1]), dim=1)
         last_state_shift[:] = x[:,-1:]
 
         xx = output - x
 
-        xxx = x + xx * time_maa_x
+        #xxx = x + xx * time_maa_x
+        #xxx = torch.tanh(xxx @ time_maa_w1).view(B*T, 5, -1).transpose(0, 1)
+        #xxx = torch.bmm(xxx, time_maa_w2).view(5, B, T, -1)
+        # xxxの計算を最適化
+        xxx = torch.addcmul(x, xx, time_maa_x)
         xxx = torch.tanh(xxx @ time_maa_w1).view(B*T, 5, -1).transpose(0, 1)
         xxx = torch.bmm(xxx, time_maa_w2).view(5, B, T, -1)
-        mw, mk, mv, mr, mg = xxx.unbind(dim=0)
+        #mw, mk, mv, mr, mg = xxx.unbind(dim=0)
 
-        xw = x + xx * (time_maa_w + mw)
-        xk = x + xx * (time_maa_k + mk)
-        xv = x + xx * (time_maa_v + mv)
-        xr = x + xx * (time_maa_r + mr)
-        xg = x + xx * (time_maa_g + mg)
+        combined = torch.stack([time_maa_w, time_maa_k, time_maa_v, time_maa_r, time_maa_g], dim=0)
+        combined = (xxx + combined) * xx + x
+
+
+        # xw = x + xx * (time_maa_w + mw)
+        # xk = x + xx * (time_maa_k + mk)
+        # xv = x + xx * (time_maa_v + mv)
+        # xr = x + xx * (time_maa_r + mr)
+        # xg = x + xx * (time_maa_g + mg)
+
+        xw, xk, xv, xr, xg = combined.unbind(dim=0)
 
         ww = torch.tanh(xw @ time_decay_w1) @ time_decay_w2
 
-        w = time_decay + ww
-        w = w.exp().neg()
+        #w = time_decay + ww
+        #w = w.exp().neg()
+        w = (time_decay + ww).exp().neg()
 
         return xw,xk,xv,xr,xg,ww,w
+    
+    @torch.jit.script
+    def jit_func_parts_mose(x: torch.Tensor, 
+                    last_state_shift: torch.Tensor,
+                    time_maa_x: torch.Tensor,
+                    time_maa_w1: torch.Tensor,
+                    time_maa_w2: torch.Tensor,
+                    time_maa_w: torch.Tensor,
+                    time_maa_k: torch.Tensor,
+                    time_maa_v: torch.Tensor,
+                    time_maa_r: torch.Tensor,
+                    time_maa_g: torch.Tensor,
+                    time_decay_w1: torch.Tensor,
+                    time_decay_w2: torch.Tensor,
+                    time_decay: torch.Tensor
+                    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        B, T, C = x.shape
+
+        # メモリアクセスパターンの最適化
+        x = x.contiguous()
+        
+        # シフト操作の結合
+        output = torch.cat((last_state_shift, x[:, :-1]), dim=1)
+        last_state_shift[:] = x[:,-1:]
+
+        xx = output - x
+
+        # xxxの計算を最適化
+        xxx = torch.addcmul(x, xx, time_maa_x)
+        xxx = torch.tanh(xxx @ time_maa_w1).view(B*T, 5, -1).transpose(0, 1)
+        xxx = torch.bmm(xxx, time_maa_w2).view(5, B, T, -1)
+
+        # より効率的な分割のためにtorch.unbindを使用
+        mw, mk, mv, mr, mg = torch.unbind(xxx, dim=0)
+
+        # ベクトル化操作
+        time_maa_stack = torch.stack([time_maa_w, time_maa_k, time_maa_v, time_maa_r, time_maa_g])
+        m_stack = torch.stack([mw, mk, mv, mr, mg])
+
+        # メモリ効率の良い計算
+        x_results = x.unsqueeze(0) + xx.unsqueeze(0) * (time_maa_stack.unsqueeze(1).unsqueeze(2) + m_stack)
+        xw, xk, xv, xr, xg = torch.unbind(x_results, dim=0)
+
+        # decay計算の最適化
+        ww = torch.tanh(xw @ time_decay_w1) @ time_decay_w2
+        w = torch.exp(time_decay + ww).neg_()
+
+        return xw, xk, xv, xr, xg, ww, w
+    
+
+    @torch.jit.script
+    def optimized_jit_func_parts(x: torch.Tensor, 
+                             last_state_shift: torch.Tensor,
+                             time_maa_x: torch.Tensor,
+                             time_maa_w1: torch.Tensor,
+                             time_maa_w2: torch.Tensor,
+                             time_maa_w: torch.Tensor,
+                             time_maa_k: torch.Tensor,
+                             time_maa_v: torch.Tensor,
+                             time_maa_r: torch.Tensor,
+                             time_maa_g: torch.Tensor,
+                             time_decay_w1: torch.Tensor,
+                             time_decay_w2: torch.Tensor,
+                             time_decay: torch.Tensor
+                            ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        B, T, C = x.shape
+
+        output = torch.cat((last_state_shift, x[:, :-1]), dim=1)
+        last_state_shift.copy_(x[:,-1:])
+
+        xx = output - x
+
+        xxx = torch.addcmul(x, xx, time_maa_x)
+        xxx = F.tanh(xxx @ time_maa_w1)  # [B, T, 5*hidden_size]
+        
+        # Reshape and transpose to match time_maa_w2
+        xxx = xxx.view(B, T, 5, -1)  # [B, T, 5, hidden_size]
+        xxx = xxx.permute(0, 2, 1, 3)  # [B, 5, T, hidden_size]
+        
+        # Apply time_maa_w2 to each of the 5 parts
+        xxx = xxx @ time_maa_w2  # [B, 5, T, output_size]
+
+        mw, mk, mv, mr, mg = xxx.unbind(dim=1)
+
+        xw = torch.addcmul(x, xx, time_maa_w + mw)
+        xk = torch.addcmul(x, xx, time_maa_k + mk)
+        xv = torch.addcmul(x, xx, time_maa_v + mv)
+        xr = torch.addcmul(x, xx, time_maa_r + mr)
+        xg = torch.addcmul(x, xx, time_maa_g + mg)
+
+        ww = F.tanh(xw @ time_decay_w1) @ time_decay_w2
+
+        w = torch.exp(time_decay + ww).neg_()
+
+        return xw, xk, xv, xr, xg, ww, w
     
     def jit_func_parts2(self,xw,xk,xv,xr,xg):
 

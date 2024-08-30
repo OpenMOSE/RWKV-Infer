@@ -3,6 +3,10 @@
 #include "ATen/ATen.h"
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
+
+#include <mma.h>
+
+using namespace nvcuda;
 #define MIN_VALUE (-1e38)
 typedef at::Half fp16;
 __half *cast(fp16 *ptr) {
@@ -188,7 +192,7 @@ void cuda_mm8_one<fp16>(int N, int M,
 // }
 
 
-#define MM8_MONE_JSPLIT 32
+#define MM8_MONE_JSPLIT 24
 #define MM8_MONE_TILE 1024
 
 template <typename F>
@@ -214,21 +218,30 @@ __global__ void kernel_mm_mone_fp16i8(
     const int j_end = min(N, (blockIdx.x + 1) * MM8_MONE_JSPLIT);
 
     if (k < M) {
-        // Precompute weight unpacking for this 'k'
-        float unpacked_weights[MM8_MONE_JSPLIT];
+
+        half unpacked_weights[MM8_MONE_JSPLIT];
         #pragma unroll
         for (int j = j_start; j < j_end; ++j) {
-            unpacked_weights[j - j_start] = (float(w[j * w_stride + k]) + 0.5f) * __half2float(rx[k]) * __half2float(ry[j])
-                                            + __half2float(mx[k]) + __half2float(my[j]);
+
+            half w_f16 = __hadd(__uint2half_rn(w[j * w_stride + k]), __float2half(0.5f));
+
+            half rx_f16 = rx[k];  // rx is already half
+            half ry_f16 = ry[j];  // ry is already half
+            half mx_f16 = mx[k];  // mx is already half
+            half my_f16 = my[j];  // my is already half
+            
+            unpacked_weights[j - j_start] = __hfma(w_f16, __hmul(rx_f16, ry_f16), __hadd(mx_f16, my_f16));
+
         }
 
-        // Process all batches for this 'k'
         #pragma unroll
         for (int b = 0; b < B; ++b) {
             float y_local = 0;
             #pragma unroll
             for (int j = j_start; j < j_end; ++j) {
-                y_local += __half2float(x[b * N + j]) * unpacked_weights[j - j_start];
+                half xbnj = x[b * N + j];
+                //y_local += __half2float(xbnj) * __half2float(unpacked_weights[j - j_start]);
+                y_local +=__half2float(__hmul(xbnj,unpacked_weights[j - j_start]));
             }
             atomicAdd(&y[b * M + k], y_local);
         }
@@ -257,6 +270,24 @@ void cuda_mm8_mone<fp16>(int B, int N, int M,
         B, N, M, cast(x), w, w_stride,
         cast(mx), cast(rx), cast(my), cast(ry), y);
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 // template <typename T>

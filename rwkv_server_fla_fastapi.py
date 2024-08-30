@@ -143,10 +143,15 @@ async def removemodel():
     #global wrappers
     global ModelList
     global engine1
+    global StateList
+    global DynamicStateList
     try:
         #wrappers[0].unload_model()
         engine1.UnloadModel()
         ModelList = []
+        StateList = None
+        StateList = []
+        DynamicStateList = []
         #return jsonify({"status": "success"}), 200
         return {"status": "success"}
     except Exception as e:
@@ -160,6 +165,8 @@ async def loadmodel(request: Request):
     #global wrappers
     global engine1
     global ModelList
+    global StateList
+    global DynamicStateList
     try:
         data = await request.json()
         model_filename = data.get('model_filename')
@@ -193,6 +200,10 @@ async def loadmodel(request: Request):
         if model_strategy == 'quant':
             Quant = True
             precision = 'fp16'
+
+        StateList = None
+        StateList = []
+        DynamicStateList = []
         
         engine1.LoadModel(model_filename,Quant,precision)
         ModelList = [{"object":"models","id":f"{model_viewname}"}]
