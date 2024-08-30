@@ -1058,7 +1058,7 @@ class RWKV6(nn.Module):
 
 
                     if ThroughFound == False:
-                        param.data = file[key].cuda()   
+                        param.data = file[key].cuda().contiguous()   
 
 
 
@@ -1124,7 +1124,7 @@ class RWKV6(nn.Module):
                                     m.rx = (m.rx/16).to(dtype=torch.float16,device='cuda').contiguous()
                                     m.ry = (m.ry/16).to(dtype=torch.float16,device='cuda').contiguous()
 
-                                    m=m.to('cuda')#.contiguous()
+                                    #m=m.to('cuda')#.contiguous()
 
                                     m.weight.data = m.weight.data.contiguous()
                                     
@@ -1136,10 +1136,10 @@ class RWKV6(nn.Module):
                                     #    m=m.to('cuda',dtype=torch.bfloat16)
                                     if (( 'receptance' in name or 'key' in name  or 'value' in name or  'value' in name or 'gate' in name or 'output' in name) and ('.att' in name or '.ffn' in name)) or 'head' == name:
                                         m=m.to('cuda',dtype=self.base_precision)#.t()
-                                        m.weight.data = m.weight.data#.t().contiguous()
+                                        m.weight.data = m.weight.data.contiguous()#.t().contiguous()
                                         print(f'special mode {name}')
-                                    else:
-                                        m=m.to('cuda',dtype=torch.bfloat16)
+                                    #else:
+                                    #    m=m.to('cuda',dtype=torch.bfloat16)
                                     print(f'Pass through to cuda:{name}')
             print(f"Parameter {key} is on device: {param.device}")
 
