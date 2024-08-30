@@ -82,6 +82,7 @@ else:
 
 @MyStatic
 def cuda_mm8_batch_one(Z:int,B: int, N: int, M: int, x, w, mx, rx, my, ry):
+    xtype = x.dtype
     if x.dtype != torch.float16:
         x = x.to(dtype=torch.float16)
 
@@ -95,7 +96,7 @@ def cuda_mm8_batch_one(Z:int,B: int, N: int, M: int, x, w, mx, rx, my, ry):
     torch.ops.rwkv.mm8_seq(B, N, M, a_2d, w, mx, rx, my, ry, y)
 
     #y = y.reshape(x.shape[0], x.shape[1], w.shape[-1]).to(dtype=x.dtype)
-    y = y.view(x.shape[0], x.shape[1], w.shape[-1]).to(dtype=x.dtype)
+    y = y.view(x.shape[0], x.shape[1], w.shape[-1]).to(dtype=xtype)
 
 
     return y
@@ -109,7 +110,7 @@ def torch_mm8_seq(x, w, mx, rx, my, ry):
 
 @MyStatic
 def mm8(x, w, mx, rx, my, ry):
-    if w.device.type == 'cuda' and x.dtype == torch.float16 and x.shape[1] == 1:
+    if w.device.type == 'cuda' and x.shape[1] == 1:
         Z, B, N, M = x.shape[0], x.shape[1], w.shape[0], w.shape[1]
         return cuda_mm8_batch_one(Z, B, N, M, x, w, mx, rx, my, ry)
     else:
@@ -152,6 +153,7 @@ class QuantLinear(nn.Module): # inspired by RWKV-PEFT @JL-er Thanks!
     def quant(self, quant_type):
         self.is_quant = True
         self.quant_type = quant_type
+        self.precision = self.weight.data.dtype
         #self.dummy_tensor = nn.Parameter(torch.zeros(1))
         if self.quant_type=='4bit':
             self.weight.data, self.qstate= bnb.functional.quantize_4bit((self.weight.data.to(dtype=self.precision)).to('cuda'))
@@ -929,7 +931,7 @@ class RWKV6(nn.Module):
         if base_precision == 'fp16':
             self.base_precision = torch.float16
         elif base_precision == 'int8':
-            self.base_precision = torch.float16
+            self.base_precision = torch.bfloat16
             self.bit8quant = True
         else:
             self.base_precision = torch.bfloat16
@@ -1076,6 +1078,8 @@ class RWKV6(nn.Module):
                                             m.quant('nf4')
                                             print(f'Quant {name}')
                                             ThroughFound = True
+                                            #gc.collect()
+                                            #torch.cuda.empty_cache()
 
                             for i in range(self.n_layer):
                                 if name == f'blocks.{i}':
@@ -1127,6 +1131,9 @@ class RWKV6(nn.Module):
                                     #m=m.to('cuda')#.contiguous()
 
                                     m.weight.data = m.weight.data.contiguous()
+
+                                    #gc.collect()
+                                    #torch.cuda.empty_cache()
                                     
 
 

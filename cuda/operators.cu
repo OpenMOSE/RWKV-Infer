@@ -69,7 +69,7 @@ void cuda_mm8_seq<fp16>(int B, int N, int M,
 
 
 
-#define MM8_ONE_JSPLIT 48
+#define MM8_ONE_JSPLIT 64
 #define MM8_ONE_TILE 256
 //#define MM8_ONE_JSPLIT 24
 //#define MM8_ONE_TILE 1024
@@ -192,7 +192,7 @@ void cuda_mm8_one<fp16>(int N, int M,
 // }
 
 
-#define MM8_MONE_JSPLIT 24
+#define MM8_MONE_JSPLIT 64
 #define MM8_MONE_TILE 1024
 
 template <typename F>
