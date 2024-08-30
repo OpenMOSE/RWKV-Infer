@@ -140,6 +140,8 @@ class LLMWorker:
         gc.collect()
         torch.cuda.empty_cache()
         self.model = RWKV6(modelpath,quantize=quantize,base_precision=precision)
+        gc.collect()
+        torch.cuda.empty_cache()
         print('model loaded')
 
     def UnloadModel(self):
@@ -147,6 +149,8 @@ class LLMWorker:
         gc.collect()
         torch.cuda.empty_cache()
         print('model unloaded')
+        gc.collect()
+        torch.cuda.empty_cache()
 
     async def FLAGenerate(self,Queues:Prompt):
         global prompt_queue
@@ -668,6 +672,7 @@ class LLMWorker:
                                             self.llM_current_batch_info[i]['wkv_states'] = wkv_states[NowTensorPosition:(NowTensorPosition+mrss_state_count)]
                                             self.llM_current_batch_info[i]['shift_states'] = shift_states[NowTensorPosition:(NowTensorPosition+mrss_state_count)]
                                             self.llM_current_batch_info[i]['current_prob'] = x[NowTensorPosition:(NowTensorPosition+mrss_state_count)]
+                                            self.llM_current_batch_info[i]['occurrence'] = occurrence[j]
                                         else:
                                             if end_times[j] is None:
                                                 end_times[j] = time.time()
@@ -680,6 +685,7 @@ class LLMWorker:
                                             self.llM_current_batch_info[i]['wkv_states'] = None
                                             self.llM_current_batch_info[i]['shift_states'] = None
                                             self.llM_current_batch_info[i]['current_prob'] = None
+                                            self.llM_current_batch_info[i]['occurrence'] = None
                                             statuss[j] == 'idle'
                                         
                                         
@@ -689,6 +695,11 @@ class LLMWorker:
                                     else:
                                         if statuss[j] == 'processing':
                                             prompt_queue.update_prompt(id,PromptStatus.PROCESSING,result=outputs[j])
+
+                                            self.llM_current_batch_info[i]['wkv_states'] = wkv_states[NowTensorPosition]
+                                            self.llM_current_batch_info[i]['shift_states'] = shift_states[NowTensorPosition]
+                                            self.llM_current_batch_info[i]['current_prob'] = x[NowTensorPosition]
+                                            self.llM_current_batch_info[i]['occurrence'] = occurrence[j]
                                         else:
                                             if end_times[j] is None:
                                                 end_times[j] = time.time()
@@ -700,9 +711,11 @@ class LLMWorker:
                                             prompt_queue.update_prompt(id,PromptStatus.COMPLETED,result=outputs[j],wkv_state=wkv_states[NowTensorPosition].to('cpu'),shift_state=shift_states[NowTensorPosition].to('cpu'))
                                             statuss[j] == 'idle'
 
-                                        self.llM_current_batch_info[i]['wkv_states'] = wkv_states[NowTensorPosition]
-                                        self.llM_current_batch_info[i]['shift_states'] = shift_states[NowTensorPosition]
-                                        self.llM_current_batch_info[i]['current_prob'] = x[NowTensorPosition]
+                                            self.llM_current_batch_info[i]['wkv_states'] = None
+                                            self.llM_current_batch_info[i]['shift_states'] = None
+                                            self.llM_current_batch_info[i]['current_prob'] = None
+                                            self.llM_current_batch_info[i]['occurrence'] = None
+
                                         NowTensorPosition = NowTensorPosition + 1
 
 
@@ -716,7 +729,7 @@ class LLMWorker:
                                     self.llM_current_batch_info[i]['output'] = outputs[j]
                                     self.llM_current_batch_info[i]['out_tokens'] = out_tokens[j]
                                     self.llM_current_batch_info[i]['out_last'] = out_last[j]
-                                    self.llM_current_batch_info[i]['occurrence'] = occurrence[j]
+                                    
                                     self.llM_current_batch_info[i]['count'] = counts[j] + 1
                                     #self.llM_current_batch_info[i]['mrss_state_count'] = mrss_info[j]['mrss_state_count']
                                     break

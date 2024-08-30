@@ -71,8 +71,13 @@ def add_to_dynamic_state_list(text_prompt,target_state_filename,raw_state,raw_st
             print(f'Added DynamicStateList a = {len(text_prompt)} ')
         if args.dynamic_state_cache_store == 'cpu':
             DynamicStateList.append({'text_prompt':text_prompt,'target_state_filename':target_state_filename,'raw_state': copy.deepcopy(move_tensors_to_cpu(raw_state)),'raw_state2': copy.deepcopy(move_tensors_to_cpu(raw_state2))})
+            raw_state = None
+            raw_state2 = None
+
         else:
             DynamicStateList.append({'text_prompt':text_prompt,'target_state_filename':target_state_filename,'raw_state': copy.deepcopy(raw_state),'raw_state2': copy.deepcopy(raw_state2)})
+            raw_state = None
+            raw_state2 = None
 
 
 def search_dynamic_state_list(inputprompt,state_filename):
@@ -184,7 +189,7 @@ async def loadmodel(request: Request):
 
         #wrappers[0].load_model(model_filename,model_strategy)
         Quant = False
-        precision = 'fp16'
+        precision = ''
         if model_strategy == 'quantfp16':
             Quant = True
             precision = 'fp16'
@@ -657,8 +662,8 @@ async def rwkv_completions(request: Request):
         if args.debug:
             print('resume state detected.')
         QueryDatas.base_state_tuned = target_state_filename
-        QueryDatas.use_exist_state_wkv = copy.deepcopy(wkv_state)
-        QueryDatas.use_exist_state_shift = copy.deepcopy(shift_state)
+        QueryDatas.use_exist_state_wkv = wkv_state#copy.deepcopy(wkv_state)
+        QueryDatas.use_exist_state_shift = shift_state#copy.deepcopy(shift_state)
         StateCacheMode = True
         if mrssmode:
             QueryDatas.use_mrss = True
@@ -671,7 +676,7 @@ async def rwkv_completions(request: Request):
         if args.debug:
             print('plane state')
         if target_state_tensor_wkv is not None:
-            QueryDatas.use_exist_state_wkv = copy.deepcopy(target_state_tensor_wkv)
+            QueryDatas.use_exist_state_wkv = target_state_tensor_wkv#copy.deepcopy(target_state_tensor_wkv)
             if mrssmode:
                 QueryDatas.use_mrss = True
                 QueryDatas.use_contain_originalstate = contain_originalstate

@@ -632,6 +632,7 @@ class RWKV6_TimeMix(torch.nn.Module):
         #xxx = torch.tanh(xxx @ time_maa_w1).view(B*T, 5, -1).transpose(0, 1)
         #xxx = torch.bmm(xxx, time_maa_w2).view(5, B, T, -1)
         # xxxの計算を最適化
+        #print(f'time_maa_x device = {time_maa_x.device}')
         xxx = torch.addcmul(x, xx, time_maa_x)
         xxx = torch.tanh(xxx @ time_maa_w1).view(B*T, 5, -1).transpose(0, 1)
         xxx = torch.bmm(xxx, time_maa_w2).view(5, B, T, -1)
@@ -1033,108 +1034,225 @@ class RWKV6(nn.Module):
 
         self.requires_grad_(False)
         
-        self.load_state_dict(file,strict=False)
-
-
+        #self.load_state_dict(file,strict=False)
         quant_layers = 0
 
         if quantize:
             quant_layers = 61
 
+        
 
-        for name, m in self.named_modules():
-            ThroughFound = False
-            if hasattr(m, "quant") and callable(getattr(m, "quant")):
-                for i in range(self.n_layer):
-                    if f'blocks.{i}.' in name:
-                        if i < quant_layers:
-                            m.quant('nf4')
-                            print(f'Quant {name}')
-                            ThroughFound = True
+        for key, param in self.named_parameters():
+            if key in file:
+                #print(f'key = {key}')
+                with torch.no_grad():
 
+                    ThroughFound = False
 
-
-                
- 
-            
-
-            for i in range(self.n_layer):
-                if name == f'blocks.{i}':
-                    ThroughFound = True
-
-            if name == 'blocks' or name == '':# or name.endswith('.ffn') or name.endswith('.att'):
-                ThroughFound = True
-
-            #if '.att.' in name or '.ffn.' in name:
-            #    ThroughFound = False
-
-            if ThroughFound == False:
-
-                #print('jikken')
-                #if ('receptance' in name  or 'output' in name or 'key' in name or 'value' in name ) and ('.att' in name or '.ffn' in name ):
-                #jikken
-                if ((('receptance' in name or 'key' in name or 'value' in name or 'gate' in name or 'output' in name) and ('.att' in name or '.ffn' in name)) or 'head' == name) and self.bit8quant:
-                #if ('receptance' in name ) and ('.att' in name ):
-                    print(f'{name} is quant to int8')
-                    m.weight.data = m.weight.data.t()
-                    m.weight.data = m.weight.data.float()
-                    if m.weight.data.shape[0] > m.weight.data.shape[1]:
-                        print('ugyu')
-                        m.my = torch.amin(m.weight.data, dim=1).unsqueeze(1)
-                        m.weight.data = m.weight.data - m.my
-                        m.mx = torch.amin(m.weight.data, dim=0)
-                        m.weight.data = m.weight.data - m.mx
-                        m.rx = torch.amax(m.weight.data, dim=0)
-                        m.weight.data = m.weight.data / m.rx
-                        m.ry = torch.amax(m.weight.data, dim=1).unsqueeze(1)
-                        m.weight.data = m.weight.data / m.ry
-                    else:
-                        print('agi')
-                        m.mx = torch.amin(m.weight.data, dim=0)
-                        m.weight.data = m.weight.data - m.mx
-                        m.my = torch.amin(m.weight.data, dim=1).unsqueeze(1)
-                        m.weight.data = m.weight.data - m.my
-                        m.rx = torch.amax(m.weight.data, dim=0)
-                        m.weight.data = m.weight.data / m.rx
-                        m.ry = torch.amax(m.weight.data, dim=1).unsqueeze(1)
-                        m.weight.data = m.weight.data / m.ry
-                    m.weight.data = torch.clip(torch.floor(m.weight.data * 256), min=0, max=255).to(dtype=torch.uint8)
-
-                    m.my = m.my.to(dtype=torch.float16,device='cuda').contiguous()
-                    m.mx = m.mx.to(dtype=torch.float16,device='cuda').contiguous()
-                    m.rx = (m.rx/16).to(dtype=torch.float16,device='cuda').contiguous()
-                    m.ry = (m.ry/16).to(dtype=torch.float16,device='cuda').contiguous()
-
-                    m=m.to('cuda')#.contiguous()
-
-                    m.weight.data = m.weight.data.contiguous()
+                    for i in range(self.n_layer):
+                                if key == f'blocks.{i}':
+                                    ThroughFound = True
+                    if key == 'blocks' or key == '':
+                                ThroughFound = True
                     
 
 
-                    #self.base_precision
-                else:
-                    #if 'ln_in' in name or 'ln_out' in name or 'emb' in name or 'head' in name or 'ln1' in name or 'ln2' in name:
-                    #    m=m.to('cuda',dtype=torch.bfloat16)
-                    if (( 'receptance' in name or 'key' in name  or 'value' in name or  'value' in name or 'gate' in name or 'output' in name) and ('.att' in name or '.ffn' in name)) or 'head' == name:
-                        m=m.to('cuda',dtype=self.base_precision)#.t()
-                        m.weight.data = m.weight.data#.t().contiguous()
-                        print(f'special mode {name}')
-                    else:
-                        m=m.to('cuda',dtype=torch.bfloat16)
-                    print(f'Pass through to cuda:{name}')
+                    if ThroughFound == False:
+                        param.data = file[key].cuda()   
 
 
-            
-            #elif name != 'blocks':
-            #    m=m.to('cuda',dtype=torch.bfloat16)
-            #    print(f'Pass through to cuda:{name}')
+
+                    for name, m in self.named_modules():
+                        #print(name)
+                        
+                        if name == key or name + '.weight' == key:
+                            
+                            #print('found')
+                            ThroughFound = False
+                            if hasattr(m, "quant") and callable(getattr(m, "quant")):
+                                for i in range(self.n_layer):
+                                    if f'blocks.{i}.' in name:
+                                        if i < quant_layers:
+                                            m.quant('nf4')
+                                            print(f'Quant {name}')
+                                            ThroughFound = True
+
+                            for i in range(self.n_layer):
+                                if name == f'blocks.{i}':
+                                    ThroughFound = True
+
+                            if name == 'blocks' or name == '':# or name.endswith('.ffn') or name.endswith('.att'):
+                                ThroughFound = True
+
+                            #if '.att.' in name or '.ffn.' in name:
+                            #    ThroughFound = False
+
+                            if ThroughFound == False:
+
+                                #print('jikken')
+                                #if ('receptance' in name  or 'output' in name or 'key' in name or 'value' in name ) and ('.att' in name or '.ffn' in name ):
+                                #jikken
+                                if ((('receptance' in name or 'key' in name or 'value' in name or 'gate' in name or 'output' in name) and ('.att' in name or '.ffn' in name)) or 'head' == name) and self.bit8quant:
+                                #if ('receptance' in name ) and ('.att' in name ):
+                                    print(f'{name} is quant to int8')
+                                    m.weight.data = m.weight.data.t()
+                                    m.weight.data = m.weight.data.float()
+                                    if m.weight.data.shape[0] > m.weight.data.shape[1]:
+                                        print('ugyu')
+                                        m.my = torch.amin(m.weight.data, dim=1).unsqueeze(1)
+                                        m.weight.data = m.weight.data - m.my
+                                        m.mx = torch.amin(m.weight.data, dim=0)
+                                        m.weight.data = m.weight.data - m.mx
+                                        m.rx = torch.amax(m.weight.data, dim=0)
+                                        m.weight.data = m.weight.data / m.rx
+                                        m.ry = torch.amax(m.weight.data, dim=1).unsqueeze(1)
+                                        m.weight.data = m.weight.data / m.ry
+                                    else:
+                                        print('agi')
+                                        m.mx = torch.amin(m.weight.data, dim=0)
+                                        m.weight.data = m.weight.data - m.mx
+                                        m.my = torch.amin(m.weight.data, dim=1).unsqueeze(1)
+                                        m.weight.data = m.weight.data - m.my
+                                        m.rx = torch.amax(m.weight.data, dim=0)
+                                        m.weight.data = m.weight.data / m.rx
+                                        m.ry = torch.amax(m.weight.data, dim=1).unsqueeze(1)
+                                        m.weight.data = m.weight.data / m.ry
+                                    m.weight.data = torch.clip(torch.floor(m.weight.data * 256), min=0, max=255).to(dtype=torch.uint8)
+
+                                    m.my = m.my.to(dtype=torch.float16,device='cuda').contiguous()
+                                    m.mx = m.mx.to(dtype=torch.float16,device='cuda').contiguous()
+                                    m.rx = (m.rx/16).to(dtype=torch.float16,device='cuda').contiguous()
+                                    m.ry = (m.ry/16).to(dtype=torch.float16,device='cuda').contiguous()
+
+                                    m=m.to('cuda')#.contiguous()
+
+                                    m.weight.data = m.weight.data.contiguous()
+                                    
+
+
+                                    #self.base_precision
+                                else:
+                                    #if 'ln_in' in name or 'ln_out' in name or 'emb' in name or 'head' in name or 'ln1' in name or 'ln2' in name:
+                                    #    m=m.to('cuda',dtype=torch.bfloat16)
+                                    if (( 'receptance' in name or 'key' in name  or 'value' in name or  'value' in name or 'gate' in name or 'output' in name) and ('.att' in name or '.ffn' in name)) or 'head' == name:
+                                        m=m.to('cuda',dtype=self.base_precision)#.t()
+                                        m.weight.data = m.weight.data#.t().contiguous()
+                                        print(f'special mode {name}')
+                                    else:
+                                        m=m.to('cuda',dtype=torch.bfloat16)
+                                    print(f'Pass through to cuda:{name}')
+            print(f"Parameter {key} is on device: {param.device}")
+
+        #exit()
+
+        # for key, value in file.items():
+        #     print(key)
+        #     if key in self.state_dict():
+        #             print('found statedict')
+        #             cuda_value = value.to('cuda')
+        #             #self.state_dict()[key].copy_(cuda_value)
+        #             self.state_dict()[key] = cuda_value
+        #             print(f'cuda_value = {cuda_value.device}')
+        #             print(f"Successfully copied to CUDA. New device: {self.state_dict()[key].device}")
+                    
+                    
+
+        print('ugyu')
+
+        self.eval()
+
+        #for name, m in self.named_modules():
+
+
+        
+
+
+
+
+        # for name, m in self.named_modules():
+        #     ThroughFound = False
+        #     if hasattr(m, "quant") and callable(getattr(m, "quant")):
+        #         for i in range(self.n_layer):
+        #             if f'blocks.{i}.' in name:
+        #                 if i < quant_layers:
+        #                     m.quant('nf4')
+        #                     print(f'Quant {name}')
+        #                     ThroughFound = True
+
+        #     for i in range(self.n_layer):
+        #         if name == f'blocks.{i}':
+        #             ThroughFound = True
+
+        #     if name == 'blocks' or name == '':# or name.endswith('.ffn') or name.endswith('.att'):
+        #         ThroughFound = True
+
+        #     #if '.att.' in name or '.ffn.' in name:
+        #     #    ThroughFound = False
+
+        #     if ThroughFound == False:
+
+        #         #print('jikken')
+        #         #if ('receptance' in name  or 'output' in name or 'key' in name or 'value' in name ) and ('.att' in name or '.ffn' in name ):
+        #         #jikken
+        #         if ((('receptance' in name or 'key' in name or 'value' in name or 'gate' in name or 'output' in name) and ('.att' in name or '.ffn' in name)) or 'head' == name) and self.bit8quant:
+        #         #if ('receptance' in name ) and ('.att' in name ):
+        #             print(f'{name} is quant to int8')
+        #             m.weight.data = m.weight.data.t()
+        #             m.weight.data = m.weight.data.float()
+        #             if m.weight.data.shape[0] > m.weight.data.shape[1]:
+        #                 print('ugyu')
+        #                 m.my = torch.amin(m.weight.data, dim=1).unsqueeze(1)
+        #                 m.weight.data = m.weight.data - m.my
+        #                 m.mx = torch.amin(m.weight.data, dim=0)
+        #                 m.weight.data = m.weight.data - m.mx
+        #                 m.rx = torch.amax(m.weight.data, dim=0)
+        #                 m.weight.data = m.weight.data / m.rx
+        #                 m.ry = torch.amax(m.weight.data, dim=1).unsqueeze(1)
+        #                 m.weight.data = m.weight.data / m.ry
+        #             else:
+        #                 print('agi')
+        #                 m.mx = torch.amin(m.weight.data, dim=0)
+        #                 m.weight.data = m.weight.data - m.mx
+        #                 m.my = torch.amin(m.weight.data, dim=1).unsqueeze(1)
+        #                 m.weight.data = m.weight.data - m.my
+        #                 m.rx = torch.amax(m.weight.data, dim=0)
+        #                 m.weight.data = m.weight.data / m.rx
+        #                 m.ry = torch.amax(m.weight.data, dim=1).unsqueeze(1)
+        #                 m.weight.data = m.weight.data / m.ry
+        #             m.weight.data = torch.clip(torch.floor(m.weight.data * 256), min=0, max=255).to(dtype=torch.uint8)
+
+        #             m.my = m.my.to(dtype=torch.float16,device='cuda').contiguous()
+        #             m.mx = m.mx.to(dtype=torch.float16,device='cuda').contiguous()
+        #             m.rx = (m.rx/16).to(dtype=torch.float16,device='cuda').contiguous()
+        #             m.ry = (m.ry/16).to(dtype=torch.float16,device='cuda').contiguous()
+
+        #             m=m.to('cuda')#.contiguous()
+
+        #             m.weight.data = m.weight.data.contiguous()
+                    
+
+
+        #             #self.base_precision
+        #         else:
+        #             #if 'ln_in' in name or 'ln_out' in name or 'emb' in name or 'head' in name or 'ln1' in name or 'ln2' in name:
+        #             #    m=m.to('cuda',dtype=torch.bfloat16)
+        #             if (( 'receptance' in name or 'key' in name  or 'value' in name or  'value' in name or 'gate' in name or 'output' in name) and ('.att' in name or '.ffn' in name)) or 'head' == name:
+        #                 m=m.to('cuda',dtype=self.base_precision)#.t()
+        #                 m.weight.data = m.weight.data#.t().contiguous()
+        #                 print(f'special mode {name}')
+        #             else:
+        #                 m=m.to('cuda',dtype=torch.bfloat16)
+        #             print(f'Pass through to cuda:{name}')
+
+ 
 
 
         del file
         gc.collect()
+        torch.cuda.empty_cache()
         
         
-        self.eval()
+        
 
         #self.to('cuda', dtype=torch.bfloat16)#.to(torch.float)
             
@@ -1232,9 +1350,11 @@ class RWKV6(nn.Module):
 
         model_current_statetuned = [None] * self.n_layer * 3
 
+        dev = 'cpu'
+
         for i in range(self.n_layer):
             #dd = strategy[i]
-            dev = 'cpu'#dd.device
+            #dd.device
             atype = torch.bfloat16 #dd.atype
             model_current_statetuned[i * 3 + 0] = torch.zeros(
                 self.n_embd, dtype=atype, requires_grad=False, device=dev
@@ -1251,7 +1371,7 @@ class RWKV6(nn.Module):
             ).contiguous()
 
         wkv_states = torch.empty((self.n_layer, self.n_head, self.n_embd//self.n_head, self.n_embd//self.n_head),
-                                 device='cuda',
+                                 device=dev,
                                  dtype=torch.bfloat16)
         
         for i in range(self.n_layer):
