@@ -169,7 +169,7 @@ class LLMWorker:
                 yield "", copy.deepcopy(prompt_queue.prompts[queue_id].use_exist_state_wkv.to('cpu')), copy.deepcopy(prompt_queue.prompts[queue_id].use_exist_state_shift.to('cpu'))
                 prompt_queue.prompts[queue_id] = None
                 break
-            await asyncio.sleep(0.02)
+            await asyncio.sleep(0.025)
 
 
 
@@ -236,7 +236,7 @@ class LLMWorker:
 
                     
             
-            await asyncio.sleep(0.01) # Everyone 10ms loop
+            await asyncio.sleep(0.03) # Everyone 10ms loop
 
 
     async def RunLLM(self):
@@ -501,7 +501,7 @@ class LLMWorker:
 
                                 if self.time_debug:
                                     start_time_sample = time.time()
-                                tk = self.pipeline.sample_logits_mose2_optimized(logits_combined, temperature=temperature[j], top_p=top_p[j])
+                                tk = self.pipeline.sample_logits_mose2(logits_combined, temperature=temperature[j], top_p=top_p[j])
                                 if self.time_debug:
                                     start_time_sample1 = time.time()
 
@@ -519,7 +519,8 @@ class LLMWorker:
                                 current_prob[j][-1][0] -= 1e10
                                 if self.time_debug:
                                     start_time_sample = time.time()
-                                tk = self.pipeline.sample_logits_mose2_optimized(current_prob[j][-1], temperature=temperature[j], top_p=top_p[j])
+                                    print(f'current_prob dtype = {current_prob[j].dtype} current_prob.shape = {current_prob[j].shape} current_prob.device = {current_prob[j].device}')
+                                tk = self.pipeline.sample_logits_mose2(current_prob[j][-1], temperature=temperature[j], top_p=top_p[j])
                                 if self.time_debug:
                                     start_time_sample1 = time.time()
 
@@ -535,9 +536,9 @@ class LLMWorker:
                             if mrss_info[j]['use_mrss'] == True: #MRSS mode
                                 mrss_state_count = mrss_info[j]['mrss_state_count']
                                 for k in range(mrss_state_count):
-                                    tokens.append(torch.tensor(otokens[j]).unsqueeze(0).unsqueeze(0).to('cuda'))
+                                    tokens.append(torch.tensor(otokens[j]).unsqueeze(0).unsqueeze(0))#.to('cuda'))
                             else:
-                                tokens.append(torch.tensor(otokens[j]).unsqueeze(0).unsqueeze(0).to('cuda'))
+                                tokens.append(torch.tensor(otokens[j]).unsqueeze(0).unsqueeze(0))#.to('cuda'))
 
                         for j in range(len(token_ids)):
                             out_tokens[j] += [otokens[j]]
@@ -576,7 +577,7 @@ class LLMWorker:
                         if self.time_debug:
                             start_time2 = time.time()
 
-                        idx = torch.cat(tokens, dim=0)
+                        idx = torch.cat(tokens, dim=0).to('cuda')
 
                         self.States = self.model.new_state((realbatchcount))
 
@@ -731,9 +732,10 @@ class LLMWorker:
 
                             print(f'FetchTime = {FetchTime*1000:0.4f}')
                             print(f'SamplerTime = {SamplerTime*1000:0.4f}')
-                            print(f'DecodeTime = {DecodeTime*1000:0.4f}')
+                            #print(f'DecodeTime = {DecodeTime*1000:0.4f}')
                             print(f'InferenceTime = {InferenceTime*1000:0.4f}')
                             print(f'StoreTime = {StoreTime*1000:0.4f}')
+            
 
 
                     
@@ -743,4 +745,4 @@ class LLMWorker:
 
 
 
-            await asyncio.sleep(0.0001) # Every 1ms
+            await asyncio.sleep(0.001) # Every 1ms

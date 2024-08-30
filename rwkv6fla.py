@@ -275,6 +275,31 @@ class PIPELINE():
         out = torch.multinomial(probs, num_samples=1)[0]
         return int(out)
     
+    @MyStatic
+    def sample_logits_blink(logits, temperature:float=1.0, top_p:float=1.0, top_k:int=0):
+        probs = F.softmax(logits.float(), dim=-1)
+        sorted_probs, sorted_ids = torch.sort(probs, descending=True)
+        
+        if top_k > 0:
+            probs[sorted_ids[top_k:]] = 0
+
+        if top_p < 1:
+            cumulative_probs = torch.cumsum(sorted_probs, dim=-1)
+            cutoff_index = torch.searchsorted(cumulative_probs, top_p)
+            cutoff = sorted_probs[cutoff_index]
+            probs[probs < cutoff] = 0
+
+            if top_p > 0:
+                idx = torch.where(probs == cutoff)[0]
+                if len(idx) > 0:
+                    probs[idx] = cutoff + (top_p - torch.sum(probs).item()) / len(idx)
+                    # assert abs(torch.sum(probs).item() - top_p) < 1e-6
+        
+        if temperature != 1.0:
+            probs = probs ** (1.0 / temperature)
+
+        return torch.multinomial(probs, num_samples=1).item()
+    
 
     
     def sample_logits_mose(self, logits, temperature=1.0, top_p=0.85, top_k=0):
@@ -297,12 +322,12 @@ class PIPELINE():
 
         return int(out)
     
-
-    def sample_logits_mose2(self,logits, temperature=1.0, top_p=0.85, top_k=0):
+    @MyStatic
+    def sample_logits_mose2(logits, temperature:float=1.0, top_p:float=0.85, top_k:int=0):
 
         if temperature == 0:
             temperature = 1.0
-            top_p = 0
+            top_p = 0.0
 
         probs = F.softmax(logits.float(), dim=-1)
         sorted_probs, sorted_indices = torch.sort(probs, descending=True)
@@ -1159,7 +1184,7 @@ class RWKV6(nn.Module):
                    mx=self.head.mx,
                     my=self.head.my,
                     rx=self.head.rx,
-                    ry=self.head.ry,).to(dtype=torch.float32)
+                    ry=self.head.ry,)#.to(dtype=torch.float32)
 
 
 
