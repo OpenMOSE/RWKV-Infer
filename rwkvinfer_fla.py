@@ -135,11 +135,13 @@ class LLMWorker:
 
         
 
-    def LoadModel(self,modelpath,quantize=False):
+    def LoadModel(self,modelpath,quantize=False,precision='fp16'):
         self.model = None
         gc.collect()
         torch.cuda.empty_cache()
-        self.model = RWKV6(modelpath,quantize=quantize)
+        self.model = RWKV6(modelpath,quantize=quantize,base_precision=precision)
+        gc.collect()
+        torch.cuda.empty_cache()
         print('model loaded')
 
     def UnloadModel(self):
@@ -147,6 +149,8 @@ class LLMWorker:
         gc.collect()
         torch.cuda.empty_cache()
         print('model unloaded')
+        gc.collect()
+        torch.cuda.empty_cache()
 
     async def FLAGenerate(self,Queues:Prompt):
         global prompt_queue
@@ -169,7 +173,7 @@ class LLMWorker:
                 yield "", copy.deepcopy(prompt_queue.prompts[queue_id].use_exist_state_wkv.to('cpu')), copy.deepcopy(prompt_queue.prompts[queue_id].use_exist_state_shift.to('cpu'))
                 prompt_queue.prompts[queue_id] = None
                 break
-            await asyncio.sleep(0.02)
+            await asyncio.sleep(0.025)
 
 
 
@@ -236,7 +240,7 @@ class LLMWorker:
 
                     
             
-            await asyncio.sleep(0.01) # Everyone 10ms loop
+            await asyncio.sleep(0.03) # Everyone 10ms loop
 
 
     async def RunLLM(self):
@@ -374,9 +378,11 @@ class LLMWorker:
 
                         shift_states = shift_states.permute(1,0,2,3)
                         wkv_states = wkv_states.permute(1, 0, 2, 3, 4)
-                        print(f'{token_max} forwarded')
+                        
 
                         x, shift_states, wkv_states = self.model.forward(idx, shift_states, wkv_states)
+
+                        print(f'{token_max} forwarded')
 
                         #print(f'x = {x}')
                         #print(f'x.shape = {x.shape}')
@@ -499,7 +505,7 @@ class LLMWorker:
 
                                 if self.time_debug:
                                     start_time_sample = time.time()
-                                tk = self.pipeline.sample_logits_mose2_optimized(logits_combined, temperature=temperature[j], top_p=top_p[j])
+                                tk = self.pipeline.sample_logits_mose2(logits_combined, temperature=temperature[j], top_p=top_p[j])
                                 if self.time_debug:
                                     start_time_sample1 = time.time()
 
@@ -517,7 +523,8 @@ class LLMWorker:
                                 current_prob[j][-1][0] -= 1e10
                                 if self.time_debug:
                                     start_time_sample = time.time()
-                                tk = self.pipeline.sample_logits_mose2_optimized(current_prob[j][-1], temperature=temperature[j], top_p=top_p[j])
+                                    print(f'current_prob dtype = {current_prob[j].dtype} current_prob.shape = {current_prob[j].shape} current_prob.device = {current_prob[j].device}')
+                                tk = self.pipeline.sample_logits_mose2(current_prob[j][-1], temperature=temperature[j], top_p=top_p[j])
                                 if self.time_debug:
                                     start_time_sample1 = time.time()
 
@@ -533,9 +540,9 @@ class LLMWorker:
                             if mrss_info[j]['use_mrss'] == True: #MRSS mode
                                 mrss_state_count = mrss_info[j]['mrss_state_count']
                                 for k in range(mrss_state_count):
-                                    tokens.append(torch.tensor(otokens[j]).unsqueeze(0).unsqueeze(0).to('cuda'))
+                                    tokens.append(torch.tensor(otokens[j]).unsqueeze(0).unsqueeze(0))#.to('cuda'))
                             else:
-                                tokens.append(torch.tensor(otokens[j]).unsqueeze(0).unsqueeze(0).to('cuda'))
+                                tokens.append(torch.tensor(otokens[j]).unsqueeze(0).unsqueeze(0))#.to('cuda'))
 
                         for j in range(len(token_ids)):
                             out_tokens[j] += [otokens[j]]
@@ -574,7 +581,7 @@ class LLMWorker:
                         if self.time_debug:
                             start_time2 = time.time()
 
-                        idx = torch.cat(tokens, dim=0)
+                        idx = torch.cat(tokens, dim=0).to('cuda')
 
                         self.States = self.model.new_state((realbatchcount))
 
@@ -665,6 +672,7 @@ class LLMWorker:
                                             self.llM_current_batch_info[i]['wkv_states'] = wkv_states[NowTensorPosition:(NowTensorPosition+mrss_state_count)]
                                             self.llM_current_batch_info[i]['shift_states'] = shift_states[NowTensorPosition:(NowTensorPosition+mrss_state_count)]
                                             self.llM_current_batch_info[i]['current_prob'] = x[NowTensorPosition:(NowTensorPosition+mrss_state_count)]
+                                            self.llM_current_batch_info[i]['occurrence'] = occurrence[j]
                                         else:
                                             if end_times[j] is None:
                                                 end_times[j] = time.time()
@@ -677,6 +685,7 @@ class LLMWorker:
                                             self.llM_current_batch_info[i]['wkv_states'] = None
                                             self.llM_current_batch_info[i]['shift_states'] = None
                                             self.llM_current_batch_info[i]['current_prob'] = None
+                                            self.llM_current_batch_info[i]['occurrence'] = None
                                             statuss[j] == 'idle'
                                         
                                         
@@ -686,6 +695,11 @@ class LLMWorker:
                                     else:
                                         if statuss[j] == 'processing':
                                             prompt_queue.update_prompt(id,PromptStatus.PROCESSING,result=outputs[j])
+
+                                            self.llM_current_batch_info[i]['wkv_states'] = wkv_states[NowTensorPosition]
+                                            self.llM_current_batch_info[i]['shift_states'] = shift_states[NowTensorPosition]
+                                            self.llM_current_batch_info[i]['current_prob'] = x[NowTensorPosition]
+                                            self.llM_current_batch_info[i]['occurrence'] = occurrence[j]
                                         else:
                                             if end_times[j] is None:
                                                 end_times[j] = time.time()
@@ -697,9 +711,11 @@ class LLMWorker:
                                             prompt_queue.update_prompt(id,PromptStatus.COMPLETED,result=outputs[j],wkv_state=wkv_states[NowTensorPosition].to('cpu'),shift_state=shift_states[NowTensorPosition].to('cpu'))
                                             statuss[j] == 'idle'
 
-                                        self.llM_current_batch_info[i]['wkv_states'] = wkv_states[NowTensorPosition]
-                                        self.llM_current_batch_info[i]['shift_states'] = shift_states[NowTensorPosition]
-                                        self.llM_current_batch_info[i]['current_prob'] = x[NowTensorPosition]
+                                            self.llM_current_batch_info[i]['wkv_states'] = None
+                                            self.llM_current_batch_info[i]['shift_states'] = None
+                                            self.llM_current_batch_info[i]['current_prob'] = None
+                                            self.llM_current_batch_info[i]['occurrence'] = None
+
                                         NowTensorPosition = NowTensorPosition + 1
 
 
@@ -713,7 +729,7 @@ class LLMWorker:
                                     self.llM_current_batch_info[i]['output'] = outputs[j]
                                     self.llM_current_batch_info[i]['out_tokens'] = out_tokens[j]
                                     self.llM_current_batch_info[i]['out_last'] = out_last[j]
-                                    self.llM_current_batch_info[i]['occurrence'] = occurrence[j]
+                                    
                                     self.llM_current_batch_info[i]['count'] = counts[j] + 1
                                     #self.llM_current_batch_info[i]['mrss_state_count'] = mrss_info[j]['mrss_state_count']
                                     break
@@ -729,9 +745,10 @@ class LLMWorker:
 
                             print(f'FetchTime = {FetchTime*1000:0.4f}')
                             print(f'SamplerTime = {SamplerTime*1000:0.4f}')
-                            print(f'DecodeTime = {DecodeTime*1000:0.4f}')
+                            #print(f'DecodeTime = {DecodeTime*1000:0.4f}')
                             print(f'InferenceTime = {InferenceTime*1000:0.4f}')
                             print(f'StoreTime = {StoreTime*1000:0.4f}')
+            
 
 
                     
@@ -741,4 +758,4 @@ class LLMWorker:
 
 
 
-            await asyncio.sleep(0.0001) # Every 1ms
+            await asyncio.sleep(0.001) # Every 1ms

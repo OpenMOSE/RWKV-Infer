@@ -71,8 +71,13 @@ def add_to_dynamic_state_list(text_prompt,target_state_filename,raw_state,raw_st
             print(f'Added DynamicStateList a = {len(text_prompt)} ')
         if args.dynamic_state_cache_store == 'cpu':
             DynamicStateList.append({'text_prompt':text_prompt,'target_state_filename':target_state_filename,'raw_state': copy.deepcopy(move_tensors_to_cpu(raw_state)),'raw_state2': copy.deepcopy(move_tensors_to_cpu(raw_state2))})
+            raw_state = None
+            raw_state2 = None
+
         else:
             DynamicStateList.append({'text_prompt':text_prompt,'target_state_filename':target_state_filename,'raw_state': copy.deepcopy(raw_state),'raw_state2': copy.deepcopy(raw_state2)})
+            raw_state = None
+            raw_state2 = None
 
 
 def search_dynamic_state_list(inputprompt,state_filename):
@@ -143,10 +148,15 @@ async def removemodel():
     #global wrappers
     global ModelList
     global engine1
+    global StateList
+    global DynamicStateList
     try:
         #wrappers[0].unload_model()
         engine1.UnloadModel()
         ModelList = []
+        StateList = None
+        StateList = []
+        DynamicStateList = []
         #return jsonify({"status": "success"}), 200
         return {"status": "success"}
     except Exception as e:
@@ -160,6 +170,8 @@ async def loadmodel(request: Request):
     #global wrappers
     global engine1
     global ModelList
+    global StateList
+    global DynamicStateList
     try:
         data = await request.json()
         model_filename = data.get('model_filename')
@@ -177,9 +189,28 @@ async def loadmodel(request: Request):
 
         #wrappers[0].load_model(model_filename,model_strategy)
         Quant = False
+        precision = ''
+        if model_strategy == 'quantfp16':
+            Quant = True
+            precision = ''
+        if model_strategy == 'quantfp16i8':
+            Quant = True
+            precision = 'int8'
+        if model_strategy == 'fp16':
+            Quant = False
+            precision = ''
+        if model_strategy == 'fp16i8':
+            Quant = False
+            precision = 'int8'
         if model_strategy == 'quant':
             Quant = True
-        engine1.LoadModel(model_filename,Quant)
+            precision = ''
+
+        StateList = None
+        StateList = []
+        DynamicStateList = []
+        
+        engine1.LoadModel(model_filename,Quant,precision)
         ModelList = [{"object":"models","id":f"{model_viewname}"}]
         #return jsonify({"status": "success"}), 200
         return {"status": "success"}
@@ -631,8 +662,8 @@ async def rwkv_completions(request: Request):
         if args.debug:
             print('resume state detected.')
         QueryDatas.base_state_tuned = target_state_filename
-        QueryDatas.use_exist_state_wkv = copy.deepcopy(wkv_state)
-        QueryDatas.use_exist_state_shift = copy.deepcopy(shift_state)
+        QueryDatas.use_exist_state_wkv = wkv_state#copy.deepcopy(wkv_state)
+        QueryDatas.use_exist_state_shift = shift_state#copy.deepcopy(shift_state)
         StateCacheMode = True
         if mrssmode:
             QueryDatas.use_mrss = True
@@ -645,7 +676,7 @@ async def rwkv_completions(request: Request):
         if args.debug:
             print('plane state')
         if target_state_tensor_wkv is not None:
-            QueryDatas.use_exist_state_wkv = copy.deepcopy(target_state_tensor_wkv)
+            QueryDatas.use_exist_state_wkv = target_state_tensor_wkv#copy.deepcopy(target_state_tensor_wkv)
             if mrssmode:
                 QueryDatas.use_mrss = True
                 QueryDatas.use_contain_originalstate = contain_originalstate
