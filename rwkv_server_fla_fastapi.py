@@ -30,7 +30,7 @@ parser.add_argument("--workers", default=8, type=int)
 parser.add_argument("--mrssmax", default=4, type=int) #If workers 8, mrssmax 4, maximum batch inference = 8 * (4 + 1) = 40
 
 parser.add_argument("--dynamic_state_cache_size", default=512, type=int)  # for 14B need 16GB of PC RAM
-parser.add_argument("--dynamic_state_cache_store", default='cpu', type=str) #if gpu need more vram for storing state
+parser.add_argument("--dynamic_state_cache_store", default='cpu', type=str) #if gpu need more vram for storing state 
 
 parser.add_argument("--admin_key1", default='123874139713915425423541', type=str) 
 parser.add_argument("--admin_key2", default='d46871245412541544408014', type=str) 
@@ -436,6 +436,10 @@ async def shutdown():
     uvicorn.Server.should_exit = True
     engine1.ForceExit = True
     exit()
+
+@app.get("/healthcheck")
+async def checkhealth():
+    return {"message": "ok", "status_code": 200}
 
 @app.post("/fjdkgmzak9sd/sksf_appkill")
 async def verify_keys(request: Request):

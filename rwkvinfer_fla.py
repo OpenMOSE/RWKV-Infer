@@ -505,7 +505,7 @@ class LLMWorker:
 
                                 if self.time_debug:
                                     start_time_sample = time.time()
-                                tk = self.pipeline.sample_logits_mose2(logits_combined, temperature=temperature[j], top_p=top_p[j])
+                                tk = self.pipeline.sample_logits_blink(logits_combined, temperature=temperature[j], top_p=top_p[j])
                                 if self.time_debug:
                                     start_time_sample1 = time.time()
 
@@ -524,7 +524,7 @@ class LLMWorker:
                                 if self.time_debug:
                                     start_time_sample = time.time()
                                     print(f'current_prob dtype = {current_prob[j].dtype} current_prob.shape = {current_prob[j].shape} current_prob.device = {current_prob[j].device}')
-                                tk = self.pipeline.sample_logits_mose2(current_prob[j][-1], temperature=temperature[j], top_p=top_p[j])
+                                tk = self.pipeline.sample_logits_blink(current_prob[j][-1], temperature=temperature[j], top_p=top_p[j])
                                 if self.time_debug:
                                     start_time_sample1 = time.time()
 

@@ -336,7 +336,7 @@ class PIPELINE():
 
         return int(out)
     
-    @MyStatic
+    #@MyStatic
     def sample_logits_mose2(logits, temperature:float=1.0, top_p:float=0.85, top_k:int=0):
 
         if temperature == 0:
@@ -356,7 +356,7 @@ class PIPELINE():
         probs = probs / torch.sum(probs)
         out = torch.multinomial(probs, num_samples=1)[0]
         return int(out)
-    @MyStatic
+    #@MyStatic
     def sample_logits_mose2_optimized(logits, temperature:float=1.0, top_p:float=0.85, top_k:int=0):
         if temperature == 0:
             return int(torch.argmax(logits))
