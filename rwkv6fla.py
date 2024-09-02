@@ -18,6 +18,8 @@ import bitsandbytes as bnb
 import functools
 from torch.utils.cpp_extension import load
 
+from torch.profiler import profile, record_function, ProfilerActivity
+
 torch.backends.cudnn.benchmark = True
 torch.backends.cudnn.allow_tf32 = True
 torch.backends.cuda.matmul.allow_tf32 = True
@@ -511,7 +513,7 @@ class Block6(nn.Module):
             start_time1 = time.time()
 
         att_out, time_mix_shift, time_mix_state = self.att(
-                self.ln1(x.to(dtype=torch.bfloat16)),
+                self.ln1(x.to(dtype=self.ln1.weight.dtype)),
                 #self.ln1(x),
                 time_mix_shift,
                 time_mix_state
@@ -524,7 +526,7 @@ class Block6(nn.Module):
             # Handle without dropout
         x = x + att_out
         ffn_out, channel_mix_state = self.ffn(
-            self.ln2(x.to(dtype=torch.bfloat16)),
+            self.ln2(x.to(dtype=self.ln2.weight.dtype)), #.to(dtype=torch.bfloat16)
             #self.ln2(x),
             channel_mix_state,
         )
@@ -836,15 +838,16 @@ class RWKV6_TimeMix(torch.nn.Module):
         B, T, C = x.size()
         x = x.view(B * T, C)
         
-        x = self.ln_x(x).view(B, T, C)
+        x = self.ln_x(x.to(dtype=self.ln_x.weight.dtype)).view(B, T, C).to(dtype=self.precision)
+        #g = g.to(dtype=self.ln_x.weight.dtype)
         #x = self.output(x * g)
         #x = matmul(x * g, self.output.weight.t())
         if self.gate.is_quant:
             x = self.output(x * g)
         elif self.output.mx is None:
-            x = (x * g).to(dtype=self.precision) @ self.output.weight.t()
+            x = (x * g.to(dtype=self.precision)) @ self.output.weight.t()
         else:
-            x = matmul((x * g).to(dtype=self.precision),self.output.weight,
+            x = matmul((x * g.to(dtype=self.precision)),self.output.weight,
                    mx=self.output.mx,
                     my=self.output.my,
                     rx=self.output.rx,
@@ -890,17 +893,22 @@ class RWKV6_TimeMix(torch.nn.Module):
         
         r, k, v, g = self.jit_func_parts2(xw,xk,xv,xr,xg)
 
-        r= r.to(dtype=torch.bfloat16)
-        k= k.to(dtype=torch.bfloat16)
-        v= v.to(dtype=torch.bfloat16)
-        g= g.to(dtype=torch.bfloat16)
+        
 
         if self.time_debug:
             start_time3 = time.time()
+
+
+        
         
 
         if T > 1:
             #print(f'T = {T}')
+            r= r.to(dtype=torch.bfloat16)
+            k= k.to(dtype=torch.bfloat16)
+            v= v.to(dtype=torch.bfloat16)
+            g= g.to(dtype=torch.bfloat16)
+            
             x,last_state_wkv[:] = ChunkRWKV6Function.forward(self.ctx,
                 r.view(B,T,H,-1).transpose(1,2),
                 k.view(B,T,H,-1).transpose(1,2),
@@ -910,15 +918,47 @@ class RWKV6_TimeMix(torch.nn.Module):
                 last_state_wkv,True,
                 0)
             x =x.transpose(1,2)
+
+            #x = x.to(dtype=self.precision)
+            #g= g.to(dtype=self.precision)
+            #last_state_wkv = last_state_wkv.to(dtype=self.precision)
         else:
-            x, last_state_wkv = fused_recurrent_rwkv6(
-                r.view(B,T,H,-1).transpose(1,2),
-                k.view(B,T,H,-1).transpose(1,2),
-                v.view(B,T,H,-1).transpose(1,2),
-                w.view(B,T,H,-1).transpose(1,2),
-                self.time_faaaa.view(H,-1),
-                1.0,
-                last_state_wkv,True, 0)
+            #g= g.to(dtype=self.precision)
+            if self.precision == torch.float16:
+                r= r.to(dtype=torch.bfloat16)
+                #k= k.to(dtype=torch.bfloat16)
+                #v= v.to(dtype=torch.bfloat16)
+                #g= g.to(dtype=torch.bfloat16)
+                x, last_state_wkv = fused_recurrent_rwkv6(
+                    r.view(B,T,H,-1).transpose(1,2),
+                    k.view(B,T,H,-1).transpose(1,2),
+                    v.view(B,T,H,-1).transpose(1,2),
+                    w.view(B,T,H,-1).transpose(1,2),
+                    self.time_faaaa.view(H,-1),
+                    1.0,
+                    last_state_wkv,True, 0)
+                #x = x.to(dtype=torch.bfloat16)
+                #last_state_wkv = last_state_wkv.to(dtype=torch.bfloat16)
+            else:
+                #r= r.to(dtype=torch.bfloat16)
+                #k= k.to(dtype=torch.bfloat16)
+                #v= v.to(dtype=torch.bfloat16)
+                #g= g.to(dtype=torch.bfloat16)
+
+                x, last_state_wkv = fused_recurrent_rwkv6(
+                    r.view(B,T,H,-1).transpose(1,2),
+                    k.view(B,T,H,-1).transpose(1,2),
+                    v.view(B,T,H,-1).transpose(1,2),
+                    w.view(B,T,H,-1).transpose(1,2),
+                    self.time_faaaa.view(H,-1),
+                    1.0,
+                    last_state_wkv,True, 0)
+            
+            #x = x.to(dtype=self.precision)
+            #g= g.to(dtype=self.precision)
+            #last_state_wkv = last_state_wkv.to(dtype=self.precision)
+           # print(last_state_wkv.dtype)
+
 
         x = x.reshape(B,T,C)
         if self.time_debug:
@@ -933,6 +973,7 @@ class RWKV6_TimeMix(torch.nn.Module):
             # print(f'time_block = {time_block*1000:0.3f}ms')   
             # print(f'time_lnout = {time_lnout*1000:0.3f}ms')   
             # print(f'time_head = {time_head*1000:0.3f}ms')   
+        
 
         return self.jit_func_2(x, g), last_state_shift, last_state_wkv
  
@@ -958,6 +999,7 @@ class RWKV6(nn.Module):
 
         self.time_debug = True
         self.bit8quant = False
+        self.profiling = False
 
         if base_precision == 'fp16':
             self.base_precision = torch.float16
@@ -1097,8 +1139,9 @@ class RWKV6(nn.Module):
 
 
                     if ThroughFound == False:
-                        if 'ln' in key or 'emb' in key:
+                        if 'ln_x' in key:
                             param.data = file[key].cuda().contiguous()  
+                            #param.data = file[key].to(dtype=self.base_precision,device='cuda').contiguous() 
                         else:
                             param.data = file[key].to(dtype=self.base_precision,device='cuda').contiguous() 
 
@@ -1185,10 +1228,11 @@ class RWKV6(nn.Module):
                                     if (( 'receptance' in name or 'key' in name  or 'value' in name or  'value' in name or 'gate' in name or 'output' in name ) and ('.att' in name or '.ffn' in name)) or 'head' == name or 'time_maa_x' in name or 'time_maa_w' in name or 'time_maa_k' in name or 'time_maa_v' in name or 'time_maa_r' in name or 'time_maa_g' in name or 'time_maa_w1' in name or 'time_maa_w2' in name or 'time_decay' in name or 'time_decay_w1' in name or 'time_decay_w2' in name or 'time_faaaa' in name:
                                         m=m.to('cuda',dtype=self.base_precision)#.t()
                                         m.weight.data = m.weight.data.contiguous()#.t().contiguous()
-                                        print(f'special mode {name}')
+                                        print(f'special mode {name} = dtype={m.weight.dtype}')
                                     #else:
-                                    #    m=m.to('cuda',dtype=torch.bfloat16)
-                                    print(f'Pass through to cuda:{name}')
+                                    m=m.to('cuda')
+                                    #print(f'Pass through to cuda:{name}')
+                                    #m=m.to('cuda',dtype=self.base_precision)
             print(f"Parameter {key} is on device: {param.device}")
 
         #exit()
@@ -1323,19 +1367,28 @@ class RWKV6(nn.Module):
             x = self.emb(idx)
         if self.time_debug:
             start_time1 = time.time()
-        x = self.ln_in(x.to(dtype=torch.bfloat16))
+        x = self.ln_in(x.to(dtype=self.ln_in.weight.dtype)) #.to(dtype=torch.bfloat16)
 
         if self.time_debug:
             start_time2 = time.time()
 
-        for i,b in enumerate(self.blocks):
-            #print(i)
-            x,last_shift_states[i*2],last_shift_states[i*2+1], last_wkv_states[i]  = b(x, last_shift_states[i*2],last_shift_states[i*2+1], last_wkv_states[i])
-
+        if self.profiling:
+            with profile(activities=[ProfilerActivity.CPU], record_shapes=True) as prof:
+                with record_function("my_function"):
+                    for i,b in enumerate(self.blocks):
+                        #print(i)
+                        x,last_shift_states[i*2],last_shift_states[i*2+1], last_wkv_states[i]  = b(x, last_shift_states[i*2],last_shift_states[i*2+1], last_wkv_states[i])
+            print(prof.key_averages().table(sort_by="cpu_time_total", row_limit=10))
+        else:
+            for i,b in enumerate(self.blocks):
+                    #print(i)
+                    x,last_shift_states[i*2],last_shift_states[i*2+1], last_wkv_states[i]  = b(x, last_shift_states[i*2],last_shift_states[i*2+1], last_wkv_states[i])
+                    
         if self.time_debug:
             start_time3 = time.time()
 
-        x = self.ln_out(x.to(dtype=torch.bfloat16)).to(dtype=self.base_precision)
+        #x = self.ln_out(x.to(dtype=torch.bfloat16)).to(dtype=self.base_precision)
+        x = self.ln_out(x.to(dtype=self.ln_out.weight.dtype))
         if self.time_debug:
             start_time4 = time.time()
 
@@ -1369,6 +1422,7 @@ class RWKV6(nn.Module):
             # print(f'time_block = {time_block*1000:0.3f}ms')   
             # print(f'time_lnout = {time_lnout*1000:0.3f}ms')   
             # print(f'time_head = {time_head*1000:0.3f}ms')   
+        #print(x)
 
         return x, last_shift_states, last_wkv_states
     
