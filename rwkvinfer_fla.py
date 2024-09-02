@@ -207,7 +207,7 @@ class LLMWorker:
                                 'currenttokencount': 0,
                                 'temperature': prompt.temperature,
                                 'top_p' : prompt.top_p,
-                                'end_token': ['\n\n'],#prompt.endtoken,
+                                'end_token': prompt.endtoken,
                                 'remarks':f'{str(self.proceed_total_batches)}',
                                 'use_state-tuned':prompt.base_state_tuned,
                                 'wkv_states' : prompt.use_exist_state_wkv,
