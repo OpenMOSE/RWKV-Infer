@@ -150,6 +150,83 @@ def fused_recurrent_rwkv6_fwd_kernel(
         tl.store(p_ht, b_h.to(p_ht.dtype.element_ty), mask=mask_kv)
 
 
+@triton.jit
+def fused_recurrent_rwkv6_fwd_kernel16(
+    q,  # query [B, H, T, K]
+    k,  # key [B, H, T, K]
+    v,  # value [B, H, T, V]
+    w,  # log gate [B, H, T, K]
+    u,  # bonus [B, H, K]
+    o,  # output [B, H, T, V]
+    # initial hidden state initialization [B, H, K, V]
+    h0,
+    ht,  # final hidden state [B, H, K, V]
+    s_k_h,  # stride size: T * K
+    s_v_h,  # stride size: T * V
+    scale,  # K ** -0.5
+    B: tl.constexpr,
+    H: tl.constexpr,
+    T: tl.constexpr,
+    K: tl.constexpr,
+    V: tl.constexpr,
+    BK: tl.constexpr,  # BLOCK SIZE along the K dimension
+    BV: tl.constexpr,  # BLOCK SIZE along the V dimension
+    USE_INITIAL_STATE: tl.constexpr,  # whether to use initial state
+    STORE_FINAL_STATE: tl.constexpr,  # whether to store final state
+    REVERSE: tl.constexpr,  # whether to do autoregressive modeling in the reverse direction
+):
+    TargetDType = tl.bfloat16
+    TargetDType2 = tl.bfloat16
+    #q=q.to(TargetDType)
+    #k=k.to(TargetDType)
+    #v=v.to(TargetDType)
+    #w=w.to(TargetDType)
+    #u=u.to(TargetDType)
+    #o=o.to(TargetDType)
+
+    i_v, i_k, i_bh = tl.program_id(0), tl.program_id(1), tl.program_id(2)
+    i_h = i_bh % H
+
+    p_q = q + i_bh * s_k_h + i_k * BK + tl.arange(0, BK) + ((T-1) * K if REVERSE else 0)
+    p_k = k + i_bh * s_k_h + i_k * BK + tl.arange(0, BK) + ((T-1) * K if REVERSE else 0)
+    p_v = v + i_bh * s_v_h + i_v * BV + tl.arange(0, BV) + ((T-1) * V if REVERSE else 0)
+    p_o = o + (i_bh + i_k * B * H) * s_v_h + i_v * BV + tl.arange(0, BV) + ((T-1) * V if REVERSE else 0)
+    p_w = w + i_bh * s_k_h + i_k * BK + tl.arange(0, BK) + ((T-1) * K if REVERSE else 0)
+    p_u = u + i_h * K + tl.arange(0, BK) + i_k * BK
+
+    mask_bk = (i_k * BK + tl.arange(0, BK)) < K
+    mask_bv = (i_v * BV + tl.arange(0, BV)) < V
+    mask_kv = mask_bv[:, None] & mask_bk[None, :]
+
+    b_h = tl.zeros([BV, BK], dtype=TargetDType)
+    if USE_INITIAL_STATE:
+        p_h0 = h0 + i_bh * K * V + (i_k * BK + tl.arange(0, BK)[None, :]) * V + (i_v * BV + tl.arange(0, BV)[:, None])
+        b_h += tl.load(p_h0, mask=mask_kv, other=0).to(TargetDType)
+
+    b_u = tl.load(p_u, mask=mask_bk, other=0).to(TargetDType)
+    for _ in range(0, T):
+        b_k = tl.load(p_k, mask=mask_bk, other=0).to(TargetDType2)
+        b_v = tl.load(p_v, mask=mask_bv, other=0).to(TargetDType2)
+        b_q = tl.load(p_q, mask=mask_bk, other=0).to(TargetDType2) * scale
+        b_w = tl.load(p_w, mask=mask_bk, other=0).to(TargetDType2)
+        b_w = tl.exp(b_w.to(tl.float32)).to(TargetDType)
+        b_kv = b_k[None, :] * b_v[:, None]
+        b_o = (b_h + b_kv * b_u[None, :]) * b_q[None, :]
+        b_o = tl.sum(b_o, axis=1)
+        b_h = b_h * b_w[None, :]
+        b_h += b_kv.to(TargetDType)
+        tl.store(p_o, b_o.to(p_o.dtype.element_ty), mask=mask_bv)
+        p_q += -K if REVERSE else K
+        p_k += -K if REVERSE else K
+        p_o += -V if REVERSE else V
+        p_v += -V if REVERSE else V
+        p_w += -K if REVERSE else K
+
+    if STORE_FINAL_STATE:
+        p_ht = ht + i_bh * K * V + (i_k * BK + tl.arange(0, BK)[None, :]) * V + (i_v * BV + tl.arange(0, BV)[:, None])
+        tl.store(p_ht, b_h.to(p_ht.dtype.element_ty), mask=mask_kv)
+
+
 # Similar to Algorithm1 of https://arxiv.org/abs/2006.16236
 # @triton.jit
 # def fused_recurrent_rwkv6_bwd_kernel_dq(
@@ -324,20 +401,36 @@ class FusedRecurrentRWKV6Function(torch.autograd.Function):
         else:
             final_state = None
 
-        o = q.new_empty(NK, B, H, T, V, dtype=torch.bfloat16)
-        grid = (NV, NK, B * H)
-        fused_recurrent_rwkv6_fwd_kernel[grid](
-            q, k, v, w, u, o, initial_state, final_state,
-            k.stride(1),
-            v.stride(1),
-            scale,
-            B=B, H=H, T=T, K=K, V=V, BK=BK, BV=BV,
-            USE_INITIAL_STATE=initial_state is not None,
-            STORE_FINAL_STATE=final_state is not None,
-            REVERSE=reverse,
-            num_warps=num_warps,
-            num_stages=num_stages
-        )
+        if r.dtype == torch.float16 and 0:
+            o = q.new_empty(NK, B, H, T, V, dtype=torch.float16)
+            grid = (NV, NK, B * H)
+            fused_recurrent_rwkv6_fwd_kernel16[grid](
+                q, k, v, w, u, o, initial_state, final_state,
+                k.stride(1),
+                v.stride(1),
+                scale,
+                B=B, H=H, T=T, K=K, V=V, BK=BK, BV=BV,
+                USE_INITIAL_STATE=initial_state is not None,
+                STORE_FINAL_STATE=final_state is not None,
+                REVERSE=reverse,
+                num_warps=num_warps,
+                num_stages=num_stages
+            )
+        else:
+            o = q.new_empty(NK, B, H, T, V, dtype=torch.bfloat16)
+            grid = (NV, NK, B * H)
+            fused_recurrent_rwkv6_fwd_kernel[grid](
+                q, k, v, w, u, o, initial_state, final_state,
+                k.stride(1),
+                v.stride(1),
+                scale,
+                B=B, H=H, T=T, K=K, V=V, BK=BK, BV=BV,
+                USE_INITIAL_STATE=initial_state is not None,
+                STORE_FINAL_STATE=final_state is not None,
+                REVERSE=reverse,
+                num_warps=num_warps,
+                num_stages=num_stages
+            )
 
         o = o.sum(0)
         #ctx.save_for_backward(q, k, v, w, u, initial_state, o)

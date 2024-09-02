@@ -173,7 +173,7 @@ class LLMWorker:
                 yield "", copy.deepcopy(prompt_queue.prompts[queue_id].use_exist_state_wkv.to('cpu')), copy.deepcopy(prompt_queue.prompts[queue_id].use_exist_state_shift.to('cpu'))
                 prompt_queue.prompts[queue_id] = None
                 break
-            await asyncio.sleep(0.025)
+            await asyncio.sleep(0.02)
 
 
 
@@ -207,7 +207,7 @@ class LLMWorker:
                                 'currenttokencount': 0,
                                 'temperature': prompt.temperature,
                                 'top_p' : prompt.top_p,
-                                'end_token': ['\n\n'],#prompt.endtoken,
+                                'end_token': prompt.endtoken,
                                 'remarks':f'{str(self.proceed_total_batches)}',
                                 'use_state-tuned':prompt.base_state_tuned,
                                 'wkv_states' : prompt.use_exist_state_wkv,
@@ -376,8 +376,8 @@ class LLMWorker:
 
 
 
-                        shift_states = shift_states.permute(1,0,2,3)
-                        wkv_states = wkv_states.permute(1, 0, 2, 3, 4)
+                        shift_states = shift_states.permute(1,0,2,3) 
+                        wkv_states = wkv_states.permute(1, 0, 2, 3, 4) 
                         
 
                         x, shift_states, wkv_states = self.model.forward(idx, shift_states, wkv_states)
@@ -505,7 +505,7 @@ class LLMWorker:
 
                                 if self.time_debug:
                                     start_time_sample = time.time()
-                                tk = self.pipeline.sample_logits_blink(logits_combined, temperature=temperature[j], top_p=top_p[j])
+                                tk = self.pipeline.sample_logits_blink(logits_combined, temperature=float(temperature[j]), top_p=top_p[j])
                                 if self.time_debug:
                                     start_time_sample1 = time.time()
 
@@ -524,7 +524,7 @@ class LLMWorker:
                                 if self.time_debug:
                                     start_time_sample = time.time()
                                     print(f'current_prob dtype = {current_prob[j].dtype} current_prob.shape = {current_prob[j].shape} current_prob.device = {current_prob[j].device}')
-                                tk = self.pipeline.sample_logits_blink(current_prob[j][-1], temperature=temperature[j], top_p=top_p[j])
+                                tk = self.pipeline.sample_logits_blink(current_prob[j][-1], temperature=float(temperature[j]), top_p=top_p[j])
                                 if self.time_debug:
                                     start_time_sample1 = time.time()
 
@@ -587,8 +587,8 @@ class LLMWorker:
 
                         #print(f'realbatchcount={realbatchcount}')
 
-                        shift_states = self.States.shift_states.permute(1, 0, 2, 3)
-                        wkv_states = self.States.wkv_states.permute(1, 0, 2, 3, 4)
+                        shift_states = self.States.shift_states.permute(1, 0, 2, 3) 
+                        wkv_states = self.States.wkv_states.permute(1, 0, 2, 3, 4) 
 
                         # for i in range(len(token)):
                         #     if b_wkv_states[i] is not None:
