@@ -385,10 +385,10 @@ class PIPELINE():
             probs /= probs.sum()
 
         return int(torch.multinomial(probs, num_samples=1)[0])
-    
-    def improved_nucleus_sampling(self, logits, temperature=1.0, top_p=0.9):
+    @MyStatic    
+    def improved_nucleus_sampling(logits, temperature:float=1.0, top_p:float=0.9):
        p = top_p
-       probs = F.softmax(logits, dim=-1)
+       probs = F.softmax(logits.float(), dim=-1)
        sorted_probs, sorted_indices = torch.sort(probs, descending=True)
        cumulative_probs = torch.cumsum(sorted_probs, dim=-1)
        sorted_indices_to_remove = cumulative_probs > p
@@ -396,6 +396,9 @@ class PIPELINE():
        sorted_indices_to_remove[0] = False
        indices_to_remove = sorted_indices_to_remove.scatter(0, sorted_indices, sorted_indices_to_remove)
        probs.masked_fill_(indices_to_remove, 0.0)
+       if temperature != 1.0:
+            probs = probs ** (1.0 / temperature)
+            probs /= probs.sum()
        return int(torch.multinomial(probs, num_samples=1)[0])
 
 
@@ -420,6 +423,30 @@ class RWKV6_ChannelMix(torch.nn.Module):
         self.receptance = HybridLinear(n_embd, n_embd, bias=False)
         self.value = HybridLinear(dim_ffn, n_embd, bias=False)
         self.lastlayer = layer_id == n_layer - 1
+
+        #self.cmix_jit1__
+        try:
+            self.cmix_jit1 = torch.compile(self.cmix_jit1__, mode="inductor", fullgraph=True, dynamic=False)
+            print('compiled')
+        except:
+            self.cmix_jit1 = torch.jit.script(self.cmix_jit1__)
+            print('cmix jit')
+
+        #cmix_jit2_bf16all__
+        try:
+            self.cmix_jit2_bf16all = torch.compile(self.cmix_jit2_bf16all__, mode="inductor", fullgraph=True, dynamic=False)
+            print('compiled')
+        except:
+            self.cmix_jit2_bf16all = torch.jit.script(self.cmix_jit2_bf16all__)
+            print('cmix2 jit')
+
+        #cmix_jit2_fp16all__
+        try:
+            self.cmix_jit2_fp16all = torch.compile(self.cmix_jit2_fp16all__, mode="inductor", fullgraph=True, dynamic=False)
+            print('compiled')
+        except:
+            self.cmix_jit2_fp16all = torch.jit.script(self.cmix_jit2_fp16all__)
+            print('cmix2 jit')
     # forwarding channel mix given the model weights and the input tokens and states.
     #
     # Given:
@@ -431,8 +458,8 @@ class RWKV6_ChannelMix(torch.nn.Module):
     # - and the last output state of shape [batch_size, state_size]
     # @torch.compile(backend="eager")
 
-    @MyStatic
-    def cmix_jit1(x,last_state,time_maa_k,time_maa_r,precision):
+    #@MyStatic
+    def cmix_jit1__(x,last_state,time_maa_k,time_maa_r,precision):
         xx = torch.concat((last_state, x[:, :-1]),
                           dim=1).to(dtype=precision.dtype)
         last_state[:] = x[:, -1:]
@@ -441,6 +468,30 @@ class RWKV6_ChannelMix(torch.nn.Module):
         xk = xx * time_maa_k + x * (1 - time_maa_k)
         xr = xx * time_maa_r + x * (1 - time_maa_r)
         return xk,xr,last_state
+    
+    def cmix_jit2_bf16all__(xk,xr,
+                          key_weight,
+                          value_weight,
+                          receptance_weight,
+                          last_state
+                          ):
+        kv = (torch.relu(xk.to(dtype=torch.bfloat16) @ key_weight.t()) ** 2) @ value_weight.t()
+
+        return torch.sigmoid(
+                                  xr.to(dtype=torch.bfloat16) @ receptance_weight.t()  
+                                ) * kv, last_state
+    
+    def cmix_jit2_fp16all__(xk,xr,
+                          key_weight,
+                          value_weight,
+                          receptance_weight,
+                          last_state
+                          ):
+        kv = (torch.relu(xk.to(dtype=torch.float16) @ key_weight.t()) ** 2) @ value_weight.t()
+
+        return torch.sigmoid(
+                                  xr.to(dtype=torch.float16) @ receptance_weight.t()  
+                                ) * kv, last_state
     
     def forward(self, x, last_state: torch.Tensor):
  
@@ -452,10 +503,25 @@ class RWKV6_ChannelMix(torch.nn.Module):
                                      self.time_maa_r,
                                      torch.ones(1, dtype=self.precision)
                                      )
+        
+        if self.value.is_quant == False and self.key.is_quant == False and self.receptance.is_quant == False and self.value.mx is None and self.key.mx is None and self.receptance.mx is None and self.value.weight.dtype == torch.bfloat16:
+            #print('cmix jit2 bf16 all')
+            return self.cmix_jit2_bf16all(xk,xr,
+                                          self.key.weight,
+                                          self.value.weight,
+                                          self.receptance.weight,
+                                          last_state
+                                          )
+        
+        elif self.value.is_quant == False and self.key.is_quant == False and self.receptance.is_quant == False and self.value.mx is None and self.key.mx is None and self.receptance.mx is None and self.value.weight.dtype == torch.float16:
+            #print('cmix jit2 bf16 all')
+            return self.cmix_jit2_fp16all(xk,xr,
+                                          self.key.weight,
+                                          self.value.weight,
+                                          self.receptance.weight,
+                                          last_state
+                                          )
 
-
-
-        #kv = self.value( torch.relu( self.key(xk.to(dtype=self.precision)) ) ** 2 )
         if self.value.is_quant and self.key.is_quant:
             kv = self.value( torch.relu( self.key(xk.to(dtype=self.precision)) ) ** 2 )
         elif self.key.mx is None and self.value.mx is None:
@@ -507,6 +573,7 @@ class Block6(nn.Module):
     
         # Setup droupout at block level
 
+    #@torch.jit.script
     def forward(self, x, time_mix_shift, channel_mix_state, time_mix_state):
 
         if self.time_debug:
@@ -562,6 +629,7 @@ class RWKV6_TimeMix(torch.nn.Module):
         self.head_size = head_size
         self.precision = precision
         self.n_head = n_head
+        self.dim_att = dim_att
         head_size_divisor = 8
         assert dim_att % self.n_head == 0
 
@@ -618,12 +686,51 @@ class RWKV6_TimeMix(torch.nn.Module):
         self.gate =HybridLinear(n_embd, dim_att, bias=False)
         self.ln_x = nn.GroupNorm(self.n_head, dim_att, eps=(1e-5)*(head_size_divisor**2))
         self.ctx = 1024#saveBackDummy()
+
+        #self.jit_func_parts__
+        try:
+            self.jit_func_parts = torch.compile(self.jit_func_parts__, mode="inductor", fullgraph=True, dynamic=False)
+            print('compiled')
+        except:
+            self.jit_func_parts = torch.jit.script(self.jit_func_parts__)
+            print('jit')
+
+        #jit_ln_x_fp16bf16__
+        try:
+            self.jit_ln_x_fp16bf16 = torch.compile(self.jit_ln_x_fp16bf16__, mode="inductor", fullgraph=True, dynamic=False)
+            print('compiled')
+        except:
+            self.jit_ln_x_fp16bf16 = torch.jit.script(self.jit_ln_x_fp16bf16__)
+            print('jit')
+
+        #jit_func_parts2_bf16__
+        try:
+            self.jit_func_parts2_bf16 = torch.compile(self.jit_func_parts2_bf16__, mode="inductor", fullgraph=True, dynamic=False)
+            print('compiled')
+        except:
+            self.jit_func_parts2_bf16 = torch.jit.script(self.jit_func_parts2_bf16__)
+            print('jit')
+        #jit_func_parts2_fp16__
+        try:
+            self.jit_func_parts2_fp16 = torch.compile(self.jit_func_parts2_fp16__, mode="inductor", fullgraph=True, dynamic=False)
+            print('compiled')
+        except:
+            self.jit_func_parts2_fp16 = torch.jit.script(self.jit_func_parts2_fp16__)
+            print('jit')
+
+        #jit_ln_x_bf16all__
+        try:
+            self.jit_ln_x_bf16all = torch.compile(self.jit_ln_x_bf16all__, mode="inductor", fullgraph=True, dynamic=False)
+            print('compiled')
+        except:
+            self.jit_ln_x_bf16all = torch.jit.script(self.jit_ln_x_bf16all__)
+            print('jit')
     
 
 
     
-    @MyStatic  
-    def jit_func_parts(x, last_state_shift,
+    #@MyStatic  
+    def jit_func_parts__(x, last_state_shift,
                        time_maa_x,
                        time_maa_w1,
                        time_maa_w2,
@@ -646,141 +753,47 @@ class RWKV6_TimeMix(torch.nn.Module):
         last_state_shift[:] = x[:,-1:]
 
         xx = output - x
-
-        #xxx = x + xx * time_maa_x
-        #xxx = torch.tanh(xxx @ time_maa_w1).view(B*T, 5, -1).transpose(0, 1)
-        #xxx = torch.bmm(xxx, time_maa_w2).view(5, B, T, -1)
-        # xxxの計算を最適化
-        #p#rint(f'time_maa_x dtype = {time_maa_w1.dtype}')
         
         xxx = torch.addcmul(x, xx, time_maa_x).to(dtype=time_maa_x.dtype)
-        #print(f'xxx dtype = {xxx.dtype}')
         xxx = torch.tanh(xxx @ time_maa_w1).view(B*T, 5, -1).transpose(0, 1)
         xxx = torch.bmm(xxx, time_maa_w2).view(5, B, T, -1)
-        #mw, mk, mv, mr, mg = xxx.unbind(dim=0)
 
-        #combined = torch.stack([time_maa_w, time_maa_k, time_maa_v, time_maa_r, time_maa_g], dim=0)
         combined = (xxx + time_wkvrg) * xx + x
-
-
-
-
-        # xw = x + xx * (time_maa_w + mw)
-        # xk = x + xx * (time_maa_k + mk)
-        # xv = x + xx * (time_maa_v + mv)
-        # xr = x + xx * (time_maa_r + mr)
-        # xg = x + xx * (time_maa_g + mg)
-
         xw, xk, xv, xr, xg = combined.unbind(dim=0)
 
         ww = torch.tanh(xw @ time_decay_w1) @ time_decay_w2
-
-        #w = time_decay + ww
-        #w = w.exp().neg()
         w = (time_decay + ww).exp().neg()
 
         return xw,xk,xv,xr,xg,ww,w
     
-    @torch.jit.script
-    def jit_func_parts_mose(x: torch.Tensor, 
-                    last_state_shift: torch.Tensor,
-                    time_maa_x: torch.Tensor,
-                    time_maa_w1: torch.Tensor,
-                    time_maa_w2: torch.Tensor,
-                    time_maa_w: torch.Tensor,
-                    time_maa_k: torch.Tensor,
-                    time_maa_v: torch.Tensor,
-                    time_maa_r: torch.Tensor,
-                    time_maa_g: torch.Tensor,
-                    time_decay_w1: torch.Tensor,
-                    time_decay_w2: torch.Tensor,
-                    time_decay: torch.Tensor
-                    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        B, T, C = x.shape
+    def jit_func_parts2_bf16__(xw,xk,xv,xr,xg,
+                             receptance_weight,
+                             key_weight,
+                             value_weight,
+                             gate_weight,
+                             ):
+        r = (xr.to(dtype=torch.bfloat16) @ receptance_weight.t())
+        k = (xk.to(dtype=torch.bfloat16) @ key_weight.t())
+        v = (xv.to(dtype=torch.bfloat16) @ value_weight.t())
+        g = torch.nn.functional.silu((xg.to(dtype=torch.bfloat16) @ gate_weight.t()))
 
-        # メモリアクセスパターンの最適化
-        x = x.contiguous()
-        
-        # シフト操作の結合
-        output = torch.cat((last_state_shift, x[:, :-1]), dim=1)
-        last_state_shift[:] = x[:,-1:]
-
-        xx = output - x
-
-        # xxxの計算を最適化
-        xxx = torch.addcmul(x, xx, time_maa_x)
-        xxx = torch.tanh(xxx @ time_maa_w1).view(B*T, 5, -1).transpose(0, 1)
-        xxx = torch.bmm(xxx, time_maa_w2).view(5, B, T, -1)
-
-        # より効率的な分割のためにtorch.unbindを使用
-        mw, mk, mv, mr, mg = torch.unbind(xxx, dim=0)
-
-        # ベクトル化操作
-        time_maa_stack = torch.stack([time_maa_w, time_maa_k, time_maa_v, time_maa_r, time_maa_g])
-        m_stack = torch.stack([mw, mk, mv, mr, mg])
-
-        # メモリ効率の良い計算
-        x_results = x.unsqueeze(0) + xx.unsqueeze(0) * (time_maa_stack.unsqueeze(1).unsqueeze(2) + m_stack)
-        xw, xk, xv, xr, xg = torch.unbind(x_results, dim=0)
-
-        # decay計算の最適化
-        ww = torch.tanh(xw @ time_decay_w1) @ time_decay_w2
-        w = torch.exp(time_decay + ww).neg_()
-
-        return xw, xk, xv, xr, xg, ww, w
+        return r, k, v, g
     
+    def jit_func_parts2_fp16__(xw,xk,xv,xr,xg,
+                             receptance_weight,
+                             key_weight,
+                             value_weight,
+                             gate_weight,
+                             ):
+        r = (xr.to(dtype=torch.float16) @ receptance_weight.t())
+        k = (xk.to(dtype=torch.float16) @ key_weight.t())
+        v = (xv.to(dtype=torch.float16) @ value_weight.t())
+        g = torch.nn.functional.silu((xg.to(dtype=torch.float16) @ gate_weight.t()))
 
-    @torch.jit.script
-    def optimized_jit_func_parts(x: torch.Tensor, 
-                             last_state_shift: torch.Tensor,
-                             time_maa_x: torch.Tensor,
-                             time_maa_w1: torch.Tensor,
-                             time_maa_w2: torch.Tensor,
-                             time_maa_w: torch.Tensor,
-                             time_maa_k: torch.Tensor,
-                             time_maa_v: torch.Tensor,
-                             time_maa_r: torch.Tensor,
-                             time_maa_g: torch.Tensor,
-                             time_decay_w1: torch.Tensor,
-                             time_decay_w2: torch.Tensor,
-                             time_decay: torch.Tensor
-                            ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        B, T, C = x.shape
-
-        output = torch.cat((last_state_shift, x[:, :-1]), dim=1)
-        last_state_shift.copy_(x[:,-1:])
-
-        xx = output - x
-
-        xxx = torch.addcmul(x, xx, time_maa_x)
-        xxx = F.tanh(xxx @ time_maa_w1)  # [B, T, 5*hidden_size]
-        
-        # Reshape and transpose to match time_maa_w2
-        xxx = xxx.view(B, T, 5, -1)  # [B, T, 5, hidden_size]
-        xxx = xxx.permute(0, 2, 1, 3)  # [B, 5, T, hidden_size]
-        
-        # Apply time_maa_w2 to each of the 5 parts
-        xxx = xxx @ time_maa_w2  # [B, 5, T, output_size]
-
-        mw, mk, mv, mr, mg = xxx.unbind(dim=1)
-
-        xw = torch.addcmul(x, xx, time_maa_w + mw)
-        xk = torch.addcmul(x, xx, time_maa_k + mk)
-        xv = torch.addcmul(x, xx, time_maa_v + mv)
-        xr = torch.addcmul(x, xx, time_maa_r + mr)
-        xg = torch.addcmul(x, xx, time_maa_g + mg)
-
-        ww = F.tanh(xw @ time_decay_w1) @ time_decay_w2
-
-        w = torch.exp(time_decay + ww).neg_()
-
-        return xw, xk, xv, xr, xg, ww, w
+        return r, k, v, g
     
     def jit_func_parts2(self,xw,xk,xv,xr,xg):
 
-        #print(f'xr shape = {xr.shape}')
-
-        #r = self.receptance(xr.to(dtype=self.precision))#.to(dtype=torch.bfloat16)
         if self.receptance.is_quant:
             r = self.receptance(xr.to(dtype=self.precision))
         elif self.receptance.mx is None:
@@ -792,10 +805,8 @@ class RWKV6_TimeMix(torch.nn.Module):
                     my=self.receptance.my,
                     rx=self.receptance.rx,
                     ry=self.receptance.ry,
-                    )#.to(dtype=torch.bfloat16)
-        #r = matmul(xr,self.receptance.weight)
-        #print(r)
-        #k = self.key(xk.to(dtype=self.precision))
+                    )
+
         if self.key.is_quant:
             k = self.key(xk.to(dtype=self.precision))
         elif self.key.mx is None:
@@ -807,7 +818,7 @@ class RWKV6_TimeMix(torch.nn.Module):
                     rx=self.key.rx,
                     ry=self.key.ry,
                    )
-        #v = self.value(xv.to(dtype=self.precision))
+
         if self.value.is_quant:
             v = self.value(xv.to(dtype=self.precision))
         elif self.value.mx is None:
@@ -818,7 +829,7 @@ class RWKV6_TimeMix(torch.nn.Module):
                     my=self.value.my,
                     rx=self.value.rx,
                     ry=self.value.ry,)
-        #g = torch.nn.functional.silu(self.gate(xg.to(dtype=self.precision)))
+
         if self.gate.is_quant:
             g = torch.nn.functional.silu(self.gate(xg.to(dtype=self.precision)))
         elif self.gate.mx is None:
@@ -828,8 +839,23 @@ class RWKV6_TimeMix(torch.nn.Module):
                                             mx=self.gate.mx,
                                             my=self.gate.my,
                                             rx=self.gate.rx,
-                                            ry=self.gate.ry,))#)self.gate(xg.to(dtype=self.precision)))
+                                            ry=self.gate.ry,))
         return r, k, v, g
+    
+    def jit_ln_x_fp16bf16__(x,dim_head:int,ln_x_weight,ln_x_bias):
+        x = torch.nn.functional.group_norm(x,num_groups = dim_head, weight=ln_x_weight,bias=ln_x_bias, eps= 64e-5)
+        return x
+    def jit_ln_x_bf16all__(B:int,T:int,C:int,x,g,dim_head:int,ln_x_weight,ln_x_bias,
+                           output_weight,
+                           ):
+        x = torch.nn.functional.group_norm(x,num_groups = dim_head, weight=ln_x_weight,bias=ln_x_bias, eps= 64e-5).view(B, T, C)
+        x = (x * g.to(dtype=torch.bfloat16)) @ output_weight.t()
+        return x
+    #@MyStatic
+    #def jit_ln_x_bf16bf16(x,B,T,C,ln_x:nn.GroupNorm):
+    #    x = ln_x(x).view(B, T, C)
+    #    return x
+
     
     
    # @torch.jit.scrip
@@ -838,17 +864,28 @@ class RWKV6_TimeMix(torch.nn.Module):
         B, T, C = x.size()
         x = x.view(B * T, C)
         
-        x = self.ln_x(x.to(dtype=self.ln_x.weight.dtype)).view(B, T, C).to(dtype=self.precision)
-        #g = g.to(dtype=self.ln_x.weight.dtype)
-        #x = self.output(x * g)
-        #x = matmul(x * g, self.output.weight.t())
+        #x = self.ln_x(x.to(dtype=self.ln_x.weight.dtype)).view(B, T, C).to(dtype=self.precision)
+
+        if x.dtype == torch.bfloat16 and self.ln_x.weight.dtype == torch.bfloat16:
+
+            if self.output.weight.dtype == torch.bfloat16 and self.output.mx is None:
+                x = self.jit_ln_x_bf16all(B,T,C,x,g,self.n_head,self.ln_x.weight,self.ln_x.bias,
+                                          self.output.weight
+                                          )
+                return x
+            else:
+                x = self.jit_ln_x_fp16bf16(x,self.n_head,self.ln_x.weight,self.ln_x.bias).to(dtype=self.precision).view(B, T, C)
+
+        else:
+            x = self.ln_x(x.to(dtype=self.ln_x.weight.dtype)).view(B, T, C).to(dtype=self.precision)
+
         if self.gate.is_quant:
             x = self.output(x * g)
         elif self.output.mx is None:
             x = (x * g.to(dtype=self.precision)) @ self.output.weight.t()
         else:
             x = matmul((x * g.to(dtype=self.precision)),self.output.weight,
-                   mx=self.output.mx,
+                mx=self.output.mx,
                     my=self.output.my,
                     rx=self.output.rx,
                     ry=self.output.ry,)
@@ -863,7 +900,7 @@ class RWKV6_TimeMix(torch.nn.Module):
             start_time1 = time.time()
 
         if self.time_wkvrg is None:
-            self.time_wkvrg = torch.stack([self.time_maa_w, self.time_maa_k, self.time_maa_v, self.time_maa_r, self.time_maa_g], dim=0)
+            self.time_wkvrg = torch.stack([self.time_maa_w, self.time_maa_k, self.time_maa_v, self.time_maa_r, self.time_maa_g], dim=0).contiguous()
             self.time_maa_w = None
             self.time_maa_k = None
             self.time_maa_v = None
@@ -890,8 +927,25 @@ class RWKV6_TimeMix(torch.nn.Module):
         
         if self.time_debug:
             start_time2 = time.time()
-        
-        r, k, v, g = self.jit_func_parts2(xw,xk,xv,xr,xg)
+
+        if self.receptance.is_quant == False and self.key.is_quant == False and self.value.is_quant == False and self.gate.is_quant == False and self.receptance.mx is None  and self.key.mx is None and self.value.mx is None and self.gate.mx is None and self.receptance.weight.dtype == torch.bfloat16:
+            #print('fastmode')
+            r,k,v,g = self.jit_func_parts2_bf16(xw,xk,xv,xr,xg,
+                                                self.receptance.weight,
+                                                self.key.weight,
+                                                self.value.weight,
+                                                self.gate.weight                                                
+                                                )
+        elif self.receptance.is_quant == False and self.key.is_quant == False and self.value.is_quant == False and self.gate.is_quant == False and self.receptance.mx is None  and self.key.mx is None and self.value.mx is None and self.gate.mx is None and self.receptance.weight.dtype == torch.float16:
+            #print('fastmode')
+            r,k,v,g = self.jit_func_parts2_fp16(xw,xk,xv,xr,xg,
+                                                self.receptance.weight,
+                                                self.key.weight,
+                                                self.value.weight,
+                                                self.gate.weight                                                
+                                                )
+        else:
+            r, k, v, g = self.jit_func_parts2(xw,xk,xv,xr,xg)
 
         
 
@@ -926,9 +980,9 @@ class RWKV6_TimeMix(torch.nn.Module):
             #g= g.to(dtype=self.precision)
             if self.precision == torch.float16:
                 r= r.to(dtype=torch.bfloat16)
-                #k= k.to(dtype=torch.bfloat16)
-                #v= v.to(dtype=torch.bfloat16)
-                #g= g.to(dtype=torch.bfloat16)
+                k= k.to(dtype=torch.bfloat16)
+                v= v.to(dtype=torch.bfloat16)
+                g= g.to(dtype=torch.bfloat16)
                 x, last_state_wkv = fused_recurrent_rwkv6(
                     r.view(B,T,H,-1).transpose(1,2),
                     k.view(B,T,H,-1).transpose(1,2),
@@ -997,7 +1051,7 @@ class RWKV6(nn.Module):
         # Setup the parent class
         super().__init__()
 
-        self.time_debug = True
+        self.time_debug = False
         self.bit8quant = False
         self.profiling = False
 
@@ -1139,11 +1193,23 @@ class RWKV6(nn.Module):
 
 
                     if ThroughFound == False:
-                        if 'ln_x' in key:
+                        if 'ln_x' in key or 'ln' in key:
                             param.data = file[key].cuda().contiguous()  
+                            print('GPU Transferred non Convert')
                             #param.data = file[key].to(dtype=self.base_precision,device='cuda').contiguous() 
+                        elif 'emb' in key:
+                            #Sparse
+                            threshold = 1e-3
+                            emb_weight = file[key]
+                            mask = torch.abs(emb_weight) > threshold
+                            sparse_weight = emb_weight * mask
+                            print('sparsed')
+                            param.data = sparse_weight.to(dtype=self.base_precision,device='cuda').contiguous() 
                         else:
                             param.data = file[key].to(dtype=self.base_precision,device='cuda').contiguous() 
+                            print(f'GPU Transferred Convert to {param.data.dtype}')
+
+
 
 
 
@@ -1174,6 +1240,7 @@ class RWKV6(nn.Module):
 
                             #if '.att.' in name or '.ffn.' in name:
                             #    ThroughFound = False
+                            print(f'ThroughFound = {ThroughFound}')
 
                             if ThroughFound == False:
 
@@ -1233,19 +1300,9 @@ class RWKV6(nn.Module):
                                     m=m.to('cuda')
                                     #print(f'Pass through to cuda:{name}')
                                     #m=m.to('cuda',dtype=self.base_precision)
-            print(f"Parameter {key} is on device: {param.device}")
+            print(f"Parameter {key} is on device: {param.device} dtype = {param.dtype}")
 
-        #exit()
-
-        # for key, value in file.items():
-        #     print(key)
-        #     if key in self.state_dict():
-        #             print('found statedict')
-        #             cuda_value = value.to('cuda')
-        #             #self.state_dict()[key].copy_(cuda_value)
-        #             self.state_dict()[key] = cuda_value
-        #             print(f'cuda_value = {cuda_value.device}')
-        #             print(f"Successfully copied to CUDA. New device: {self.state_dict()[key].device}")
+ 
                     
                     
 
@@ -1253,88 +1310,7 @@ class RWKV6(nn.Module):
 
         self.eval()
 
-        #for name, m in self.named_modules():
-
-
-        
-
-
-
-
-        # for name, m in self.named_modules():
-        #     ThroughFound = False
-        #     if hasattr(m, "quant") and callable(getattr(m, "quant")):
-        #         for i in range(self.n_layer):
-        #             if f'blocks.{i}.' in name:
-        #                 if i < quant_layers:
-        #                     m.quant('nf4')
-        #                     print(f'Quant {name}')
-        #                     ThroughFound = True
-
-        #     for i in range(self.n_layer):
-        #         if name == f'blocks.{i}':
-        #             ThroughFound = True
-
-        #     if name == 'blocks' or name == '':# or name.endswith('.ffn') or name.endswith('.att'):
-        #         ThroughFound = True
-
-        #     #if '.att.' in name or '.ffn.' in name:
-        #     #    ThroughFound = False
-
-        #     if ThroughFound == False:
-
-        #         #print('jikken')
-        #         #if ('receptance' in name  or 'output' in name or 'key' in name or 'value' in name ) and ('.att' in name or '.ffn' in name ):
-        #         #jikken
-        #         if ((('receptance' in name or 'key' in name or 'value' in name or 'gate' in name or 'output' in name) and ('.att' in name or '.ffn' in name)) or 'head' == name) and self.bit8quant:
-        #         #if ('receptance' in name ) and ('.att' in name ):
-        #             print(f'{name} is quant to int8')
-        #             m.weight.data = m.weight.data.t()
-        #             m.weight.data = m.weight.data.float()
-        #             if m.weight.data.shape[0] > m.weight.data.shape[1]:
-        #                 print('ugyu')
-        #                 m.my = torch.amin(m.weight.data, dim=1).unsqueeze(1)
-        #                 m.weight.data = m.weight.data - m.my
-        #                 m.mx = torch.amin(m.weight.data, dim=0)
-        #                 m.weight.data = m.weight.data - m.mx
-        #                 m.rx = torch.amax(m.weight.data, dim=0)
-        #                 m.weight.data = m.weight.data / m.rx
-        #                 m.ry = torch.amax(m.weight.data, dim=1).unsqueeze(1)
-        #                 m.weight.data = m.weight.data / m.ry
-        #             else:
-        #                 print('agi')
-        #                 m.mx = torch.amin(m.weight.data, dim=0)
-        #                 m.weight.data = m.weight.data - m.mx
-        #                 m.my = torch.amin(m.weight.data, dim=1).unsqueeze(1)
-        #                 m.weight.data = m.weight.data - m.my
-        #                 m.rx = torch.amax(m.weight.data, dim=0)
-        #                 m.weight.data = m.weight.data / m.rx
-        #                 m.ry = torch.amax(m.weight.data, dim=1).unsqueeze(1)
-        #                 m.weight.data = m.weight.data / m.ry
-        #             m.weight.data = torch.clip(torch.floor(m.weight.data * 256), min=0, max=255).to(dtype=torch.uint8)
-
-        #             m.my = m.my.to(dtype=torch.float16,device='cuda').contiguous()
-        #             m.mx = m.mx.to(dtype=torch.float16,device='cuda').contiguous()
-        #             m.rx = (m.rx/16).to(dtype=torch.float16,device='cuda').contiguous()
-        #             m.ry = (m.ry/16).to(dtype=torch.float16,device='cuda').contiguous()
-
-        #             m=m.to('cuda')#.contiguous()
-
-        #             m.weight.data = m.weight.data.contiguous()
-                    
-
-
-        #             #self.base_precision
-        #         else:
-        #             #if 'ln_in' in name or 'ln_out' in name or 'emb' in name or 'head' in name or 'ln1' in name or 'ln2' in name:
-        #             #    m=m.to('cuda',dtype=torch.bfloat16)
-        #             if (( 'receptance' in name or 'key' in name  or 'value' in name or  'value' in name or 'gate' in name or 'output' in name) and ('.att' in name or '.ffn' in name)) or 'head' == name:
-        #                 m=m.to('cuda',dtype=self.base_precision)#.t()
-        #                 m.weight.data = m.weight.data#.t().contiguous()
-        #                 print(f'special mode {name}')
-        #             else:
-        #                 m=m.to('cuda',dtype=torch.bfloat16)
-        #             print(f'Pass through to cuda:{name}')
+         
 
  
 
@@ -1361,10 +1337,9 @@ class RWKV6(nn.Module):
                 last_wkv_states: List[torch.Tensor]):
         if self.time_debug:
             start_time = time.time()
-        if idx.dtype != torch.int64:
-            x = idx.requires_grad_(False).to(device=self.emb.weight.device)
-        else:
-            x = self.emb(idx)
+
+        x = self.emb(idx)
+
         if self.time_debug:
             start_time1 = time.time()
         x = self.ln_in(x.to(dtype=self.ln_in.weight.dtype)) #.to(dtype=torch.bfloat16)
@@ -1417,11 +1392,11 @@ class RWKV6(nn.Module):
             time_lnin = start_time2 - start_time1
             time_emb = start_time1 - start_time
 
-            # print(f'time_emb = {time_emb*1000:0.3f}ms')    
-            # print(f'time_lnin = {time_lnin*1000:0.3f}ms')   
-            # print(f'time_block = {time_block*1000:0.3f}ms')   
-            # print(f'time_lnout = {time_lnout*1000:0.3f}ms')   
-            # print(f'time_head = {time_head*1000:0.3f}ms')   
+            print(f'time_emb = {time_emb*1000:0.3f}ms')    
+            print(f'time_lnin = {time_lnin*1000:0.3f}ms')   
+            print(f'time_block = {time_block*1000:0.3f}ms')   
+            print(f'time_lnout = {time_lnout*1000:0.3f}ms')   
+            print(f'time_head = {time_head*1000:0.3f}ms')   
         #print(x)
 
         return x, last_shift_states, last_wkv_states
