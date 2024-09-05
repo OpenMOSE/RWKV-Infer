@@ -146,7 +146,7 @@ def matmul(a, b, mx: Optional[torch.Tensor]=None, rx: Optional[torch.Tensor]=Non
     else:
         raise ValueError("Unsupported dtype")
 
-@torch.jit.ignore
+#@torch.jit.ignore
 class QuantLinear(nn.Module): # inspired by RWKV-PEFT @JL-er Thanks! 
     def __init__(self, in_features: int, out_features: int, bias: bool, precision=torch.float16 ):
         super().__init__()
@@ -425,28 +425,28 @@ class RWKV6_ChannelMix(torch.nn.Module):
         self.lastlayer = layer_id == n_layer - 1
 
         #self.cmix_jit1__
-        try:
-            self.cmix_jit1 = torch.compile(self.cmix_jit1__, mode="inductor", fullgraph=True, dynamic=False)
-            print('compiled')
-        except:
-            self.cmix_jit1 = torch.jit.script(self.cmix_jit1__)
-            print('cmix jit')
+        # try:
+        #     self.cmix_jit1 = torch.compile(self.cmix_jit1__, mode="inductor", fullgraph=True, dynamic=False)
+        #     print('compiled')
+        # except:
+        #     self.cmix_jit1 = torch.jit.script(self.cmix_jit1__)
+        #     print('cmix jit')
 
-        #cmix_jit2_bf16all__
-        try:
-            self.cmix_jit2_bf16all = torch.compile(self.cmix_jit2_bf16all__, mode="inductor", fullgraph=True, dynamic=False)
-            print('compiled')
-        except:
-            self.cmix_jit2_bf16all = torch.jit.script(self.cmix_jit2_bf16all__)
-            print('cmix2 jit')
+        # #cmix_jit2_bf16all__
+        # try:
+        #     self.cmix_jit2_bf16all = torch.compile(self.cmix_jit2_bf16all__, mode="inductor", fullgraph=True, dynamic=False)
+        #     print('compiled')
+        # except:
+        #     self.cmix_jit2_bf16all = torch.jit.script(self.cmix_jit2_bf16all__)
+        #     print('cmix2 jit')
 
-        #cmix_jit2_fp16all__
-        try:
-            self.cmix_jit2_fp16all = torch.compile(self.cmix_jit2_fp16all__, mode="inductor", fullgraph=True, dynamic=False)
-            print('compiled')
-        except:
-            self.cmix_jit2_fp16all = torch.jit.script(self.cmix_jit2_fp16all__)
-            print('cmix2 jit')
+        # #cmix_jit2_fp16all__
+        # try:
+        #     self.cmix_jit2_fp16all = torch.compile(self.cmix_jit2_fp16all__, mode="inductor", fullgraph=True, dynamic=False)
+        #     print('compiled')
+        # except:
+        #     self.cmix_jit2_fp16all = torch.jit.script(self.cmix_jit2_fp16all__)
+        #     print('cmix2 jit')
     # forwarding channel mix given the model weights and the input tokens and states.
     #
     # Given:
@@ -459,7 +459,8 @@ class RWKV6_ChannelMix(torch.nn.Module):
     # @torch.compile(backend="eager")
 
     #@MyStatic
-    def cmix_jit1__(x,last_state,time_maa_k,time_maa_r,precision):
+    @MyStatic
+    def cmix_jit1(x,last_state,time_maa_k,time_maa_r,precision):
         xx = torch.concat((last_state, x[:, :-1]),
                           dim=1).to(dtype=precision.dtype)
         last_state[:] = x[:, -1:]
@@ -469,7 +470,8 @@ class RWKV6_ChannelMix(torch.nn.Module):
         xr = xx * time_maa_r + x * (1 - time_maa_r)
         return xk,xr,last_state
     
-    def cmix_jit2_bf16all__(xk,xr,
+    @MyStatic    
+    def cmix_jit2_bf16all(xk,xr,
                           key_weight,
                           value_weight,
                           receptance_weight,
@@ -480,8 +482,8 @@ class RWKV6_ChannelMix(torch.nn.Module):
         return torch.sigmoid(
                                   xr.to(dtype=torch.bfloat16) @ receptance_weight.t()  
                                 ) * kv, last_state
-    
-    def cmix_jit2_fp16all__(xk,xr,
+    @MyStatic
+    def cmix_jit2_fp16all(xk,xr,
                           key_weight,
                           value_weight,
                           receptance_weight,
@@ -688,49 +690,49 @@ class RWKV6_TimeMix(torch.nn.Module):
         self.ctx = 1024#saveBackDummy()
 
         #self.jit_func_parts__
-        try:
-            self.jit_func_parts = torch.compile(self.jit_func_parts__, mode="inductor", fullgraph=True, dynamic=False)
-            print('compiled')
-        except:
-            self.jit_func_parts = torch.jit.script(self.jit_func_parts__)
-            print('jit')
+        # try:
+        #     self.jit_func_parts = torch.compile(self.jit_func_parts__, mode="inductor", fullgraph=True, dynamic=False)
+        #     print('compiled')
+        # except:
+        #     self.jit_func_parts = torch.jit.script(self.jit_func_parts__)
+        #     print('jit')
 
-        #jit_ln_x_fp16bf16__
-        try:
-            self.jit_ln_x_fp16bf16 = torch.compile(self.jit_ln_x_fp16bf16__, mode="inductor", fullgraph=True, dynamic=False)
-            print('compiled')
-        except:
-            self.jit_ln_x_fp16bf16 = torch.jit.script(self.jit_ln_x_fp16bf16__)
-            print('jit')
+        # #jit_ln_x_fp16bf16__
+        # try:
+        #     self.jit_ln_x_fp16bf16 = torch.compile(self.jit_ln_x_fp16bf16__, mode="inductor", fullgraph=True, dynamic=False)
+        #     print('compiled')
+        # except:
+        #     self.jit_ln_x_fp16bf16 = torch.jit.script(self.jit_ln_x_fp16bf16__)
+        #     print('jit')
 
-        #jit_func_parts2_bf16__
-        try:
-            self.jit_func_parts2_bf16 = torch.compile(self.jit_func_parts2_bf16__, mode="inductor", fullgraph=True, dynamic=False)
-            print('compiled')
-        except:
-            self.jit_func_parts2_bf16 = torch.jit.script(self.jit_func_parts2_bf16__)
-            print('jit')
-        #jit_func_parts2_fp16__
-        try:
-            self.jit_func_parts2_fp16 = torch.compile(self.jit_func_parts2_fp16__, mode="inductor", fullgraph=True, dynamic=False)
-            print('compiled')
-        except:
-            self.jit_func_parts2_fp16 = torch.jit.script(self.jit_func_parts2_fp16__)
-            print('jit')
+        # #jit_func_parts2_bf16__
+        # try:
+        #     self.jit_func_parts2_bf16 = torch.compile(self.jit_func_parts2_bf16__, mode="inductor", fullgraph=True, dynamic=False)
+        #     print('compiled')
+        # except:
+        #     self.jit_func_parts2_bf16 = torch.jit.script(self.jit_func_parts2_bf16__)
+        #     print('jit')
+        # #jit_func_parts2_fp16__
+        # try:
+        #     self.jit_func_parts2_fp16 = torch.compile(self.jit_func_parts2_fp16__, mode="inductor", fullgraph=True, dynamic=False)
+        #     print('compiled')
+        # except:
+        #     self.jit_func_parts2_fp16 = torch.jit.script(self.jit_func_parts2_fp16__)
+        #     print('jit')
 
-        #jit_ln_x_bf16all__
-        try:
-            self.jit_ln_x_bf16all = torch.compile(self.jit_ln_x_bf16all__, mode="inductor", fullgraph=True, dynamic=False)
-            print('compiled')
-        except:
-            self.jit_ln_x_bf16all = torch.jit.script(self.jit_ln_x_bf16all__)
-            print('jit')
+        # #jit_ln_x_bf16all__
+        # try:
+        #     self.jit_ln_x_bf16all = torch.compile(self.jit_ln_x_bf16all__, mode="inductor", fullgraph=True, dynamic=False)
+        #     print('compiled')
+        # except:
+        #     self.jit_ln_x_bf16all = torch.jit.script(self.jit_ln_x_bf16all__)
+        #     print('jit')
     
 
 
     
-    #@MyStatic  
-    def jit_func_parts__(x, last_state_shift,
+    @MyStatic  
+    def jit_func_parts(x, last_state_shift,
                        time_maa_x,
                        time_maa_w1,
                        time_maa_w2,
@@ -766,7 +768,8 @@ class RWKV6_TimeMix(torch.nn.Module):
 
         return xw,xk,xv,xr,xg,ww,w
     
-    def jit_func_parts2_bf16__(xw,xk,xv,xr,xg,
+    @MyStatic
+    def jit_func_parts2_bf16(xw,xk,xv,xr,xg,
                              receptance_weight,
                              key_weight,
                              value_weight,
@@ -778,8 +781,8 @@ class RWKV6_TimeMix(torch.nn.Module):
         g = torch.nn.functional.silu((xg.to(dtype=torch.bfloat16) @ gate_weight.t()))
 
         return r, k, v, g
-    
-    def jit_func_parts2_fp16__(xw,xk,xv,xr,xg,
+    @MyStatic
+    def jit_func_parts2_fp16(xw,xk,xv,xr,xg,
                              receptance_weight,
                              key_weight,
                              value_weight,
@@ -841,11 +844,12 @@ class RWKV6_TimeMix(torch.nn.Module):
                                             rx=self.gate.rx,
                                             ry=self.gate.ry,))
         return r, k, v, g
-    
-    def jit_ln_x_fp16bf16__(x,dim_head:int,ln_x_weight,ln_x_bias):
+    @MyStatic
+    def jit_ln_x_fp16bf16(x,dim_head:int,ln_x_weight,ln_x_bias):
         x = torch.nn.functional.group_norm(x,num_groups = dim_head, weight=ln_x_weight,bias=ln_x_bias, eps= 64e-5)
         return x
-    def jit_ln_x_bf16all__(B:int,T:int,C:int,x,g,dim_head:int,ln_x_weight,ln_x_bias,
+    @MyStatic
+    def jit_ln_x_bf16all(B:int,T:int,C:int,x,g,dim_head:int,ln_x_weight,ln_x_bias,
                            output_weight,
                            ):
         x = torch.nn.functional.group_norm(x,num_groups = dim_head, weight=ln_x_weight,bias=ln_x_bias, eps= 64e-5).view(B, T, C)
