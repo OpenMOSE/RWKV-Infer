@@ -1,4 +1,10 @@
-# RWKV-Infer with Flash-Linear-Attention
+# RWKV-Infer
+<p align='center'>
+<image src="kotori.webp" />
+    
+</p>
+
+<div align="center"> 
 
 ## Implement - Multi Recurrent State Sampling (MRSS)
    - 1. For a single model, we apply multiple RNN timestates and set Gating Weights. We perform inference for each of these states, merge the resulting probability spaces using the Gating Weights, and then sample from this merged space. This enables inference that takes into account the learning results from multiple states.

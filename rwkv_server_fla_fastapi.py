@@ -69,8 +69,8 @@ def add_to_dynamic_state_list(text_prompt,target_state_filename,raw_state,raw_st
         text_prompt = re.sub(r'\n{3,}', '\n\n', text_prompt)
         if args.debug == True:
             print(f'Added DynamicStateList a = {len(text_prompt)} ')
-        if args.dynamic_state_cache_store == 'cpu':
-            DynamicStateList.append({'text_prompt':text_prompt,'target_state_filename':target_state_filename,'raw_state': copy.deepcopy(move_tensors_to_cpu(raw_state)),'raw_state2': copy.deepcopy(move_tensors_to_cpu(raw_state2))})
+        if args.dynamic_state_cache_store == 'cpu': #copy.deepcopy
+            DynamicStateList.append({'text_prompt':text_prompt,'target_state_filename':target_state_filename,'raw_state': (move_tensors_to_cpu(raw_state)),'raw_state2': (move_tensors_to_cpu(raw_state2))})
             raw_state = None
             raw_state2 = None
 

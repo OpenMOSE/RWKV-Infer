@@ -240,6 +240,7 @@ class LLMWorker:
                         #print(data)
                         
                         self.llM_current_batch_info[i] = copy.deepcopy(data)
+                        del data
                         
                         self.proceed_total_batches = self.proceed_total_batches + 1
                         if self.proceed_total_batches > 2000000000:
