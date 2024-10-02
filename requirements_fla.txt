@@ -4,7 +4,7 @@ fastapi
 starlette
 uvicorn
 numpy
-triton==2.2.0
+triton
 bitsandbytes
 einops
 transformers
