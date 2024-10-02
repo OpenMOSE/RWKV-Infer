@@ -12,7 +12,7 @@ A lightweight RWKV inference platform that operates in Cuda and Rocm environment
 
 - **Multi Recurrent State Sampling**: 
 
-  MRSS (Multiple Recurrent State Sampling) is a novel method for LLM inference that combines multiple fine-tuned states with fixed gating weights to achieve more flexible and effective inference.
+  MRSS (Multi Recurrent State Sampling) is a novel method for LLM inference that combines multiple fine-tuned states with fixed gating weights to achieve more flexible and effective inference.
    - Pseudo Mixture of State Experts:
 By combining multiple states, MRSS integrates knowledge from different "experts," generating richer outputs.
 
