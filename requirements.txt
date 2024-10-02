@@ -1,6 +1,0 @@
-ninja
-pandas
-fastapi
-starlette
-uvicorn
-numpy
