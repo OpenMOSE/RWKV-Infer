@@ -1,5 +1,7 @@
 models/
 states/
+experiment/
+__pycache__/
 fla/__pycache__/__init__.cpython-310.pyc
 fla/__pycache__/utils.cpython-310.pyc
 fla/layers/__pycache__/__init__.cpython-310.pyc

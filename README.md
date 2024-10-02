@@ -1,18 +1,43 @@
-# RWKV-Infer with Flash-Linear-Attention
+# RWKV-Infer
+<p align='center'>
+<image src="kotori.webp" width=20%/>
+    
+</p>
 
-## Implement - Multi Recurrent State Sampling (MRSS)
-   - 1. For a single model, we apply multiple RNN timestates and set Gating Weights. We perform inference for each of these states, merge the resulting probability spaces using the Gating Weights, and then sample from this merged space. This enables inference that takes into account the learning results from multiple states.
-   - 2. By utilizing FLA (Flash Linear Attention) for simultaneous multiple inferences, we can minimize the processing speed reduction even when applying MRSS.
-   - 3. For example, by using MRSS to perform inference with both a TimeState tuned for specialized knowledge and a TimeState tuned for conversational tone, it becomes possible to achieve inference that balances both knowledge and tone.
-   - 4. The Gating Weights in MRSS can be adjusted for each inference batch. This allows for dynamic control of the dependency ratio for each State. In the future, we plan to implement dynamic Gating Weight adjustment using a neural network.
+<div align="center"> 
+A lightweight RWKV inference platform that operates in Cuda and Rocm environments, supporting multi-batch inference.
+</div>
 
-![mrss](mrss.png)
+## Key Features
+
+- **Multi Recurrent State Sampling**: 
+
+  MRSS (Multi Recurrent State Sampling) is a novel method for LLM inference that combines multiple fine-tuned states with fixed gating weights to achieve more flexible and effective inference.
+   - Pseudo Mixture of State Experts:
+By combining multiple states, MRSS integrates knowledge from different "experts," generating richer outputs.
+
+   - Separation of elements: Allows fine-tuning of knowledge, emotions, and speaking styles independently.
+
+   - State reusability: Enables efficient creation of new models through state recombination.
+
+- **Quantization Support**:
+  - Int8 (only CUDA)
+  - Bitsandbytes NF4 (currently slow)
+- **Multi Batch Generation**:
+  - True multi batch generation with Flash-Linear-Attention
+  - multi batch sampling
+  - On an RTX4090, a 7B parameter model can run over 256 batches of inference.
+
+---
+
+> Accelerate your RWKV model inference with RWKV-Infer!
+
 
 ## How To Use
    - 1. Install Latest? Pytorch with Cuda(2.2+ tested)
-   - 2. install requirements with triton==2.2.0
+   - 2. install requirements with triton==2.2.0+(in rocm >=3.0.0)
 ```sh
-pip install -r requirements.txt
+pip install -r requirements_fla.txt
 ```    
    - 3. prepare models in models folder
    - 4. prepare states in states folder
@@ -58,8 +83,6 @@ curl http://127.0.0.1:9000/models -X GET
 
 ## ToDo for me
    - Improve FLA Stability on bf16 - maybe done.
-   - Implement Multi Recurrent State Sampling - in experiment
-   - Implement MRSS GatingLayer in coding.
-   - Speculative Decoding - In Experiment. but currently suspended.
+   - Implement Multi Recurrent State Sampling - done.
    
 2024 OpenMOSE

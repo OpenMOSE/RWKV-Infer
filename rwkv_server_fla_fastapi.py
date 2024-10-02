@@ -4,7 +4,7 @@
 #Modified Dynamic State Cache (wkv-state and shift-state)
 #Multi Recurrent State Sampling Ver
 import os
-from rwkvinfer_fla import prompt_queue,LLMWorker,Prompt,PromptStatus
+from rwkvengine.rwkvinfer_fla import prompt_queue,LLMWorker,Prompt,PromptStatus
 import pandas as pd
 import asyncio
 import json
@@ -69,8 +69,8 @@ def add_to_dynamic_state_list(text_prompt,target_state_filename,raw_state,raw_st
         text_prompt = re.sub(r'\n{3,}', '\n\n', text_prompt)
         if args.debug == True:
             print(f'Added DynamicStateList a = {len(text_prompt)} ')
-        if args.dynamic_state_cache_store == 'cpu':
-            DynamicStateList.append({'text_prompt':text_prompt,'target_state_filename':target_state_filename,'raw_state': copy.deepcopy(move_tensors_to_cpu(raw_state)),'raw_state2': copy.deepcopy(move_tensors_to_cpu(raw_state2))})
+        if args.dynamic_state_cache_store == 'cpu': #copy.deepcopy
+            DynamicStateList.append({'text_prompt':text_prompt,'target_state_filename':target_state_filename,'raw_state': (move_tensors_to_cpu(raw_state)),'raw_state2': (move_tensors_to_cpu(raw_state2))})
             raw_state = None
             raw_state2 = None
 
@@ -141,7 +141,7 @@ params_base = {
             "frequency_penalty": 0.5,
             "penalty_decay": 0.996,
             "half_life": 400,
-            "stop": ['\x00','\n\n']
+            "stop": ['\x17','\n\n'] #\n\n
         }
 @app.post("/removemodel")
 async def removemodel():
@@ -190,18 +190,18 @@ async def loadmodel(request: Request):
         #wrappers[0].load_model(model_filename,model_strategy)
         Quant = False
         precision = ''
-        if model_strategy == 'quantfp16':
-            Quant = True
-            precision = 'fp16'
-        if model_strategy == 'quantfp16i8':
-            Quant = True
-            precision = 'fp16int8'
-        if model_strategy == 'quantbf16':
-            Quant = True
-            precision = ''
-        if model_strategy == 'quantbf16i8':
-            Quant = True
-            precision = 'int8'
+        # if model_strategy == 'quantfp16':
+        #     Quant = True
+        #     precision = 'fp16'
+        # if model_strategy == 'quantfp16i8':
+        #     Quant = True
+        #     precision = 'fp16int8'
+        # if model_strategy == 'quantbf16':
+        #     Quant = True
+        #     precision = ''
+        # if model_strategy == 'quantbf16i8':
+        #     Quant = True
+        #     precision = 'int8'
         if model_strategy == 'fp16':
             Quant = False
             precision = 'fp16'
@@ -211,9 +211,15 @@ async def loadmodel(request: Request):
         if model_strategy == 'bf16i8':
             Quant = False
             precision = 'int8'
-        if model_strategy == 'quant':
-            Quant = True
-            precision = ''
+        if model_strategy == 'int8':
+            Quant = False
+            precision = 'fp16int8'
+        if model_strategy == 'nf4':
+            Quant = False
+            precision = 'nf4'
+        # if model_strategy == 'quant':
+        #     Quant = True
+        #     precision = ''
 
         StateList = None
         StateList = []
@@ -466,9 +472,14 @@ async def rwkv_completions(request: Request):
 
     mrss_gatingweight = data.get('mrss_gatingweight',None)    
 
+    input_logits_record = data.get('input_logits_record',False)
+
     model = data.get('model')
     state = data.get('state','')
     stream = data.get('stream', False)
+
+    if stream == True and input_logits_record == True:
+        input_logits_record = False
 
     delete_ragprompt = data.get('delete_ragprompt',False)
     minimum_gen_count = data.get('minimum_gen_count',1)
@@ -705,6 +716,7 @@ async def rwkv_completions(request: Request):
     QueryDatas.temperature = temperature
     QueryDatas.top_p = top_p
     QueryDatas.endtoken = stop
+    QueryDatas.input_logits_record = input_logits_record
 
     def handle_stream_disconnection(f):
         @wraps(f)
@@ -845,6 +857,6 @@ async def main():
     )
 
 if __name__ == '__main__':
-    print('RWKV Infer v0.0.2 with Flash-Linear-Attention')
+    print('RWKV Infer v0.1.0 with Flash-Linear-Attention')
     asyncio.run(main())
     

@@ -13,9 +13,13 @@ import copy
 import gc
 import copy
 import time
+import os
 
-from rwkv6fla import PIPELINE, RWKV6
+#os.sched_setaffinity(0, {0, 1, 2, 3})
 
+#from rwkv6fla import PIPELINE, RWKV6 as RWKV_6
+from rwkvengine.rwkvcore import RWKV_6
+from rwkvengine.misc import PIPELINE
 
 
 lock = asyncio.Lock()
@@ -44,6 +48,8 @@ class Prompt:
     fixed_state_count: int = 0
     use_contain_originalstate: bool = False
     mrss_gating_param: List[float] = field(default_factory=lambda: [0.0,0.0,0.0,0.0])
+    input_logits: List[torch.Tensor] = field(default_factory=list)
+    input_logits_record:bool = False
 
 
 
@@ -139,7 +145,7 @@ class LLMWorker:
         self.model = None
         gc.collect()
         torch.cuda.empty_cache()
-        self.model = RWKV6(modelpath,quantize=quantize,base_precision=precision)
+        self.model = RWKV_6(modelpath,quantize=quantize,base_precision=precision)
         gc.collect()
         torch.cuda.empty_cache()
         print('model loaded')
@@ -173,7 +179,7 @@ class LLMWorker:
                 yield "", copy.deepcopy(prompt_queue.prompts[queue_id].use_exist_state_wkv.to('cpu')), copy.deepcopy(prompt_queue.prompts[queue_id].use_exist_state_shift.to('cpu'))
                 prompt_queue.prompts[queue_id] = None
                 break
-            await asyncio.sleep(0.05)
+            await asyncio.sleep(0.01)
 
 
 
@@ -213,6 +219,8 @@ class LLMWorker:
                                 'wkv_states' : prompt.use_exist_state_wkv,
                                 'shift_states' : prompt.use_exist_state_shift,
                                 'current_prob' : None,
+                                'input_logits' : [],
+                                'input_logits_record' : prompt.input_logits_record,
                                 'output':'',
                                 'out_tokens':[],
                                 'out_last':0,
@@ -232,6 +240,7 @@ class LLMWorker:
                         #print(data)
                         
                         self.llM_current_batch_info[i] = copy.deepcopy(data)
+                        del data
                         
                         self.proceed_total_batches = self.proceed_total_batches + 1
                         if self.proceed_total_batches > 2000000000:
@@ -240,7 +249,7 @@ class LLMWorker:
 
                     
             
-            await asyncio.sleep(0.03) # Everyone 10ms loop
+            await asyncio.sleep(0.1) # Everyone 10ms loop
 
 
     async def RunLLM(self):
@@ -269,6 +278,8 @@ class LLMWorker:
                     b_wkv_states = []
                     b_shift_states = []
                     mrss_info = []
+                    input_logits = []
+                    input_logits_record = []
                     token_max = self.llm_batch_chunk
                     #for work in self.llM_current_batch_info:
                     #    if work['proceedtokens'] < len(work['prompt']):
@@ -289,6 +300,8 @@ class LLMWorker:
                                 prompts_ids.append(work['prompt_id'])
                                 b_wkv_states.append(work['wkv_states'])
                                 b_shift_states.append(work['shift_states'])
+                                input_logits.append(work['input_logits'])
+                                input_logits_record.append(work['input_logits_record'])
                                 mrss_info.append({'use_contain_originalstate':work['use_contain_originalstate'], # True or False
                                                   'use_mrss':work['use_mrss'], # True or False
                                                   'mrss_gating_param':work['mrss_gating_param'], # gating params list
@@ -462,17 +475,22 @@ class LLMWorker:
                                                   'mrss_gating_param':work['mrss_gating_param'], # gating params list
                                                   'mrss_state_count':work['mrss_state_count'],
                                                   })
-                                #outputs.append(work['output'])
+
                     if self.time_debug:
                         start_time1 = time.time()
+
                     if len(token_ids) > 0:
                         otokens = []
                         NowRealBatchPosition = 0
                         realbatchcount = 0
+
+
+                        #New Implement MultiBatch Sampling
+
+                        BatchProbs = []
                         for j in range(len(token_ids)):
                             if start_times[j] is None:
-                                start_times[j] = time.time()
-                            #x[j][0][0] -= 1e10
+                                 start_times[j] = time.time()
 
                             if mrss_info[j]['use_mrss'] == True: #MRSS mode
                                 realbatchcount = realbatchcount + mrss_info[j]['mrss_state_count']
@@ -489,7 +507,7 @@ class LLMWorker:
                                 #print(f'mrss_state_count = {mrss_state_count}')
                                 for k in range(mrss_state_count):
                                     for n in occurrence[j]:
-                                        current_prob[j][k][-1][n] -= 0 + occurrence[j][n] * 1.0
+                                        current_prob[j][k][-1][n] -= 0 + occurrence[j][n] * 2.0
                                     #print(f'current_prob[j] length = {len(current_prob[j])}')
                                     current_prob[j][k][-1][0] -= 1e10
                                     if logits_combined is None:
@@ -500,38 +518,97 @@ class LLMWorker:
                                         totalweight = totalweight + mrss_info[j]['mrss_gating_param'][k]
 
                                 logits_combined = logits_combined / totalweight
-
-                                #print(f'logits_combined = {logits_combined}')
-
-                                if self.time_debug:
-                                    start_time_sample = time.time()
-                                tk = self.pipeline.improved_nucleus_sampling(logits_combined, temperature=float(temperature[j]), top_p=top_p[j])
-                                if self.time_debug:
-                                    start_time_sample1 = time.time()
-
-                                for xxx in occurrence[j]:
-                                    occurrence[j][xxx] *= 0.996
-                                occurrence[j][tk] = 1 + (occurrence[j][tk] if tk in occurrence[j] else 0)
-                                otokens.append(tk)
-
-                            else: # Normal Mode
+                                BatchProbs.append(logits_combined)
+                            else:
                                 realbatchcount = realbatchcount + 1
 
                                 for n in occurrence[j]:
                                     current_prob[j][-1][n] -= 0 + occurrence[j][n] * 1.0
-                            # 
-                                current_prob[j][-1][0] -= 1e10
-                                if self.time_debug:
-                                    start_time_sample = time.time()
-                                    print(f'current_prob dtype = {current_prob[j].dtype} current_prob.shape = {current_prob[j].shape} current_prob.device = {current_prob[j].device}')
-                                tk = self.pipeline.improved_nucleus_sampling(current_prob[j][-1], temperature=float(temperature[j]), top_p=top_p[j])
-                                if self.time_debug:
-                                    start_time_sample1 = time.time()
 
-                                for xxx in occurrence[j]:
+                                current_prob[j][-1][0] -= 1e10 
+
+                                BatchProbs.append(current_prob[j][-1])
+                        
+                        #Batch Sampling
+                        #BatchProbs[:, 0] -= 1e10
+                        BatchProbs = torch.stack(BatchProbs)
+                        otokens = self.pipeline.improved_nucleus_sampling_multi(BatchProbs, temperature=temperature, top_p=top_p)
+
+                        for j in range(len(token_ids)):
+                            for xxx in occurrence[j]:
                                     occurrence[j][xxx] *= 0.996
-                                occurrence[j][tk] = 1 + (occurrence[j][tk] if tk in occurrence[j] else 0)
-                                otokens.append(tk)
+                            tk = otokens[j]
+                            occurrence[j][tk] = 1 + (occurrence[j][tk] if tk in occurrence[j] else 0)
+
+  
+
+
+
+
+
+                        # for j in range(len(token_ids)):
+                        #     if start_times[j] is None:
+                        #         start_times[j] = time.time()
+                        #     #x[j][0][0] -= 1e10
+
+                        #     if mrss_info[j]['use_mrss'] == True: #MRSS mode
+                        #         realbatchcount = realbatchcount + mrss_info[j]['mrss_state_count']
+                        #         mrss_state_count = mrss_info[j]['mrss_state_count']
+                                
+                        #         if len(mrss_info[j]['mrss_gating_param']) <  mrss_state_count:
+                        #             current_gating_param_count  = len(mrss_info[j]['mrss_gating_param'])
+                        #             for k in range(mrss_state_count - current_gating_param_count):
+                        #                 mrss_info[j]['mrss_gating_param'].append(0.0) #add dummy gating weight
+                        #         #print(f"Current GatingWeightCount = {len(mrss_info[j]['mrss_gating_param'])}")
+
+                        #         logits_combined = None
+                        #         totalweight = 0
+                        #         #print(f'mrss_state_count = {mrss_state_count}')
+                        #         for k in range(mrss_state_count):
+                        #             for n in occurrence[j]:
+                        #                 current_prob[j][k][-1][n] -= 0 + occurrence[j][n] * 2.0
+                        #             #print(f'current_prob[j] length = {len(current_prob[j])}')
+                        #             current_prob[j][k][-1][0] -= 1e10
+                        #             if logits_combined is None:
+                        #                 logits_combined = current_prob[j][k][-1] * mrss_info[j]['mrss_gating_param'][k]
+                        #                 totalweight = totalweight + mrss_info[j]['mrss_gating_param'][k]
+                        #             else:
+                        #                 logits_combined = logits_combined + current_prob[j][k][-1] * mrss_info[j]['mrss_gating_param'][k]
+                        #                 totalweight = totalweight + mrss_info[j]['mrss_gating_param'][k]
+
+                        #         logits_combined = logits_combined / totalweight
+
+                        #         #print(f'logits_combined = {logits_combined}')
+
+                        #         if self.time_debug:
+                        #             start_time_sample = time.time()
+                        #         tk = self.pipeline.improved_nucleus_sampling(logits_combined, temperature=float(temperature[j]), top_p=top_p[j])
+                        #         if self.time_debug:
+                        #             start_time_sample1 = time.time()
+
+                        #         for xxx in occurrence[j]:
+                        #             occurrence[j][xxx] *= 0.996
+                        #         occurrence[j][tk] = 1 + (occurrence[j][tk] if tk in occurrence[j] else 0)
+                        #         otokens.append(tk)
+
+                        #     else: # Normal Mode
+                        #         realbatchcount = realbatchcount + 1
+
+                        #         for n in occurrence[j]:
+                        #             current_prob[j][-1][n] -= 0 + occurrence[j][n] * 1.0
+                        #     # 
+                        #         current_prob[j][-1][0] -= 1e10
+                        #         if self.time_debug:
+                        #             start_time_sample = time.time()
+                        #             print(f'current_prob dtype = {current_prob[j].dtype} current_prob.shape = {current_prob[j].shape} current_prob.device = {current_prob[j].device}')
+                        #         tk = self.pipeline.improved_nucleus_sampling(current_prob[j][-1], temperature=float(temperature[j]), top_p=top_p[j])
+                        #         if self.time_debug:
+                        #             start_time_sample1 = time.time()
+
+                        #         for xxx in occurrence[j]:
+                        #             occurrence[j][xxx] *= 0.996
+                        #         occurrence[j][tk] = 1 + (occurrence[j][tk] if tk in occurrence[j] else 0)
+                        #         otokens.append(tk)
 
 
 
@@ -758,4 +835,4 @@ class LLMWorker:
 
 
 
-            await asyncio.sleep(0.001) # Every 1ms
+            await asyncio.sleep(0.00001) # Every 1ms
