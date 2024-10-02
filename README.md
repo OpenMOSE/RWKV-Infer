@@ -23,11 +23,14 @@ By combining multiple states, MRSS integrates knowledge from different "experts,
 - **Quantization Support**:
   - Int8 (only CUDA)
   - Bitsandbytes NF4 (currently slow)
+- **Multi Batch Generation**:
+  - True multi batch generation with Flash-Linear-Attention
+  - multi batch sampling
+  - On an RTX4090, a 7B parameter model can run over 256 batches of inference.
 
 ---
 
 > Accelerate your RWKV model inference with RWKV-Infer!
-
 
 
 ## How To Use
