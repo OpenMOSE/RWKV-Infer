@@ -10,14 +10,19 @@ A lightweight RWKV inference platform that operates in Cuda and Rocm environment
 
 ## Key Features
 
-- **Multi Recurrent State Sampling**: Combine multiple fine-tuned states within a single batch. This allows for the integration of separately fine-tuned elements such as:
-  - Knowledge
-  - Emotions
-  - Speaking styles
+- **Multi Recurrent State Sampling**: 
+
+  MRSS (Multiple Recurrent State Sampling) is a novel method for LLM inference that combines multiple fine-tuned states with fixed gating weights to achieve more flexible and effective inference.
+   - Pseudo Mixture of State Experts:
+By combining multiple states, MRSS integrates knowledge from different "experts," generating richer outputs.
+
+   - Separation of elements: Allows fine-tuning of knowledge, emotions, and speaking styles independently.
+
+   - State reusability: Enables efficient creation of new models through state recombination.
 
 - **Quantization Support**:
-  - Int8
-  - NF4 (currently slow)
+  - Int8 (only CUDA)
+  - Bitsandbytes NF4 (currently slow)
 
 ---
 
@@ -75,8 +80,6 @@ curl http://127.0.0.1:9000/models -X GET
 
 ## ToDo for me
    - Improve FLA Stability on bf16 - maybe done.
-   - Implement Multi Recurrent State Sampling - in experiment
-   - Implement MRSS GatingLayer in coding.
-   - Speculative Decoding - In Experiment. but currently suspended.
+   - Implement Multi Recurrent State Sampling - done.
    
 2024 OpenMOSE
