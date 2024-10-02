@@ -6,6 +6,7 @@
 
 <div align="center"> 
 A lightweight RWKV inference platform that operates in Cuda and Rocm environments, supporting multi-batch inference.
+</div>
 
 ## Key Features
 
