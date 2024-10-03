@@ -31,11 +31,11 @@ from rwkvengine.matmularena import custom_matmul
 torch.backends.cudnn.benchmark = True
 torch.backends.cudnn.allow_tf32 = True
 torch.backends.cuda.matmul.allow_tf32 = True
-torch.backends.cuda.matmul.allow_fp16_reduced_precision_reduction = True
-torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction = True
-torch._C._jit_set_autocast_mode(False)
+#torch.backends.cuda.matmul.allow_fp16_reduced_precision_reduction = True
+#torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction = True
+#torch._C._jit_set_autocast_mode(False)
 
-torch._dynamo.config.suppress_errors = True
+#torch._dynamo.config.suppress_errors = True
 
 
 MyStatic = torch.jit.script
@@ -252,38 +252,35 @@ class RWKV_6(nn.Module):
                     if k.endswith(QuantKey):
                         print(f'Quant {k} to torch.float8_e4m3fn')
                         QuantKeyFound = True
-                        #if 'ffn.value.weight' in k:
-                        #    print(f'{k} is halfed')
-                        #    #z[k] = z[k] * 0.5
-                        z[k] = z[k].to(device='cuda',dtype=torch.float8_e4m3fn) 
-                        #z[k], z[k+'.qstate']= bnb.functional.quantize_nf4(z[k])
+                        z[k] = z[k].to(device='cuda',dtype=torch.float8_e4m3fn).contiguous() 
+                       
                 if QuantKeyFound == False:
                     for QuantKey in QuantList:
                         if k.endswith(QuantKey):
                             print(f'Quant {k} PassThrough')
                             QuantKeyFound = True
-                            z[k] = z[k].to(device='cuda',dtype = self.base_precision).t()
+                            z[k] = z[k].to(device='cuda',dtype = self.base_precision).t().contiguous() 
                         
 
                 if QuantKeyFound == False:
                     z[k] = z[k].to(device='cuda')
-                    if k.endswith('.time_decay'): z[k] = z[k].float()
-                    elif k.endswith('.time_faaaa'): z[k] = z[k].float()
-                    #elif k.endswith('.ln1.weight'): z[k] = z[k].to(dtype=torch.bfloat16)
-                    #elif k.endswith('.ln1.bias'): z[k] = z[k].to(dtype=torch.bfloat16)
-                    #elif k.endswith('.ln2.weight'): z[k] = z[k].to(dtype=torch.bfloat16)
-                    #elif k.endswith('.ln2.bias'): z[k] = z[k].to(dtype=torch.bfloat16)
-                    elif k.endswith('.ln_x.weight'): z[k] = z[k].to(dtype=torch.bfloat16)
-                    elif k.endswith('.ln_x.bias'): z[k] = z[k].to(dtype=torch.bfloat16)
-                    elif k.endswith('blocks.0.ln0.weight'): z[k] = z[k].to(dtype=torch.bfloat16)
-                    elif k.endswith('blocks.0.ln0.bias'): z[k] = z[k].to(dtype=torch.bfloat16)
-                    elif k.endswith('ln_out.weight'): z[k] = z[k].to(dtype=torch.bfloat16)
-                    elif k.endswith('ln_out.bias'): z[k] = z[k].to(dtype=torch.bfloat16)
-                    elif k.endswith('emb.weight'): z[k] = z[k].to(dtype=torch.bfloat16)
+                    if k.endswith('.time_decay'): z[k] = z[k].float().contiguous() 
+                    elif k.endswith('.time_faaaa'): z[k] = z[k].float().contiguous() 
+                    elif k.endswith('.ln1.weight'): z[k] = z[k].to(dtype=torch.bfloat16)
+                    elif k.endswith('.ln1.bias'): z[k] = z[k].to(dtype=torch.bfloat16)
+                    elif k.endswith('.ln2.weight'): z[k] = z[k].to(dtype=torch.bfloat16)
+                    elif k.endswith('.ln2.bias'): z[k] = z[k].to(dtype=torch.bfloat16)
+                    elif k.endswith('.ln_x.weight'): z[k] = z[k].to(dtype=torch.bfloat16).contiguous() 
+                    elif k.endswith('.ln_x.bias'): z[k] = z[k].to(dtype=torch.bfloat16).contiguous() 
+                    elif k.endswith('blocks.0.ln0.weight'): z[k] = z[k].to(dtype=torch.bfloat16).contiguous() 
+                    elif k.endswith('blocks.0.ln0.bias'): z[k] = z[k].to(dtype=torch.bfloat16).contiguous() 
+                    elif k.endswith('ln_out.weight'): z[k] = z[k].to(dtype=torch.bfloat16).contiguous() 
+                    elif k.endswith('ln_out.bias'): z[k] = z[k].to(dtype=torch.bfloat16).contiguous() 
+                    elif k.endswith('emb.weight'): z[k] = z[k].to(dtype=torch.bfloat16).contiguous() 
                     else:
-                        z[k] = z[k].to(dtype = self.base_precision)
+                        z[k] = z[k].to(dtype = self.base_precision).contiguous() 
 
-            time.sleep(2)
+            #time.sleep(2)
             #exit()
 
         # 8bit Quantize Mode via Custom Kernel
@@ -345,32 +342,32 @@ class RWKV_6(nn.Module):
                 z[k] = z[k].to(device='cuda')
                 if k.endswith('.time_decay'): z[k] = z[k].float()
                 elif k.endswith('.time_faaaa'): z[k] = z[k].float()
-                elif k.endswith('.receptance.weight'): z[k] = z[k].t().to(dtype = self.base_precision)
-                elif k.endswith('.key.weight'): z[k] = z[k].t().to(dtype = self.base_precision)
-                elif k.endswith('.value.weight'): z[k] = z[k].t().to(dtype = self.base_precision)
-                elif k.endswith('.gate.weight'): z[k] = z[k].t().to(dtype = self.base_precision)
-                elif k.endswith('.output.weight'): z[k] = z[k].t().to(dtype = self.base_precision)
-                elif k.endswith('head.weight'): z[k] = z[k].t().to(dtype = self.base_precision)
+                elif k.endswith('.receptance.weight'): z[k] = z[k].to(dtype = self.base_precision).contiguous() 
+                elif k.endswith('.key.weight'): z[k] = z[k].to(dtype = self.base_precision).contiguous() 
+                elif k.endswith('.value.weight'): z[k] = z[k].to(dtype = self.base_precision).contiguous() 
+                elif k.endswith('.gate.weight'): z[k] = z[k].to(dtype = self.base_precision).contiguous() 
+                elif k.endswith('.output.weight'): z[k] = z[k].to(dtype = self.base_precision).contiguous() 
+                elif k.endswith('head.weight'): z[k] = z[k].to(dtype = self.base_precision).contiguous() 
 
                 #elif k.endswith('.ln1.weight'): z[k] = z[k].to(dtype=torch.bfloat16)
                 #elif k.endswith('.ln1.bias'): z[k] = z[k].to(dtype=torch.bfloat16)
                 #elif k.endswith('.ln2.weight'): z[k] = z[k].to(dtype=torch.bfloat16)
                 #elif k.endswith('.ln2.bias'): z[k] = z[k].to(dtype=torch.bfloat16)
 
-                elif k.endswith('.ln_x.weight'): z[k] = z[k].to(dtype=torch.bfloat16)
-                elif k.endswith('.ln_x.bias'): z[k] = z[k].to(dtype=torch.bfloat16)
-                elif k.endswith('blocks.0.ln0.weight'): z[k] = z[k].to(dtype=torch.bfloat16)
-                elif k.endswith('blocks.0.ln0.bias'): z[k] = z[k].to(dtype=torch.bfloat16)
-                elif k.endswith('ln_out.weight'): z[k] = z[k].to(dtype=torch.bfloat16)
-                elif k.endswith('ln_out.bias'): z[k] = z[k].to(dtype=torch.bfloat16)
-                elif k.endswith('emb.weight'): z[k] = z[k].to(dtype=torch.bfloat16)
+                elif k.endswith('.ln_x.weight'): z[k] = z[k].to(dtype=torch.bfloat16).contiguous() 
+                elif k.endswith('.ln_x.bias'): z[k] = z[k].to(dtype=torch.bfloat16).contiguous() 
+                elif k.endswith('blocks.0.ln0.weight'): z[k] = z[k].to(dtype=torch.bfloat16).contiguous() 
+                elif k.endswith('blocks.0.ln0.bias'): z[k] = z[k].to(dtype=torch.bfloat16).contiguous() 
+                elif k.endswith('ln_out.weight'): z[k] = z[k].to(dtype=torch.bfloat16).contiguous() 
+                elif k.endswith('ln_out.bias'): z[k] = z[k].to(dtype=torch.bfloat16).contiguous() 
+                elif k.endswith('emb.weight'): z[k] = z[k].to(dtype=torch.bfloat16).contiguous() 
                 else:
-                    z[k] = z[k].to(dtype = self.base_precision)
+                    z[k] = z[k].to(dtype = self.base_precision).contiguous() 
         for i in range(n_layer):
             z[f'blocks.{i}.att.time_maa_wkvrg'] = torch.stack([z[f'blocks.{i}.att.time_maa_w'], z[f'blocks.{i}.att.time_maa_k'], z[f'blocks.{i}.att.time_maa_v'], z[f'blocks.{i}.att.time_maa_r'], z[f'blocks.{i}.att.time_maa_g']], dim=0).contiguous()
 
         self.emb = nn.Embedding(vocab_size, n_embd)
-        self.emb.weight.data = z['emb.weight']
+        self.emb.weight.data = z['emb.weight'].contiguous()
         self.z = z
         
 
@@ -431,7 +428,7 @@ class RWKV_6(nn.Module):
             )
             r = r.view(S0, S1, -1)# receptance_weight.shape[-1]
         else:
-            r = (xr.to(dtype=time_maa_x.dtype) @ receptance_weight)
+            r = (xr.to(dtype=time_maa_x.dtype) @ receptance_weight.t())
 
         if key_weight.dtype == torch.float8_e4m3fn:
             #print('fp8')
@@ -448,7 +445,7 @@ class RWKV_6(nn.Module):
             )
             k = k.view(S0, S1, -1) #key_weight.shape[-1]
         else:
-            k = (xk.to(dtype=time_maa_x.dtype) @ key_weight)
+            k = (xk.to(dtype=time_maa_x.dtype) @ key_weight.t())
 
         if value_weight.dtype == torch.float8_e4m3fn:
             #print('fp8')
@@ -465,7 +462,7 @@ class RWKV_6(nn.Module):
             )
             v = v.view(S0, S1, -1) #value_weight.shape[-1]
         else:
-            v = (xv.to(dtype=time_maa_x.dtype) @ value_weight)
+            v = (xv.to(dtype=time_maa_x.dtype) @ value_weight.t())
 
         if gate_weight.dtype == torch.float8_e4m3fn:
             #print('fp8')
@@ -483,7 +480,7 @@ class RWKV_6(nn.Module):
             g = g.view(S0, S1, -1)  #  gate_weight.shape[-1] 
             g = torch.nn.functional.silu(g.to(dtype=time_maa_x.dtype))
         else:
-            g = torch.nn.functional.silu((xg.to(dtype=time_maa_x.dtype) @ gate_weight))
+            g = torch.nn.functional.silu((xg.to(dtype=time_maa_x.dtype) @ gate_weight.t()))
         
         return r, k, v, g, w, xx
     
@@ -602,17 +599,17 @@ class RWKV_6(nn.Module):
             last_state_wkv,
             )
         
-        # else:
-        #     x, last_state_wkv = fused_recurrent_rwkv6(
-        #             r.view(B,T,H,-1).transpose(1,2),
-        #             k.view(B,T,H,-1).transpose(1,2),
-        #             v.view(B,T,H,-1).transpose(1,2),
-        #             w.view(B,T,H,-1).transpose(1,2),
-        #             time_faaaa.view(H,-1),
-        #             1.0,
-        #             last_state_wkv,True, 0)
-        #     mode = 0
-        #print(f'x2 - x1 = {torch.sum(x2)-torch.sum(x)}')
+        
+        # x, last_state_wkv = fused_recurrent_rwkv6(
+        #         r.view(B,T,H,-1).transpose(1,2),
+        #         k.view(B,T,H,-1).transpose(1,2),
+        #         v.view(B,T,H,-1).transpose(1,2),
+        #         w.view(B,T,H,-1).transpose(1,2),
+        #         time_faaaa.view(H,-1),
+        #         1.0,
+        #         last_state_wkv,True, 0)
+             
+         
         x = x.reshape(B,T,C)
         return x, last_state_wkv
 
@@ -643,10 +640,12 @@ class RWKV_6(nn.Module):
                 scale_a=torch.tensor(1.0, device='cuda'),
                 scale_b=torch.tensor(1.0, device='cuda')
             )
-            x = x.view(S0, S1, -1) #output_weight.shape[-1]
+            #x = x.view(S0, S1, -1) #output_weight.shape[-1]
+            return x.view(S0, S1, -1)
         else:
-            x = (x * g).to(dtype=output_weight.dtype) @ output_weight
-        return x
+            #x = (x * g).to(dtype=output_weight.dtype) @ output_weight
+            return (x * g).to(dtype=output_weight.dtype) @ output_weight.t()
+        #return x
     
     @MyStatic
     def TimeMix_FC_Quant8_Step3(B:int,T:int,C:int,x,g,dim_head:int,
@@ -713,7 +712,7 @@ class RWKV_6(nn.Module):
                 xkg = xkg.view(S0, S1, -1)
                 xkg = (torch.relu(xkg) ** 2)
             else:
-                xkg = (torch.relu(xk.to(dtype=key_weight.dtype) @ key_weight) ** 2)
+                xkg = (torch.relu(xk.to(dtype=key_weight.dtype) @ key_weight.t()) ** 2)
             #print(f'xkg = {xkg}')
             if value_weight.dtype == torch.float8_e4m3fn:
                 S0=xkg.shape[0] 
@@ -730,7 +729,7 @@ class RWKV_6(nn.Module):
                     )
                 kv = xkv.view(S0, S1, -1)# * 2
             else:
-                kv = xkg @ value_weight
+                kv = xkg @ value_weight.t()
 
             if receptance_weight.dtype == torch.float8_e4m3fn:
                 S0=xr.shape[0] 
@@ -747,16 +746,16 @@ class RWKV_6(nn.Module):
                 return torch.sigmoid(xkr) * kv, last_state
             else:
                 return torch.sigmoid(
-                                    xr.to(dtype=receptance_weight.dtype) @ receptance_weight 
+                                    xr.to(dtype=receptance_weight.dtype) @ receptance_weight.t() 
                                     ) * kv, last_state
 
             
         
         else:
-            kv = (torch.relu(xk.to(dtype=key_weight.dtype) @ key_weight) ** 2) @ value_weight
+            kv = (torch.relu(xk.to(dtype=key_weight.dtype) @ key_weight.t()) ** 2) @ value_weight.t()
 
             return torch.sigmoid(
-                                    xr.to(dtype=receptance_weight.dtype) @ receptance_weight 
+                                    xr.to(dtype=receptance_weight.dtype) @ receptance_weight.t() 
                                     ) * kv, last_state
     
     @MyStatic
@@ -995,13 +994,13 @@ class RWKV_6(nn.Module):
 
                                                     #z[att+'receptance.weight'], z[att+'key.weight'], z[att+'value.weight'],z[att+'gate.weight'],
                                                     bnb.functional.dequantize_4bit(z[att+'receptance.weight'],
-                                                                                   quant_state=z[att+'receptance.weight.qstate']).to(dtype=torch.float16).t(),
+                                                                                   quant_state=z[att+'receptance.weight.qstate']).to(dtype=torch.float16),
                                                     bnb.functional.dequantize_4bit(z[att+'key.weight'],
-                                                                                   quant_state=z[att+'key.weight.qstate']).to(dtype=torch.float16).t(),
+                                                                                   quant_state=z[att+'key.weight.qstate']).to(dtype=torch.float16),
                                                     bnb.functional.dequantize_4bit(z[att+'value.weight'],
-                                                                                   quant_state=z[att+'value.weight.qstate']).to(dtype=torch.float16).t(),
+                                                                                   quant_state=z[att+'value.weight.qstate']).to(dtype=torch.float16),
                                                     bnb.functional.dequantize_4bit(z[att+'gate.weight'],
-                                                                                   quant_state=z[att+'gate.weight.qstate']).to(dtype=torch.float16).t(),
+                                                                                   quant_state=z[att+'gate.weight.qstate']).to(dtype=torch.float16),
 
 
 
@@ -1034,7 +1033,7 @@ class RWKV_6(nn.Module):
                                                z[att+'ln_x.weight'],z[att+'ln_x.bias'],
                                                #z[att+'output.weight']
                                                bnb.functional.dequantize_4bit(z[att+'output.weight'],
-                                                                                   quant_state=z[att+'output.weight.qstate']).to(dtype=torch.float16).t()
+                                                                                   quant_state=z[att+'output.weight.qstate']).to(dtype=torch.float16)
                                                )
                     
                     #Finished TimeMix xx,time_mix_shift,time_mix_state
@@ -1059,11 +1058,11 @@ class RWKV_6(nn.Module):
                                                                      #z[ffn+'key.weight'],
                                                                      #z[ffn+'value.weight']
                                                                      bnb.functional.dequantize_4bit(z[ffn+'receptance.weight'],
-                                                                                   quant_state=z[ffn+'receptance.weight.qstate']).to(dtype=torch.float16).t(),
+                                                                                   quant_state=z[ffn+'receptance.weight.qstate']).to(dtype=torch.float16),
                                                                      bnb.functional.dequantize_4bit(z[ffn+'key.weight'],
-                                                                                   quant_state=z[ffn+'key.weight.qstate']).to(dtype=torch.float16).t(),
+                                                                                   quant_state=z[ffn+'key.weight.qstate']).to(dtype=torch.float16),
                                                                      bnb.functional.dequantize_4bit(z[ffn+'value.weight'],
-                                                                                   quant_state=z[ffn+'value.weight.qstate']).to(dtype=torch.float16).t(),
+                                                                                   quant_state=z[ffn+'value.weight.qstate']).to(dtype=torch.float16),
                                                                      )
                     
                     x = x + ffn1
@@ -1104,7 +1103,7 @@ class RWKV_6(nn.Module):
                     )
                     x = x.view(S0, S1, -1)
                 else:
-                    x = x @ z['head.weight']
+                    x = x @ z['head.weight'].t()
 
             #print(f'x = {x}')
             #exit()
@@ -1182,8 +1181,8 @@ if __name__ == '__main__':
 
     States = model.new_state(Target_batch)#state_empty(32, 1, 2560, 2560 // 32)
 
-    context =  'User: いい人になる秘訣をおしえてください\n\nAssistant:'
-    context2 = 'User: いい人になる秘訣をおしえてください\n\nAssistant:'
+    context =  'User: Tell me advantage of C++.\n\nAssistant:'
+    context2 = 'User: Tell me advantage of C++.\n\nAssistant:'
 
     #model.load_state('states/ojousama2.pth')
 
