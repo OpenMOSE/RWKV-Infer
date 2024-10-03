@@ -259,7 +259,7 @@ class RWKV_6(nn.Module):
                         if k.endswith(QuantKey):
                             print(f'Quant {k} PassThrough')
                             QuantKeyFound = True
-                            z[k] = z[k].to(device='cuda',dtype = self.base_precision).t().contiguous() 
+                            z[k] = z[k].to(device='cuda',dtype = self.base_precision).contiguous() 
                         
 
                 if QuantKeyFound == False:
@@ -422,7 +422,7 @@ class RWKV_6(nn.Module):
                 xr.view(S0*S1,xr.shape[2]).to(torch.float8_e4m3fn),
                 receptance_weight.t(),
                 bias=None,
-                out_dtype=torch.float8_e4m3fn,
+                out_dtype=torch.bfloat16,
                 scale_a=torch.tensor(1.0, device='cuda'),
                 scale_b=torch.tensor(1.0, device='cuda')
             )
@@ -439,7 +439,7 @@ class RWKV_6(nn.Module):
                 xk.view(S0*S1,xk.shape[2]).to(torch.float8_e4m3fn),
                 key_weight.t(),
                 bias=None,
-                out_dtype=torch.float8_e4m3fn,
+                out_dtype=torch.bfloat16,
                 scale_a=torch.tensor(1.0, device='cuda'),
                 scale_b=torch.tensor(1.0, device='cuda')
             )
@@ -456,7 +456,7 @@ class RWKV_6(nn.Module):
                 xv.view(S0*S1,xv.shape[2]).to(torch.float8_e4m3fn),
                 value_weight.t(),
                 bias=None,
-                out_dtype=torch.float8_e4m3fn,
+                out_dtype=torch.bfloat16,
                 scale_a=torch.tensor(1.0, device='cuda'),
                 scale_b=torch.tensor(1.0, device='cuda')
             )
@@ -473,7 +473,7 @@ class RWKV_6(nn.Module):
                 xg.view(S0*S1,xg.shape[2]).to(torch.float8_e4m3fn),
                 gate_weight.t(),
                 bias=None,
-                out_dtype=torch.float8_e4m3fn,
+                out_dtype=torch.bfloat16,
                 scale_a=torch.tensor(1.0, device='cuda'),
                 scale_b=torch.tensor(1.0, device='cuda')
             )
@@ -994,13 +994,13 @@ class RWKV_6(nn.Module):
 
                                                     #z[att+'receptance.weight'], z[att+'key.weight'], z[att+'value.weight'],z[att+'gate.weight'],
                                                     bnb.functional.dequantize_4bit(z[att+'receptance.weight'],
-                                                                                   quant_state=z[att+'receptance.weight.qstate']).to(dtype=torch.float16),
+                                                                                   quant_state=z[att+'receptance.weight.qstate']) ,
                                                     bnb.functional.dequantize_4bit(z[att+'key.weight'],
-                                                                                   quant_state=z[att+'key.weight.qstate']).to(dtype=torch.float16),
+                                                                                   quant_state=z[att+'key.weight.qstate']) ,
                                                     bnb.functional.dequantize_4bit(z[att+'value.weight'],
-                                                                                   quant_state=z[att+'value.weight.qstate']).to(dtype=torch.float16),
+                                                                                   quant_state=z[att+'value.weight.qstate']) ,
                                                     bnb.functional.dequantize_4bit(z[att+'gate.weight'],
-                                                                                   quant_state=z[att+'gate.weight.qstate']).to(dtype=torch.float16),
+                                                                                   quant_state=z[att+'gate.weight.qstate']) ,
 
 
 
@@ -1033,7 +1033,7 @@ class RWKV_6(nn.Module):
                                                z[att+'ln_x.weight'],z[att+'ln_x.bias'],
                                                #z[att+'output.weight']
                                                bnb.functional.dequantize_4bit(z[att+'output.weight'],
-                                                                                   quant_state=z[att+'output.weight.qstate']).to(dtype=torch.float16)
+                                                                                   quant_state=z[att+'output.weight.qstate'])
                                                )
                     
                     #Finished TimeMix xx,time_mix_shift,time_mix_state
@@ -1058,11 +1058,11 @@ class RWKV_6(nn.Module):
                                                                      #z[ffn+'key.weight'],
                                                                      #z[ffn+'value.weight']
                                                                      bnb.functional.dequantize_4bit(z[ffn+'receptance.weight'],
-                                                                                   quant_state=z[ffn+'receptance.weight.qstate']).to(dtype=torch.float16),
+                                                                                   quant_state=z[ffn+'receptance.weight.qstate']),
                                                                      bnb.functional.dequantize_4bit(z[ffn+'key.weight'],
-                                                                                   quant_state=z[ffn+'key.weight.qstate']).to(dtype=torch.float16),
+                                                                                   quant_state=z[ffn+'key.weight.qstate']),
                                                                      bnb.functional.dequantize_4bit(z[ffn+'value.weight'],
-                                                                                   quant_state=z[ffn+'value.weight.qstate']).to(dtype=torch.float16),
+                                                                                   quant_state=z[ffn+'value.weight.qstate']),
                                                                      )
                     
                     x = x + ffn1
@@ -1080,7 +1080,7 @@ class RWKV_6(nn.Module):
                                    z['head.weight'+'.mx'],z['head.weight'+'.rx'],z['head.weight'+'.my'],z['head.weight'+'.ry'],
                                    )#.float()
             elif self.bit4quant:
-                x = x @ bnb.functional.dequantize_4bit(z['head.weight'],quant_state=z['head.weight.qstate']).to(dtype=torch.float16).t()
+                x = x @ bnb.functional.dequantize_4bit(z['head.weight'],quant_state=z['head.weight.qstate']).t()
             else:
                 if z['head.weight'].dtype == torch.float8_e4m3fn:
                     #print('fp8')
