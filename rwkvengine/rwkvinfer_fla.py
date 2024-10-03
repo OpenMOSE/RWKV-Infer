@@ -503,7 +503,11 @@ class LLMWorker:
                                 #print(f"Current GatingWeightCount = {len(mrss_info[j]['mrss_gating_param'])}")
 
                                 logits_combined = None
-                                totalweight = 0
+                                totalweight = 0.0
+                                for k in range(mrss_state_count):
+                                    totalweight = totalweight + mrss_info[j]['mrss_gating_param'][k]
+                                if totalweight == 0.0:
+                                    totalweight = 1.0
                                 #print(f'mrss_state_count = {mrss_state_count}')
                                 for k in range(mrss_state_count):
                                     for n in occurrence[j]:
@@ -511,13 +515,15 @@ class LLMWorker:
                                     #print(f'current_prob[j] length = {len(current_prob[j])}')
                                     current_prob[j][k][-1][0] -= 1e10
                                     if logits_combined is None:
-                                        logits_combined = current_prob[j][k][-1] * mrss_info[j]['mrss_gating_param'][k]
-                                        totalweight = totalweight + mrss_info[j]['mrss_gating_param'][k]
+                                        if mrss_info[j]['mrss_gating_param'][k] != 0:
+                                            logits_combined = current_prob[j][k][-1] * (mrss_info[j]['mrss_gating_param'][k] / totalweight)
+                                        #totalweight = totalweight + mrss_info[j]['mrss_gating_param'][k]
                                     else:
-                                        logits_combined = logits_combined + current_prob[j][k][-1] * mrss_info[j]['mrss_gating_param'][k]
-                                        totalweight = totalweight + mrss_info[j]['mrss_gating_param'][k]
+                                        if mrss_info[j]['mrss_gating_param'][k] != 0:
+                                            logits_combined = logits_combined + current_prob[j][k][-1] * (mrss_info[j]['mrss_gating_param'][k] / totalweight)
+                                        #totalweight = totalweight + mrss_info[j]['mrss_gating_param'][k]
 
-                                logits_combined = logits_combined / totalweight
+                                #logits_combined = logits_combined / totalweight
                                 BatchProbs.append(logits_combined)
                             else:
                                 realbatchcount = realbatchcount + 1
