@@ -179,7 +179,7 @@ class LLMWorker:
                 yield "", copy.deepcopy(prompt_queue.prompts[queue_id].use_exist_state_wkv.to('cpu')), copy.deepcopy(prompt_queue.prompts[queue_id].use_exist_state_shift.to('cpu'))
                 prompt_queue.prompts[queue_id] = None
                 break
-            await asyncio.sleep(0.01)
+            await asyncio.sleep(0.001)
 
 
 
@@ -458,8 +458,8 @@ class LLMWorker:
                                 b_wkv_states.append(work['wkv_states'])
                                 b_shift_states.append(work['shift_states'])
                                 current_prob.append(work['current_prob'])
-                                temperature.append(work['temperature'])
-                                top_p.append(work['top_p'])
+                                temperature.append(torch.Tensor([float(work['temperature'])]))
+                                top_p.append(torch.Tensor([float(work['top_p'])]))
                                 outputs.append(work['output'])
                                 out_tokens.append(work['out_tokens'])
                                 out_last.append(work['out_last'])
@@ -532,7 +532,8 @@ class LLMWorker:
                         #Batch Sampling
                         #BatchProbs[:, 0] -= 1e10
                         BatchProbs = torch.stack(BatchProbs)
-                        otokens = self.pipeline.improved_nucleus_sampling_multi(BatchProbs, temperature=temperature, top_p=top_p)
+                        #print(temperature)
+                        otokens = self.pipeline.improved_nucleus_sampling_multi_static(BatchProbs, temperature=torch.stack(temperature), top_p=torch.stack(top_p)).tolist()
 
                         for j in range(len(token_ids)):
                             for xxx in occurrence[j]:
@@ -818,10 +819,10 @@ class LLMWorker:
                             InferenceTime = start_time3 - start_time2
                             DecodeTime = start_time2 - start_time1
                             FetchTime = start_time1 - start_time
-                            SamplerTime = start_time_sample1 - start_time_sample
+                            #SamplerTime = start_time_sample1 - start_time_sample
 
                             print(f'FetchTime = {FetchTime*1000:0.4f}')
-                            print(f'SamplerTime = {SamplerTime*1000:0.4f}')
+                            #print(f'SamplerTime = {SamplerTime*1000:0.4f}')
                             #print(f'DecodeTime = {DecodeTime*1000:0.4f}')
                             print(f'InferenceTime = {InferenceTime*1000:0.4f}')
                             print(f'StoreTime = {StoreTime*1000:0.4f}')
@@ -835,4 +836,4 @@ class LLMWorker:
 
 
 
-            await asyncio.sleep(0.00001) # Every 1ms
+            await asyncio.sleep(0.0001) # Every 1ms

@@ -205,16 +205,19 @@ async def loadmodel(request: Request):
         if model_strategy == 'fp16':
             Quant = False
             precision = 'fp16'
-        if model_strategy == 'fp16i8':
+        elif model_strategy == 'fp16i8':
             Quant = False
             precision = 'fp16int8'
-        if model_strategy == 'bf16i8':
+        elif model_strategy == 'bf16i8':
             Quant = False
             precision = 'int8'
-        if model_strategy == 'int8':
+        elif model_strategy == 'int8':
             Quant = False
             precision = 'fp16int8'
-        if model_strategy == 'nf4':
+        elif model_strategy == 'fp8':
+            Quant = False
+            precision = 'fp8'
+        elif model_strategy == 'nf4':
             Quant = False
             precision = 'nf4'
         # if model_strategy == 'quant':

@@ -194,3 +194,55 @@ class PIPELINE():
         #print(samples)
         
         return samples.tolist()
+    @MyStatic
+    def improved_nucleus_sampling_multi_static(logits, temperature, top_p):
+        batch_size = logits.size(0)
+        device = logits.device
+        vocab_size = logits.size(-1)
+        
+        # temperature をテンソルに変換し、バッチサイズに対応
+        if isinstance(temperature, (int, float)):
+            temperature = torch.full((batch_size, 1), fill_value=temperature, device=device, dtype=logits.dtype)
+        else:
+            #temperature = torch.tensor(temperature, device=device, dtype=logits.dtype).view(-1, 1)
+            temperature = temperature.view(-1, 1).to(device=device,dtype=logits.dtype)
+        temperature = temperature.clone()
+        temperature[temperature == 0.0] = 1.0
+
+        # top_p をテンソルに変換し、バッチサイズに対応
+        if isinstance(top_p, (int, float)):
+            p = torch.full((batch_size, 1), fill_value=top_p, device=device, dtype=logits.dtype)
+        else:
+            #p = torch.tensor(top_p, device=device, dtype=logits.dtype).view(-1, 1)
+            p = top_p.view(-1, 1).to(device=device,dtype=logits.dtype)
+
+        # ソフトマックスを計算
+        probs = F.softmax(logits.float(), dim=-1)
+        
+        # 確率を降順にソート
+        sorted_probs, sorted_indices = torch.sort(probs, descending=True, dim=-1)
+        cumulative_probs = torch.cumsum(sorted_probs, dim=-1)
+        
+        # 累積確率が top_p を超える部分をマスク
+        sorted_indices_to_remove = cumulative_probs > p
+        shifted = torch.zeros_like(sorted_indices_to_remove)
+        shifted[:, 1:] = sorted_indices_to_remove[:, :-1]
+        sorted_indices_to_remove = shifted
+        sorted_indices_to_remove[:, 0] = False
+
+        # 元のインデックスにマスクを適用
+        indices_to_remove = torch.zeros_like(sorted_indices_to_remove)
+        indices_to_remove = indices_to_remove.scatter(-1, sorted_indices, sorted_indices_to_remove)
+        probs = probs.masked_fill(indices_to_remove, 0.0)
+        
+        # 温度スケーリングを適用
+        if not torch.all(temperature == 1.0):
+            probs = probs ** (1.0 / temperature)
+            probs /= probs.sum(dim=-1, keepdim=True)
+        
+        # サンプリングを実行
+        samples = torch.multinomial(probs, num_samples=1).squeeze(-1)
+
+        #print(samples)
+        
+        return samples#
