@@ -21,6 +21,7 @@ By combining multiple states, MRSS integrates knowledge from different "experts,
    - State reusability: Enables efficient creation of new models through state recombination.
 
 - **Quantization Support**:
+  - FP8 (Experiment. need NVIDIA H100 or Ada series gpu)
   - Int8 (only CUDA)
   - Bitsandbytes NF4 (currently slow)
 - **Multi Batch Generation**:
@@ -34,8 +35,8 @@ By combining multiple states, MRSS integrates knowledge from different "experts,
 
 
 ## How To Use
-   - 1. Install Latest? Pytorch with Cuda(2.2+ tested)
-   - 2. install requirements with triton==2.2.0+(in rocm >=3.0.0)
+   - 1. Install Latest? Pytorch with Cuda(2.4+ tested)
+   - 2. install requirements with triton==3.0.0+(in rocm >=3.0.0)
 ```sh
 pip install -r requirements_fla.txt
 ```    
@@ -45,7 +46,7 @@ pip install -r requirements_fla.txt
 ```sh
 python rwkv_server_fla_fastapi.py --localhost 0.0.0.0 --port 9000 --debug False --workers 64 --dynamic_state_cache_size 512
 ```     
-   - 6. Load Model if quant, set model_strategy:quant
+   - 6. Load Model if quant, set model_strategy:bf16,fp16,int8,fp8,nf4
 ```sh
 curl http://127.0.0.1:9000/loadmodel -X POST -H "Content-Type: application/json" -d '{"model_filename":"models/RWKV-x060-World-1B6-v2.1-20240328-ctx4096.pth","model_viewname":"RWKV x060 1B6 Base","model_strategy":""}'
 ```

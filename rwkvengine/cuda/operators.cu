@@ -13,17 +13,8 @@ __half *cast(fp16 *ptr) {
     return reinterpret_cast<__half *>(ptr);
 }
 
-
-
-
-
-
-
- 
-
-
 #define MM8_MONE_JSPLIT 24
-#define MM8_MONE_TILE 768
+#define MM8_MONE_TILE 512
 
 template <typename F>
 void cuda_mm8_mone(int B, int N, int M,
@@ -78,6 +69,55 @@ __global__ void kernel_mm_mone_fp16i8(
     }
 }
 
+__global__ void kernel_mm_mone_fp16i8_shared(
+    const int B, const int N, const int M,
+    const __half *__restrict__ const x,
+    const uint8_t *__restrict__ const w, const int w_stride,
+    const __half *__restrict__ const mx,
+    const __half *__restrict__ const rx,
+    const __half *__restrict__ const my,
+    const __half *__restrict__ const ry,
+    float *__restrict__ const y) {
+
+    extern __shared__ __half shared_mem[];
+    __half* shared_x = shared_mem;
+    __half* shared_w = shared_mem + blockDim.x * MM8_MONE_JSPLIT;
+
+    const int tid = threadIdx.x;
+    const int k = blockIdx.y * blockDim.y + threadIdx.y;
+    const int j_start = blockIdx.x * MM8_MONE_JSPLIT;
+    const int j_end = min(N, (blockIdx.x + 1) * MM8_MONE_JSPLIT);
+
+    if (k < M) {
+        // 重みを共有メモリにロード
+        for (int j = tid; j < (j_end - j_start); j += blockDim.x) {
+            __half w_f16 = __hadd(__uint2half_rn(w[(j + j_start) * w_stride + k]), __float2half(0.5f));
+            __half rx_f16 = rx[k];
+            __half ry_f16 = ry[j + j_start];
+            __half mx_f16 = mx[k];
+            __half my_f16 = my[j + j_start];
+            shared_w[j * blockDim.y + threadIdx.y] = __hfma(w_f16, __hmul(rx_f16, ry_f16), __hadd(mx_f16, my_f16));
+        }
+        __syncthreads();
+
+        for (int b = 0; b < B; ++b) {
+            float y_local = 0.0f;
+            // xを共有メモリにロード
+            for (int j = tid; j < (j_end - j_start); j += blockDim.x) {
+                shared_x[j] = x[b * N + j + j_start];
+            }
+            __syncthreads();
+
+            // 内積計算
+            for (int j = 0; j < (j_end - j_start); ++j) {
+                y_local += __half2float(__hmul(shared_x[j], shared_w[j * blockDim.y + threadIdx.y]));
+            }
+            atomicAdd(&y[b * M + k], y_local);
+            __syncthreads();
+        }
+    }
+}
+
 
 template <>
 void cuda_mm8_mone<fp16>(int B, int N, int M,
@@ -86,7 +126,7 @@ void cuda_mm8_mone<fp16>(int B, int N, int M,
                         fp16 *mx, fp16 *rx,
                         fp16 *my, fp16 *ry,
                         float *y) {
-    dim3 blockSize(1, min(MM8_MONE_TILE, M));
+     dim3 blockSize(1, min(MM8_MONE_TILE, M));
     dim3 gridSize(
         (N + MM8_MONE_JSPLIT - 1) / MM8_MONE_JSPLIT,
         (M + blockSize.y - 1) / blockSize.y
@@ -98,7 +138,19 @@ void cuda_mm8_mone<fp16>(int B, int N, int M,
 
     kernel_mm_mone_fp16i8<<<gridSize, blockSize>>>(
         B, N, M, cast(x), w, w_stride,
-        cast(mx), cast(rx), cast(my), cast(ry), y);
+        cast(mx), cast(rx), cast(my), cast(ry), y); 
+    // cudaMemset(y, 0, B * M * sizeof(float));
+    // dim3 blockSize(32, 8);  // 共有メモリの容量に応じて調整
+    // dim3 gridSize(
+    //     (N + MM8_MONE_JSPLIT - 1) / MM8_MONE_JSPLIT,
+    //     (M + blockSize.y - 1) / blockSize.y
+    // );
+    // size_t sharedMemSize = (blockSize.x * MM8_MONE_JSPLIT + MM8_MONE_JSPLIT * blockSize.y) * sizeof(__half);
+
+    // kernel_mm_mone_fp16i8_shared<<<gridSize, blockSize, sharedMemSize>>>(
+    //     B, N, M, cast(x), w, w_stride,
+    //     cast(mx), cast(rx), cast(my), cast(ry), y);
+
 }
  
  
