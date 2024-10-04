@@ -35,6 +35,7 @@ By combining multiple states, MRSS integrates knowledge from different "experts,
 
 
 ## How To Use
+   - 0. Python >= 3.12
    - 1. Install Latest? Pytorch with Cuda(2.4+ tested)
    - 2. install requirements with triton==3.0.0+(in rocm >=3.0.0)
 ```sh
