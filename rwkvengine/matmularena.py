@@ -95,3 +95,30 @@ def custom_matmul(a, b, mx: Optional[torch.Tensor]=None, rx: Optional[torch.Tens
         return mm8(a, b, mx, rx, my, ry).to(output_dtype)
     else:
         raise ValueError("Unsupported dtype")
+    
+@MyStatic
+def fp8_hybrod_matmul(a,b):
+    if b.dtype == torch.float8_e4m3fn:
+            #print('fp8')
+            #print(f'xr shape = {xr.shape}')
+            xg = a
+            S0=xg.shape[0]
+            S1=xg.shape[1]
+
+            xg = torch.clamp(xg, min=-448.0, max=448.0)
+
+            #print(f'xg max = {xg.abs().max()}')
+            
+            x, output_amax = torch._scaled_mm(
+                xg.view(S0*S1,xg.shape[2]).to(torch.float8_e4m3fn).contiguous(),
+                b.contiguous(),
+                bias=None,
+                out_dtype=a.dtype,
+                scale_a=torch.tensor(1.0, device='cuda'),
+                scale_b=torch.tensor(1.0, device='cuda')
+            )
+            #x = x.view(S0, S1, -1) #output_weight.shape[-1]
+            return x.view(S0, S1, -1)
+    else:
+            #x = (x * g).to(dtype=output_weight.dtype) @ output_weight
+            return a.to(dtype=b.dtype) @ b

@@ -26,7 +26,7 @@ from torch.profiler import profile, record_function, ProfilerActivity
 mode = 0
 #from rwkvengine.misc import PIPELINE
 from rwkvengine.misc import PIPELINE
-from rwkvengine.matmularena import custom_matmul
+from rwkvengine.matmularena import custom_matmul, fp8_hybrod_matmul
 
 torch.backends.cudnn.benchmark = True
 torch.backends.cudnn.allow_tf32 = True
@@ -140,6 +140,7 @@ def fused_recurrent_rwkv6_torch(
 
         return o, final_state
 
+
 class RWKV_6(nn.Module):
     def __init__(self,load_model: str,quantize:bool = False,base_precision: str = 'int8'):
         print('Helloworld RWKV v060 :) Initializing')
@@ -163,11 +164,11 @@ class RWKV_6(nn.Module):
             self.bit8quant = True
             self.bit4quant = False
         elif base_precision == 'nf4':
-            self.base_precision = torch.float16
+            self.base_precision = torch.bfloat16
             self.bit8quant = False
             self.bit4quant = True
         elif base_precision == 'fp8':
-            self.base_precision = torch.float16
+            self.base_precision = torch.bfloat16
             self.bit8quant = False
             self.bit4quant = False
             self.bitfp8quant = True
@@ -247,6 +248,7 @@ class RWKV_6(nn.Module):
         # FP8 Transformer Engine Quantize Mode 
         elif self.bitfp8quant == True:
             for k in keys:
+                print(f' k = {k} shape = {z[k].shape}' )
                 QuantKeyFound = False
                 for QuantKey in QuantListFP8:
                     if k.endswith(QuantKey):
@@ -340,8 +342,8 @@ class RWKV_6(nn.Module):
             for k in keys:
                 #if             '.time_' in k: z[k] = z[k].squeeze()
                 z[k] = z[k].to(device='cuda')
-                if k.endswith('.time_decay'): z[k] = z[k].float()
-                elif k.endswith('.time_faaaa'): z[k] = z[k].float()
+                #if k.endswith('.time_decay'): z[k] = z[k].float()
+                if k.endswith('.time_faaaa'): z[k] = z[k].float()
                 elif k.endswith('.receptance.weight'): z[k] = z[k].to(dtype = self.base_precision).contiguous() 
                 elif k.endswith('.key.weight'): z[k] = z[k].to(dtype = self.base_precision).contiguous() 
                 elif k.endswith('.value.weight'): z[k] = z[k].to(dtype = self.base_precision).contiguous() 
@@ -383,8 +385,9 @@ class RWKV_6(nn.Module):
                  self.emb.weight.device, self.emb.weight.dtype
              )
     
+    
+    
     @MyStatic
-    #@torch.compile(dynamic=True)
     def TimeMix_FC_Step1(B:int,T:int, C:int, H:int, embd:int,x, last_state_shift, 
                               time_maa_x, time_wkvrg, time_maa_w1, time_maa_w2,
                               time_decay_w1, time_decay_w2,time_decay,
@@ -397,20 +400,33 @@ class RWKV_6(nn.Module):
 
         B, T, C = x.size()
         x = x.contiguous()
-        output = torch.concat((last_state_shift, x[:, :-1]), dim=1)
+        output = torch.concat((last_state_shift, x[:, :-1]), dim=1).to(dtype=time_maa_x.dtype)
         last_state_shift[:] = x[:,-1:]
 
         xx = output - x
 
-        xxx = torch.addcmul(x, xx, time_maa_x).to(dtype=time_maa_x.dtype)
+        xxx = torch.addcmul(x, xx, time_maa_x)#.to(dtype=time_maa_x.dtype)
+        #print(f'xxx = {xxx.shape} time_maa_w1 = {time_maa_w1.shape}')
+
         xxx = torch.tanh(xxx @ time_maa_w1).view(B*T, 5, -1).transpose(0, 1)
+        #xxx = torch.tanh(fp8_hybrod_matmul(xxx,time_maa_w1)).view(B*T, 5, -1).transpose(0, 1)
+
         xxx = torch.bmm(xxx, time_maa_w2).view(5, B, T, -1)
 
+        #print(f'xxx = {xxx.dtype} time_wkvrg = {time_wkvrg.dtype} xx = {xx.dtype} x = {x.dtype}')
+
         combined = (xxx + time_wkvrg) * xx + x
-        xw, xk, xv, xr, xg = combined.to(dtype=time_maa_x.dtype).unbind(dim=0)
+        
+        xw, xk, xv, xr, xg = combined.unbind(dim=0)
+
+        
 
         ww = torch.tanh(xw @ time_decay_w1) @ time_decay_w2
+        #ww = torch.tanh(xw @ (time_decay_w1 @ time_decay_w2.T)).T
+
+        ###ww = torch.tanh(fp8_hybrod_matmul(xw ,time_decay_w1)) @ time_decay_w2
         w = (time_decay + ww).exp().neg()
+        
 
         if receptance_weight.dtype == torch.float8_e4m3fn:
             #print('fp8')
@@ -419,12 +435,13 @@ class RWKV_6(nn.Module):
             S1=xr.shape[1]
             #A_x = torch._get_scale(xr)
             r, output_amax = torch._scaled_mm(
-                xr.view(S0*S1,xr.shape[2]).to(torch.float8_e4m3fn),
+                xr.view(-1,xr.shape[2]).to(torch.float8_e4m3fn),
                 receptance_weight.t(),
                 bias=None,
                 out_dtype=torch.bfloat16,
                 scale_a=torch.tensor(1.0, device='cuda'),
-                scale_b=torch.tensor(1.0, device='cuda')
+                scale_b=torch.tensor(1.0, device='cuda'),
+                use_fast_accum = True
             )
             r = r.view(S0, S1, -1)# receptance_weight.shape[-1]
         else:
@@ -436,12 +453,13 @@ class RWKV_6(nn.Module):
             S0=xk.shape[0]
             S1=xk.shape[1]
             k, output_amax = torch._scaled_mm(
-                xk.view(S0*S1,xk.shape[2]).to(torch.float8_e4m3fn),
+                xk.view(-1,xk.shape[2]).to(torch.float8_e4m3fn),
                 key_weight.t(),
                 bias=None,
                 out_dtype=torch.bfloat16,
                 scale_a=torch.tensor(1.0, device='cuda'),
-                scale_b=torch.tensor(1.0, device='cuda')
+                scale_b=torch.tensor(1.0, device='cuda'),
+                use_fast_accum = True
             )
             k = k.view(S0, S1, -1) #key_weight.shape[-1]
         else:
@@ -453,12 +471,13 @@ class RWKV_6(nn.Module):
             S0=xv.shape[0]
             S1=xv.shape[1]
             v, output_amax = torch._scaled_mm(
-                xv.view(S0*S1,xv.shape[2]).to(torch.float8_e4m3fn),
+                xv.view(-1,xv.shape[2]).to(torch.float8_e4m3fn),
                 value_weight.t(),
                 bias=None,
                 out_dtype=torch.bfloat16,
                 scale_a=torch.tensor(1.0, device='cuda'),
-                scale_b=torch.tensor(1.0, device='cuda')
+                scale_b=torch.tensor(1.0, device='cuda'),
+                use_fast_accum = True
             )
             v = v.view(S0, S1, -1) #value_weight.shape[-1]
         else:
@@ -470,15 +489,16 @@ class RWKV_6(nn.Module):
             S0=xg.shape[0]
             S1=xg.shape[1]
             g, output_amax = torch._scaled_mm(
-                xg.view(S0*S1,xg.shape[2]).to(torch.float8_e4m3fn),
+                xg.view(-1,xg.shape[2]).to(torch.float8_e4m3fn),
                 gate_weight.t(),
                 bias=None,
                 out_dtype=torch.bfloat16,
                 scale_a=torch.tensor(1.0, device='cuda'),
-                scale_b=torch.tensor(1.0, device='cuda')
+                scale_b=torch.tensor(1.0, device='cuda'),
+                use_fast_accum = True
             )
-            g = g.view(S0, S1, -1)  #  gate_weight.shape[-1] 
-            g = torch.nn.functional.silu(g.to(dtype=time_maa_x.dtype))
+            #g = g.view(S0, S1, -1)  #  gate_weight.shape[-1] 
+            g = torch.nn.functional.silu(g.view(S0, S1, -1))
         else:
             g = torch.nn.functional.silu((xg.to(dtype=time_maa_x.dtype) @ gate_weight.t()))
         
@@ -511,6 +531,7 @@ class RWKV_6(nn.Module):
         #print(f'output = {output.dtype}, x = {x.dtype}')
 
         xxx = torch.addcmul(x, xx, time_maa_x).to(dtype=time_maa_x.dtype)
+        
         xxx = torch.tanh(xxx @ time_maa_w1).view(B*T, 5, -1).transpose(0, 1)
         xxx = torch.bmm(xxx, time_maa_w2).view(5, B, T, -1)
 
@@ -612,6 +633,41 @@ class RWKV_6(nn.Module):
          
         x = x.reshape(B,T,C)
         return x, last_state_wkv
+    def TimeMix_FC_Step2_One_HighBatch(self,B:int,T:int, C:int, H:int,ctx:int,
+                         x,last_state_wkv,
+                         r,w,k,v,g,
+                         time_faaaa,
+                         #ln_x_weight,
+                         #ln_x_bias
+                         ):
+        r= r.to(dtype=torch.bfloat16)
+        k= k.to(dtype=torch.bfloat16)
+        v= v.to(dtype=torch.bfloat16)
+        g= g.to(dtype=torch.bfloat16)
+
+               
+        # x,last_state_wkv = fused_recurrent_rwkv6_torch(
+        #     r.view(B,T,H,-1).transpose(1,2),
+        #     k.view(B,T,H,-1).transpose(1,2),
+        #     v.view(B,T,H,-1).transpose(1,2),
+        #     w.view(B,T,H,-1).transpose(1,2),
+        #     time_faaaa.view(H,-1),
+        #     last_state_wkv,
+        #     )
+        
+        
+        x, last_state_wkv = fused_recurrent_rwkv6(
+                r.view(B,T,H,-1).transpose(1,2),
+                k.view(B,T,H,-1).transpose(1,2),
+                v.view(B,T,H,-1).transpose(1,2),
+                w.view(B,T,H,-1).transpose(1,2),
+                time_faaaa.view(H,-1),
+                1.0,
+                last_state_wkv,True, 0)
+             
+         
+        x = x.reshape(B,T,C)
+        return x, last_state_wkv
 
     @MyStatic
     def TimeMix_FC_Step3(B:int,T:int,C:int,x,g,dim_head:int,
@@ -633,12 +689,13 @@ class RWKV_6(nn.Module):
             #print(f'xg max = {xg.abs().max()}')
             
             x, output_amax = torch._scaled_mm(
-                xg.view(S0*S1,xg.shape[2]).to(torch.float8_e4m3fn),
+                xg.view(-1,xg.shape[2]).to(torch.float8_e4m3fn),
                 output_weight.t(),
                 bias=None,
                 out_dtype=torch.bfloat16,
                 scale_a=torch.tensor(1.0, device='cuda'),
-                scale_b=torch.tensor(1.0, device='cuda')
+                scale_b=torch.tensor(1.0, device='cuda'),
+                use_fast_accum = True
             )
             #x = x.view(S0, S1, -1) #output_weight.shape[-1]
             return x.view(S0, S1, -1)
@@ -700,12 +757,13 @@ class RWKV_6(nn.Module):
                 S0=xk.shape[0] 
                 S1=xk.shape[1]
                 xkg, output_amax = torch._scaled_mm(
-                    xk.view(S0*S1,xk.shape[2]).to(torch.float8_e4m3fn),
+                    xk.view(-1,xk.shape[2]).to(torch.float8_e4m3fn),
                     key_weight.t(),
                     bias=None,
                     out_dtype=torch.bfloat16,
                     scale_a=torch.tensor(1.0, device='cuda'),
-                    scale_b=torch.tensor(1.0, device='cuda')
+                    scale_b=torch.tensor(1.0, device='cuda'),
+                    use_fast_accum = True
                     )
                 #print(f's0 = {S0} s1 = {S1} kshape = {key_weight.shape[-1]}')
                 #print(f'xkg shape {xkg.shape}')
@@ -720,12 +778,13 @@ class RWKV_6(nn.Module):
                 xkg = xkg * 0.333
                 xkg = torch.clamp(xkg, min=-448.0, max=448.0)
                 xkv, output_amax = torch._scaled_mm(
-                    xkg.view(S0*S1,xkg.shape[2]).to(torch.float8_e4m3fn),
+                    xkg.view(-1,xkg.shape[2]).to(torch.float8_e4m3fn),
                     value_weight.t(),
                     bias=None,
                     out_dtype=torch.bfloat16,
                     scale_a=torch.tensor(3.333, device='cuda'),
-                    scale_b=torch.tensor(1.0, device='cuda')
+                    scale_b=torch.tensor(1.0, device='cuda'),
+                    use_fast_accum = True
                     )
                 kv = xkv.view(S0, S1, -1)# * 2
             else:
@@ -735,12 +794,13 @@ class RWKV_6(nn.Module):
                 S0=xr.shape[0] 
                 S1=xr.shape[1]
                 xkr, output_amax = torch._scaled_mm(
-                    xr.view(S0*S1,xr.shape[2]).to(torch.float8_e4m3fn),
+                    xr.view(-1,xr.shape[2]).to(torch.float8_e4m3fn),
                     receptance_weight.t(),
                     bias=None,
                     out_dtype=torch.bfloat16,
                     scale_a=torch.tensor(1.0, device='cuda'),
-                    scale_b=torch.tensor(1.0, device='cuda')
+                    scale_b=torch.tensor(1.0, device='cuda'),
+                    use_fast_accum = True
                     )
                 xkr = xkr.view(S0, S1, -1)
                 return torch.sigmoid(xkr) * kv, last_state
@@ -806,7 +866,7 @@ class RWKV_6(nn.Module):
                                       rmx,rrx,rmy,rry
                                   )
                             ) * kv, last_state
-     
+    #@torch.compile 
     def forward(self, idx: torch.Tensor, last_shift_states: List[torch.Tensor],
                 last_wkv_states: List[torch.Tensor]):
         with torch.no_grad():
@@ -865,11 +925,18 @@ class RWKV_6(nn.Module):
                         #  x,last_state_wkv,
                         #  r,w,k,v,g,
                         #  time_faaaa,
-                        att1, time_mix_state = self.TimeMix_FC_Step2_One(B,T,C,H,self.ctx,
-                                                                      xx,time_mix_state,
-                                                                      r,w,k,v,g,
-                                                                      z[att+'time_faaaa']
-                                                                      )
+                        if B < 16:
+                            att1, time_mix_state = self.TimeMix_FC_Step2_One(B,T,C,H,self.ctx,
+                                                                        xx,time_mix_state,
+                                                                        r,w,k,v,g,
+                                                                        z[att+'time_faaaa']
+                                                                        )
+                        else:
+                            att1, time_mix_state = self.TimeMix_FC_Step2_One_HighBatch(B,T,C,H,self.ctx,
+                                                                        xx,time_mix_state,
+                                                                        r,w,k,v,g,
+                                                                        z[att+'time_faaaa']
+                                                                        )
                     #B:int,T:int,C:int,x,g,dim_head:int,
                     # ln_x_weight,ln_x_bias,
                     # output_weight,
@@ -937,11 +1004,18 @@ class RWKV_6(nn.Module):
                         #  x,last_state_wkv,
                         #  r,w,k,v,g,
                         #  time_faaaa,
-                        att1, time_mix_state = self.TimeMix_FC_Step2_One(B,T,C,H,self.ctx,
-                                                                      xx,time_mix_state,
-                                                                      r,w,k,v,g,
-                                                                      z[att+'time_faaaa']
-                                                                      )
+                        if B < 64:
+                            att1, time_mix_state = self.TimeMix_FC_Step2_One(B,T,C,H,self.ctx,
+                                                                        xx,time_mix_state,
+                                                                        r,w,k,v,g,
+                                                                        z[att+'time_faaaa']
+                                                                        )
+                        else:
+                            att1, time_mix_state = self.TimeMix_FC_Step2_One_HighBatch(B,T,C,H,self.ctx,
+                                                                        xx,time_mix_state,
+                                                                        r,w,k,v,g,
+                                                                        z[att+'time_faaaa']
+                                                                        )
                     #B:int,T:int,C:int,x,g,dim_head:int,
                     # ln_x_weight,ln_x_bias,
                     # output_weight,
@@ -1021,11 +1095,18 @@ class RWKV_6(nn.Module):
                         #  x,last_state_wkv,
                         #  r,w,k,v,g,
                         #  time_faaaa,
-                        att1, time_mix_state = self.TimeMix_FC_Step2_One(B,T,C,H,self.ctx,
-                                                                      xx,time_mix_state,
-                                                                      r,w,k,v,g,
-                                                                      z[att+'time_faaaa']
-                                                                      )
+                        if B < 64:
+                            att1, time_mix_state = self.TimeMix_FC_Step2_One(B,T,C,H,self.ctx,
+                                                                        xx,time_mix_state,
+                                                                        r,w,k,v,g,
+                                                                        z[att+'time_faaaa']
+                                                                        )
+                        else:
+                            att1, time_mix_state = self.TimeMix_FC_Step2_One_HighBatch(B,T,C,H,self.ctx,
+                                                                        xx,time_mix_state,
+                                                                        r,w,k,v,g,
+                                                                        z[att+'time_faaaa']
+                                                                        )
                     #B:int,T:int,C:int,x,g,dim_head:int,
                     # ln_x_weight,ln_x_bias,
                     # output_weight,
@@ -1097,9 +1178,10 @@ class RWKV_6(nn.Module):
                         x.view(S0*S1,x.shape[2]).to(torch.float8_e4m3fn),
                         z['head.weight'].t(),
                         bias=None,
-                        out_dtype=torch.float16,
+                        out_dtype=torch.bfloat16,
                         scale_a=torch.tensor(1.0, device='cuda'),
-                        scale_b=torch.tensor(1.0, device='cuda')
+                        scale_b=torch.tensor(1.0, device='cuda'),
+                        use_fast_accum = True
                     )
                     x = x.view(S0, S1, -1)
                 else:
@@ -1173,11 +1255,16 @@ class RWKV_6(nn.Module):
 
 
 if __name__ == '__main__':
+    from argparse import ArgumentParser
+    parser = ArgumentParser()
+    parser.add_argument("--tb", default="1", type=int) 
+    #parser.add_argument("--port", default=9000, type=int) 
+    args = parser.parse_args()
     print('RWKV x060Core with FLA Test')
 
     pipeline = PIPELINE()
-    model = RWKV_6('../models/RWKV-x060-Jpn-7B-20240816-ctx4096.pth',False,'fp8')
-    Target_batch = 1
+    model = RWKV_6('../models/RWKV-x060-Jpn-7B-20240816-ctx4096.pth',False,'bf16')
+    Target_batch = args.tb#16
 
     States = model.new_state(Target_batch)#state_empty(32, 1, 2560, 2560 // 32)
 
@@ -1264,8 +1351,14 @@ if __name__ == '__main__':
     temperature = torch.full((Target_batch,), 1.0)
     top_p = torch.full((Target_batch,), 0.7)
 
+
+    SamplingSum = 0
+    ForwardSum = 0
+    DecodeSum = 0
+
     for i in range(maxtoken):
         
+        t0 = time.perf_counter()
         x[:, 0, 0] -= 1e10
         # 2. sample_logits_blink をバッチ全体に適用
         otokens = pipeline.improved_nucleus_sampling_multi_static(x[:, 0], temperature=temperature, top_p=top_p).tolist()
@@ -1275,21 +1368,36 @@ if __name__ == '__main__':
             tokens.append(torch.tensor(otokens[j]).unsqueeze(0).unsqueeze(0).to('cuda'))
 
         idx = torch.cat(tokens, dim=0)
-
+        t1 = time.perf_counter()
         for j in range(Target_batch):
             out_tokens[j] += [otokens[j]]
             try:
                 tmp = pipeline.decode(out_tokens[j][out_last[j]:])
                 if ("\ufffd" not in tmp) and (not tmp.endswith("\n")):
                         #yield tmp
-                        if j == Target_batch - 1:
-                            print(tmp,end="", flush=True)
+                        #if j == Target_batch - 1:
+                        #    print(tmp,end="", flush=True)
                         output_text[j] = output_text[j] + tmp
                         out_last[j] = i + 1
             except:
                 pass
+        t2 = time.perf_counter()
 
         x, shift_states, wkv_states = model.forward(idx, shift_states, wkv_states)
+        t3 = time.perf_counter()
+        ForwardSum += (t3 - t2)
+        DecodeSum += (t2 - t1)
+        SamplingSum += (t1 - t0)
+
+    ForwardSum = ForwardSum / (float(maxtoken)) * 1000
+    DecodeSum = DecodeSum / (float(maxtoken)) * 1000
+    SamplingSum = SamplingSum / (float(maxtoken)) * 1000
+
+    print('performance')
+    print(f'ForwardAverage= {round(ForwardSum,4)} ms')
+    print(f'DecodeSum= {round(DecodeSum,4)} ms')
+    print(f'SamplingSum= {round(SamplingSum,4)} ms')
+
 
 
     t001 = time.perf_counter()
