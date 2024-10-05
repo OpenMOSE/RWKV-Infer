@@ -18,12 +18,77 @@ from torch.profiler import profile, record_function, ProfilerActivity
 
 MyStatic = torch.jit.script
 
+class RWKV_TOKENIZER():
+    table: list[list[list[bytes]]]
+    good: list[set[int]]
+    wlen: list[int]
+    def __init__(self, file_name):
+        self.idx2token = {}
+        sorted = [] # must be already sorted
+        lines = open(file_name, "r", encoding="utf-8").readlines()
+        for l in lines:
+            idx = int(l[:l.index(' ')])
+            x = eval(l[l.index(' '):l.rindex(' ')])
+            x = x.encode("utf-8") if isinstance(x, str) else x
+            assert isinstance(x, bytes)
+            assert len(x) == int(l[l.rindex(' '):])
+            sorted += [x]
+            self.idx2token[idx] = x
+
+        self.token2idx = {}
+        for k, v in self.idx2token.items():
+            self.token2idx[v] = int(k)
+
+        # precompute some tables for fast matching
+        self.table = [[[] for j in range(256)] for i in range(256)]
+        self.good = [set() for i in range(256)]
+        self.wlen = [0 for i in range(256)]
+
+        for i in reversed(range(len(sorted))): # reverse order - match longer tokens first
+            s = sorted[i]
+            if len(s) >= 2:
+                s0 = int(s[0])
+                s1 = int(s[1])
+                self.table[s0][s1] += [s]
+                self.wlen[s0] = max(self.wlen[s0], len(s))
+                self.good[s0].add(s1)
+
+    def encodeBytes(self, src: bytes) -> list[int]:
+        src_len: int = len(src)
+        tokens: list[int] = []
+        i: int = 0
+        while i < src_len:
+            s: bytes = src[i : i + 1]
+
+            if i < src_len - 1:
+                s1: int = int(src[i + 1])
+                s0: int = int(src[i])
+                if s1 in self.good[s0]:
+                    sss: bytes = src[i : i + self.wlen[s0]]
+                    try:
+                        s = next(filter(sss.startswith, self.table[s0][s1]))
+                    except:
+                        pass
+            tokens.append(self.token2idx[s])
+            i += len(s)
+
+        return tokens
+
+    def decodeBytes(self, tokens):
+        return b''.join(map(lambda i: self.idx2token[i], tokens))
+
+    def encode(self, src: str):
+        return self.encodeBytes(src.encode("utf-8"))
+
+    def decode(self, tokens):
+        return self.decodeBytes(tokens).decode('utf-8')
+
 class PIPELINE():
     def __init__(self, model='dummy'):
         self.model = model
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-        from rwkv_tokenizer import TRIE_TOKENIZER_MOSE
-        self.tokenizer = TRIE_TOKENIZER_MOSE(os.path.dirname(os.path.abspath(__file__)) + '/rwkv_vocab_v20230424.txt')        
+        #from rwkv_tokenizer import TRIE_TOKENIZER_MOSE
+        self.tokenizer = RWKV_TOKENIZER(os.path.dirname(os.path.abspath(__file__)) + '/rwkv_vocab_v20230424.txt')        
 
     def refine_context(self, context):
         context = context.strip().split('\n')
@@ -196,28 +261,32 @@ class PIPELINE():
         return samples.tolist()
     @MyStatic
     def improved_nucleus_sampling_multi_static(logits, temperature, top_p):
-        batch_size = logits.size(0)
+        #batch_size = logits.size(0)
         device = logits.device
-        vocab_size = logits.size(-1)
+        #vocab_size = logits.size(-1)
         
         # temperature をテンソルに変換し、バッチサイズに対応
-        if isinstance(temperature, (int, float)):
-            temperature = torch.full((batch_size, 1), fill_value=temperature, device=device, dtype=logits.dtype)
-        else:
-            #temperature = torch.tensor(temperature, device=device, dtype=logits.dtype).view(-1, 1)
-            temperature = temperature.view(-1, 1).to(device=device,dtype=logits.dtype)
-        temperature = temperature.clone()
+        # if isinstance(temperature, (int, float)):
+        #     temperature = torch.full((batch_size, 1), fill_value=temperature, device=device, dtype=logits.dtype)
+        # else:
+        #     #temperature = torch.tensor(temperature, device=device, dtype=logits.dtype).view(-1, 1)
+        #     temperature = temperature.view(-1, 1).to(device=device,dtype=logits.dtype)
+
+        temperature = temperature.view(-1, 1).to(device=device,dtype=logits.dtype)
+        #temperature = temperature.clone()
         temperature[temperature == 0.0] = 1.0
 
         # top_p をテンソルに変換し、バッチサイズに対応
-        if isinstance(top_p, (int, float)):
-            p = torch.full((batch_size, 1), fill_value=top_p, device=device, dtype=logits.dtype)
-        else:
-            #p = torch.tensor(top_p, device=device, dtype=logits.dtype).view(-1, 1)
-            p = top_p.view(-1, 1).to(device=device,dtype=logits.dtype)
+        # if isinstance(top_p, (int, float)):
+        #     p = torch.full((batch_size, 1), fill_value=top_p, device=device, dtype=logits.dtype)
+        # else:
+        #     #p = torch.tensor(top_p, device=device, dtype=logits.dtype).view(-1, 1)
+        #     p = top_p.view(-1, 1).to(device=device,dtype=logits.dtype)
+
+        p = top_p.view(-1, 1).to(device=device,dtype=logits.dtype)
 
         # ソフトマックスを計算
-        probs = F.softmax(logits.float(), dim=-1)
+        probs = F.softmax(logits.to(dtype=torch.bfloat16), dim=-1)
         
         # 確率を降順にソート
         sorted_probs, sorted_indices = torch.sort(probs, descending=True, dim=-1)
