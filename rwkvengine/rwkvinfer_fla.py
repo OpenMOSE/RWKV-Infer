@@ -15,7 +15,6 @@ import copy
 import time
 import os
 
-#os.sched_setaffinity(0, {0, 1, 2, 3})
 
 #from rwkv6fla import PIPELINE, RWKV6 as RWKV_6
 from rwkvengine.rwkvcore import RWKV_6
@@ -141,11 +140,11 @@ class LLMWorker:
 
         
 
-    def LoadModel(self,modelpath,quantize=False,precision='fp16'):
+    def LoadModel(self,modelpath,quantize=False,precision='bf16'):
         self.model = None
         gc.collect()
         torch.cuda.empty_cache()
-        self.model = RWKV_6(modelpath,quantize=quantize,base_precision=precision)
+        self.model = RWKV_6(modelpath,base_precision=precision)
         gc.collect()
         torch.cuda.empty_cache()
         print('model loaded')
@@ -641,7 +640,7 @@ class LLMWorker:
                                         #print(tmp,end="", flush=True)
                                         outputs[j] = outputs[j] + tmp
                                         out_last[j] = counts[j] + 1
-                                if out_last[j] > max_tokens[j]:
+                                if len(out_tokens[j]) > max_tokens[j]:
                                     #Reached Max Token
                                     statuss[j] = 'idle'
                                     print(f'batch {j} is finished')

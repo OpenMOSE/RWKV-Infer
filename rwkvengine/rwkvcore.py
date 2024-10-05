@@ -8,29 +8,22 @@ from fla.ops.rwkv6.recurrent_fuse import fused_recurrent_rwkv6
 
 import torch
 import torch.nn as nn
-from typing import Optional
+from typing import Optional,List
 import types, gc, os, time, re
-from typing import List
 from torch.nn import functional as F
 import numpy as np
 import os, sys
 import time
 import bitsandbytes as bnb
 import functools
-import torch
-import torch.nn as nn
-import triton
-import triton.language as tl
-from torch.utils.cpp_extension import load
-from torch.profiler import profile, record_function, ProfilerActivity
-mode = 0
+
 #from rwkvengine.misc import PIPELINE
 from rwkvengine.misc import PIPELINE
 from rwkvengine.matmularena import custom_matmul, fp8_hybrod_matmul
 
 torch.backends.cudnn.benchmark = True
-torch.backends.cudnn.allow_tf32 = True
-torch.backends.cuda.matmul.allow_tf32 = True
+#torch.backends.cudnn.allow_tf32 = True
+#torch.backends.cuda.matmul.allow_tf32 = True
 #torch.backends.cuda.matmul.allow_fp16_reduced_precision_reduction = True
 #torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction = True
 #torch._C._jit_set_autocast_mode(False)
@@ -63,7 +56,6 @@ class BlockStateList:
     @staticmethod
     def create(N, B, C, H, device, dtype):
         result = BlockStateList.empty(N, B, C, H, device, dtype)
-        #print(f'dtype = {dtype}')
         result.wkv_states[:] = 0
         result.wkv_states[:] = 0
         result.shift_states[:] = 0
@@ -101,7 +93,6 @@ def fused_recurrent_rwkv6_torch(
         if scale == -1:
             scale = r.shape[-1] ** -0.5
 
-        #output_final_state = True
         q = r
         B, H, T, K = q.shape
         V = v.shape[-1]
@@ -109,10 +100,8 @@ def fused_recurrent_rwkv6_torch(
         if scale == -1:
             scale = K ** -0.5
 
-        # 出力テンソルを初期化
         o = torch.zeros(B, H, T, V, dtype=q.dtype, device=q.device)
 
-        # 初期状態を設定
         if initial_state is not None:
             b_h = initial_state.clone()
         else:
@@ -142,16 +131,17 @@ def fused_recurrent_rwkv6_torch(
 
 
 class RWKV_6(nn.Module):
-    def __init__(self,load_model: str,quantize:bool = False,base_precision: str = 'int8'):
+
+    def __init__(self,load_model: str,base_precision: str = 'int8'):
+
         print('Helloworld RWKV v060 :) Initializing')
+
         super().__init__()
+
         #GANBATTE CODE KAKOU
-        self.time_debug = False
         self.bit8quant = False
         self.bit4quant = False
         self.bitfp8quant = False
-
-        #base_precision = ''
 
         if base_precision == 'fp16':
             self.base_precision = torch.float16
@@ -185,14 +175,14 @@ class RWKV_6(nn.Module):
 
         # detect model details
         vocab_size, n_embd = z["emb.weight"].shape
-        n_embd = n_embd
-        vocab_size = vocab_size
+
         n_layer = 0
         for key in keys:
             if key.startswith("blocks."):
                 layer = int(key.split(".")[1])
                 if layer > n_layer:
                     n_layer = layer
+
         n_layer = n_layer + 1
         print("n_layer", n_layer)
         dim_ffn = z[f"blocks.0.ffn.value.weight"].shape[1]
@@ -223,7 +213,7 @@ class RWKV_6(nn.Module):
                     if k.endswith(QuantKey):
                         print(f'Quant {k} to NF4')
                         QuantKeyFound = True
-                        z[k] = z[k].to(device='cuda',dtype=torch.float16) 
+                        z[k] = z[k].to(device='cuda',dtype=torch.bfloat16) 
                         z[k], z[k+'.qstate']= bnb.functional.quantize_nf4(z[k])
                         
 
@@ -231,10 +221,10 @@ class RWKV_6(nn.Module):
                     z[k] = z[k].to(device='cuda')
                     if k.endswith('.time_decay'): z[k] = z[k].float()
                     elif k.endswith('.time_faaaa'): z[k] = z[k].float()
-                    #elif k.endswith('.ln1.weight'): z[k] = z[k].to(dtype=torch.bfloat16)
-                    #elif k.endswith('.ln1.bias'): z[k] = z[k].to(dtype=torch.bfloat16)
-                    #elif k.endswith('.ln2.weight'): z[k] = z[k].to(dtype=torch.bfloat16)
-                    #elif k.endswith('.ln2.bias'): z[k] = z[k].to(dtype=torch.bfloat16)
+                    elif k.endswith('.ln1.weight'): z[k] = z[k].to(dtype=torch.bfloat16)
+                    elif k.endswith('.ln1.bias'): z[k] = z[k].to(dtype=torch.bfloat16)
+                    elif k.endswith('.ln2.weight'): z[k] = z[k].to(dtype=torch.bfloat16)
+                    elif k.endswith('.ln2.bias'): z[k] = z[k].to(dtype=torch.bfloat16)
                     elif k.endswith('.ln_x.weight'): z[k] = z[k].to(dtype=torch.bfloat16)
                     elif k.endswith('.ln_x.bias'): z[k] = z[k].to(dtype=torch.bfloat16)
                     elif k.endswith('blocks.0.ln0.weight'): z[k] = z[k].to(dtype=torch.bfloat16)
@@ -282,10 +272,8 @@ class RWKV_6(nn.Module):
                     else:
                         z[k] = z[k].to(dtype = self.base_precision).contiguous() 
 
-            #time.sleep(2)
-            #exit()
 
-        # 8bit Quantize Mode via Custom Kernel
+        # int 8bit Quantize Mode via Custom Kernel
         elif self.bit8quant == True:
             for k in keys:
                 QuantKeyFound = False
@@ -322,10 +310,10 @@ class RWKV_6(nn.Module):
                     z[k] = z[k].to(device='cuda')
                     if k.endswith('.time_decay'): z[k] = z[k].float()
                     elif k.endswith('.time_faaaa'): z[k] = z[k].float()
-                    #elif k.endswith('.ln1.weight'): z[k] = z[k].to(dtype=torch.bfloat16)
-                    #elif k.endswith('.ln1.bias'): z[k] = z[k].to(dtype=torch.bfloat16)
-                    #elif k.endswith('.ln2.weight'): z[k] = z[k].to(dtype=torch.bfloat16)
-                    #elif k.endswith('.ln2.bias'): z[k] = z[k].to(dtype=torch.bfloat16)
+                    elif k.endswith('.ln1.weight'): z[k] = z[k].to(dtype=torch.bfloat16)
+                    elif k.endswith('.ln1.bias'): z[k] = z[k].to(dtype=torch.bfloat16)
+                    elif k.endswith('.ln2.weight'): z[k] = z[k].to(dtype=torch.bfloat16)
+                    elif k.endswith('.ln2.bias'): z[k] = z[k].to(dtype=torch.bfloat16)
                     elif k.endswith('.ln_x.weight'): z[k] = z[k].to(dtype=torch.bfloat16)
                     elif k.endswith('.ln_x.bias'): z[k] = z[k].to(dtype=torch.bfloat16)
                     elif k.endswith('blocks.0.ln0.weight'): z[k] = z[k].to(dtype=torch.bfloat16)
@@ -368,23 +356,26 @@ class RWKV_6(nn.Module):
         for i in range(n_layer):
             z[f'blocks.{i}.att.time_maa_wkvrg'] = torch.stack([z[f'blocks.{i}.att.time_maa_w'], z[f'blocks.{i}.att.time_maa_k'], z[f'blocks.{i}.att.time_maa_v'], z[f'blocks.{i}.att.time_maa_r'], z[f'blocks.{i}.att.time_maa_g']], dim=0).contiguous()
 
-        self.emb = nn.Embedding(vocab_size, n_embd)
-        self.emb.weight.data = z['emb.weight'].contiguous()
         self.z = z
-        
-
+        self.device = z['emb.weight'].device
+        self.dtype = z['emb.weight'].dtype
+    
         gc.collect()
         torch.cuda.empty_cache()
 
-        #with torch.no_grad():
-    #@MyStatic
+
     def new_state(self, B):
          return BlockStateList.create(
                  self.n_layer, B, self.n_embd, 
                  self.n_head,# self.head_size,
-                 self.emb.weight.device, self.emb.weight.dtype
+                 self.device, self.dtype
              )
     
+    @MyStatic
+    def First(emb,idx,n_embd:int,ln0_weight,ln0_bias):
+        x = F.embedding(idx, emb)
+        x = F.layer_norm(x.to(dtype=ln0_weight.dtype), (n_embd,), weight=ln0_weight, bias=ln0_bias)
+        return x
     
     
     @MyStatic
@@ -394,46 +385,34 @@ class RWKV_6(nn.Module):
                               receptance_weight, key_weight, value_weight, gate_weight,
                               ln1_weight,ln1_bias
                               ):
-        xx = F.layer_norm(x.to(dtype=ln1_weight.dtype), (embd,), weight=ln1_weight, bias=ln1_bias)
+
+        xx = F.layer_norm(x, (embd,), weight=ln1_weight, bias=ln1_bias)
 
         x = xx
 
-        B, T, C = x.size()
-        x = x.contiguous()
+        #B, T, C = x.size()
+
         output = torch.concat((last_state_shift, x[:, :-1]), dim=1).to(dtype=time_maa_x.dtype)
         last_state_shift[:] = x[:,-1:]
 
         xx = output - x
 
-        xxx = torch.addcmul(x, xx, time_maa_x)#.to(dtype=time_maa_x.dtype)
-        #print(f'xxx = {xxx.shape} time_maa_w1 = {time_maa_w1.shape}')
-
+        xxx = torch.addcmul(x, xx, time_maa_x)
         xxx = torch.tanh(xxx @ time_maa_w1).view(B*T, 5, -1).transpose(0, 1)
-        #xxx = torch.tanh(fp8_hybrod_matmul(xxx,time_maa_w1)).view(B*T, 5, -1).transpose(0, 1)
-
         xxx = torch.bmm(xxx, time_maa_w2).view(5, B, T, -1)
-
-        #print(f'xxx = {xxx.dtype} time_wkvrg = {time_wkvrg.dtype} xx = {xx.dtype} x = {x.dtype}')
 
         combined = (xxx + time_wkvrg) * xx + x
         
         xw, xk, xv, xr, xg = combined.unbind(dim=0)
-
-        
-
+  
         ww = torch.tanh(xw @ time_decay_w1) @ time_decay_w2
-        #ww = torch.tanh(xw @ (time_decay_w1 @ time_decay_w2.T)).T
 
-        ###ww = torch.tanh(fp8_hybrod_matmul(xw ,time_decay_w1)) @ time_decay_w2
         w = (time_decay + ww).exp().neg()
         
 
         if receptance_weight.dtype == torch.float8_e4m3fn:
-            #print('fp8')
-            #print(f'xr shape = {xr.shape}')
             S0=xr.shape[0]
             S1=xr.shape[1]
-            #A_x = torch._get_scale(xr)
             r, output_amax = torch._scaled_mm(
                 xr.view(-1,xr.shape[2]).to(torch.float8_e4m3fn),
                 receptance_weight.t(),
@@ -443,13 +422,11 @@ class RWKV_6(nn.Module):
                 scale_b=torch.tensor(1.0, device='cuda'),
                 use_fast_accum = True
             )
-            r = r.view(S0, S1, -1)# receptance_weight.shape[-1]
+            r = r.view(S0, S1, -1)
         else:
             r = (xr.to(dtype=time_maa_x.dtype) @ receptance_weight.t())
 
         if key_weight.dtype == torch.float8_e4m3fn:
-            #print('fp8')
-            #print(f'xr shape = {xr.shape}')
             S0=xk.shape[0]
             S1=xk.shape[1]
             k, output_amax = torch._scaled_mm(
@@ -461,13 +438,11 @@ class RWKV_6(nn.Module):
                 scale_b=torch.tensor(1.0, device='cuda'),
                 use_fast_accum = True
             )
-            k = k.view(S0, S1, -1) #key_weight.shape[-1]
+            k = k.view(S0, S1, -1)
         else:
             k = (xk.to(dtype=time_maa_x.dtype) @ key_weight.t())
 
         if value_weight.dtype == torch.float8_e4m3fn:
-            #print('fp8')
-            #print(f'xr shape = {xr.shape}')
             S0=xv.shape[0]
             S1=xv.shape[1]
             v, output_amax = torch._scaled_mm(
@@ -479,13 +454,11 @@ class RWKV_6(nn.Module):
                 scale_b=torch.tensor(1.0, device='cuda'),
                 use_fast_accum = True
             )
-            v = v.view(S0, S1, -1) #value_weight.shape[-1]
+            v = v.view(S0, S1, -1)
         else:
             v = (xv.to(dtype=time_maa_x.dtype) @ value_weight.t())
 
         if gate_weight.dtype == torch.float8_e4m3fn:
-            #print('fp8')
-            #print(f'xr shape = {xr.shape}')
             S0=xg.shape[0]
             S1=xg.shape[1]
             g, output_amax = torch._scaled_mm(
@@ -497,7 +470,6 @@ class RWKV_6(nn.Module):
                 scale_b=torch.tensor(1.0, device='cuda'),
                 use_fast_accum = True
             )
-            #g = g.view(S0, S1, -1)  #  gate_weight.shape[-1] 
             g = torch.nn.functional.silu(g.view(S0, S1, -1))
         else:
             g = torch.nn.functional.silu((xg.to(dtype=time_maa_x.dtype) @ gate_weight.t()))
@@ -505,7 +477,7 @@ class RWKV_6(nn.Module):
         return r, k, v, g, w, xx
     
     @MyStatic
-    def TimeMix_FC_Quant8_Step1(B:int,T:int, C:int, H:int, embd:int,x, last_state_shift, 
+    def TimeMix_FC_Int8_Step1(B:int,T:int, C:int, H:int, embd:int,x, last_state_shift, 
                               time_maa_x, time_wkvrg, time_maa_w1, time_maa_w2,
                               time_decay_w1, time_decay_w2,time_decay,
                               receptance_weight, key_weight, value_weight, gate_weight,
@@ -515,68 +487,50 @@ class RWKV_6(nn.Module):
                               vmx,vmy,vrx,vry,
                               gmx,gmy,grx,gry
                               ):
-        #print(f'ln1_weight.dtype = {ln1_weight.dtype}')
         xx = F.layer_norm(x.to(dtype=ln1_weight.dtype), (embd,), weight=ln1_weight, bias=ln1_bias)#.to(dtype=time_maa_x.dtype)
 
-        x = xx#.to(dtype=time_maa_x.dtype)
+        x = xx
 
         B, T, C = x.size()
         x = x.contiguous()
-        #print(f'last_state_shift = {last_state_shift.dtype}, x = {x.dtype}')
         output = torch.concat((last_state_shift, x[:, :-1]), dim=1)#.to(dtype=ln1_weight.dtype)
         last_state_shift[:] = x[:,-1:]
 
         xx = output - x
 
-        #print(f'output = {output.dtype}, x = {x.dtype}')
-
         xxx = torch.addcmul(x, xx, time_maa_x).to(dtype=time_maa_x.dtype)
-        
         xxx = torch.tanh(xxx @ time_maa_w1).view(B*T, 5, -1).transpose(0, 1)
         xxx = torch.bmm(xxx, time_maa_w2).view(5, B, T, -1)
 
         combined = (xxx + time_wkvrg) * xx + x
         xw, xk, xv, xr, xg = combined.to(dtype=time_maa_x.dtype).unbind(dim=0)
 
-        #print(f'xw = {xw.dtype}, xxx = {xxx.dtype} time_wkvrg = {time_wkvrg.dtype} xx = {xx.dtype} x = {x.dtype}')
-
         ww = torch.tanh(xw @ time_decay_w1) @ time_decay_w2
         w = (time_decay + ww).exp().neg()
 
-        #r = (xr.to(dtype=torch.bfloat16) @ receptance_weight)
         r = custom_matmul(xr.to(dtype=time_maa_x.dtype), receptance_weight,
                           rmx,rrx,rmy,rry
                           )
-        #k = (xk.to(dtype=torch.bfloat16) @ key_weight)
         k = custom_matmul(xk.to(dtype=time_maa_x.dtype),key_weight,
                           kmx,krx,kmy,kry
                           )
-        #v = (xv.to(dtype=torch.bfloat16) @ value_weight)
         v = custom_matmul(xv.to(dtype=time_maa_x.dtype),value_weight,
                           vmx,vrx,vmy,vry
                           )
 
-
-        #g = torch.nn.functional.silu((xg.to(dtype=torch.bfloat16) @ gate_weight))
         g = torch.nn.functional.silu(
             custom_matmul(xg.to(dtype=time_maa_x.dtype),gate_weight,
                           gmx,grx,gmy,gry
                           )
-        )
-
-        
+                        )
         
         return r, k, v, g, w, xx
 
-    #maybe cannot jit?
-    #@torch.compile(dynamic=True)
     def TimeMix_FC_Step2_Seq(self,
                          B:int,T:int, C:int, H:int,ctx,
                          x,last_state_wkv,
                          r,w,k,v,g,
                          time_faaaa,
-                         #ln_x_weight,
-                         #ln_x_bias
                          ):
         r= r.to(dtype=torch.bfloat16)
         k= k.to(dtype=torch.bfloat16)
@@ -597,18 +551,15 @@ class RWKV_6(nn.Module):
 
     
     @MyStatic
-    #@torch.compile(dynamic=True)
     def TimeMix_FC_Step2_One(B:int,T:int, C:int, H:int,ctx:int,
                          x,last_state_wkv,
                          r,w,k,v,g,
                          time_faaaa,
-                         #ln_x_weight,
-                         #ln_x_bias
                          ):
         r= r.to(dtype=torch.bfloat16)
-        k= k.to(dtype=torch.bfloat16)
-        v= v.to(dtype=torch.bfloat16)
-        g= g.to(dtype=torch.bfloat16)
+        #k= k.to(dtype=torch.bfloat16)
+        #v= v.to(dtype=torch.bfloat16)
+        #g= g.to(dtype=torch.bfloat16)
 
                
         x,last_state_wkv = fused_recurrent_rwkv6_torch(
@@ -619,43 +570,20 @@ class RWKV_6(nn.Module):
             time_faaaa.view(H,-1),
             last_state_wkv,
             )
-        
-        
-        # x, last_state_wkv = fused_recurrent_rwkv6(
-        #         r.view(B,T,H,-1).transpose(1,2),
-        #         k.view(B,T,H,-1).transpose(1,2),
-        #         v.view(B,T,H,-1).transpose(1,2),
-        #         w.view(B,T,H,-1).transpose(1,2),
-        #         time_faaaa.view(H,-1),
-        #         1.0,
-        #         last_state_wkv,True, 0)
-             
-         
-        x = x.reshape(B,T,C)
+          
+        x = x.view(B,T,C)
         return x, last_state_wkv
+    
     def TimeMix_FC_Step2_One_HighBatch(self,B:int,T:int, C:int, H:int,ctx:int,
                          x,last_state_wkv,
                          r,w,k,v,g,
                          time_faaaa,
-                         #ln_x_weight,
-                         #ln_x_bias
                          ):
         r= r.to(dtype=torch.bfloat16)
         k= k.to(dtype=torch.bfloat16)
         v= v.to(dtype=torch.bfloat16)
         g= g.to(dtype=torch.bfloat16)
 
-               
-        # x,last_state_wkv = fused_recurrent_rwkv6_torch(
-        #     r.view(B,T,H,-1).transpose(1,2),
-        #     k.view(B,T,H,-1).transpose(1,2),
-        #     v.view(B,T,H,-1).transpose(1,2),
-        #     w.view(B,T,H,-1).transpose(1,2),
-        #     time_faaaa.view(H,-1),
-        #     last_state_wkv,
-        #     )
-        
-        
         x, last_state_wkv = fused_recurrent_rwkv6(
                 r.view(B,T,H,-1).transpose(1,2),
                 k.view(B,T,H,-1).transpose(1,2),
@@ -666,7 +594,7 @@ class RWKV_6(nn.Module):
                 last_state_wkv,True, 0)
              
          
-        x = x.reshape(B,T,C)
+        x = x.view(B,T,C)
         return x, last_state_wkv
 
     @MyStatic
@@ -678,15 +606,11 @@ class RWKV_6(nn.Module):
         x = x.view(B * T, C)
         x = torch.nn.functional.group_norm(x.to(dtype=ln_x_weight.dtype),num_groups = dim_head, weight=ln_x_weight,bias=ln_x_bias, eps= 64e-5).view(B, T, C)
         if output_weight.dtype == torch.float8_e4m3fn:
-            #print('fp8')
-            #print(f'xr shape = {xr.shape}')
             xg = x * g
             S0=xg.shape[0]
             S1=xg.shape[1]
 
             xg = torch.clamp(xg, min=-448.0, max=448.0)
-
-            #print(f'xg max = {xg.abs().max()}')
             
             x, output_amax = torch._scaled_mm(
                 xg.view(-1,xg.shape[2]).to(torch.float8_e4m3fn),
@@ -697,15 +621,12 @@ class RWKV_6(nn.Module):
                 scale_b=torch.tensor(1.0, device='cuda'),
                 use_fast_accum = True
             )
-            #x = x.view(S0, S1, -1) #output_weight.shape[-1]
             return x.view(S0, S1, -1)
         else:
-            #x = (x * g).to(dtype=output_weight.dtype) @ output_weight
             return (x * g).to(dtype=output_weight.dtype) @ output_weight.t()
-        #return x
     
     @MyStatic
-    def TimeMix_FC_Quant8_Step3(B:int,T:int,C:int,x,g,dim_head:int,
+    def TimeMix_FC_Int8_Step3(B:int,T:int,C:int,x,g,dim_head:int,
                               ln_x_weight,ln_x_bias,
                               output_weight,
                               omx,omy,orx,ory
@@ -713,12 +634,9 @@ class RWKV_6(nn.Module):
         B, T, C = x.size()
         x = x.view(B * T, C)
         x = torch.nn.functional.group_norm(x.to(dtype=ln_x_weight.dtype),num_groups = dim_head, weight=ln_x_weight,bias=ln_x_bias, eps= 64e-5).view(B, T, C)
-        #x = (x * g.to(dtype=torch.bfloat16)) @ output_weight
         x = custom_matmul((x * g.to(dtype=torch.bfloat16)),output_weight,
                           omx,orx,omy,ory
                           )
-        #print(f'r={torch.sum(x)} ')
-        #exit()
         return x
     
 
@@ -752,74 +670,63 @@ class RWKV_6(nn.Module):
         xk = xx * time_maa_k + x * (1 - time_maa_k)
         xr = xx * time_maa_r + x * (1 - time_maa_r)
 
-        if key_weight.dtype == torch.float8_e4m3fn or value_weight.dtype == torch.float8_e4m3fn or receptance_weight.dtype == torch.float8_e4m3fn:
-            if key_weight.dtype == torch.float8_e4m3fn:
-                S0=xk.shape[0] 
-                S1=xk.shape[1]
-                xkg, output_amax = torch._scaled_mm(
-                    xk.view(-1,xk.shape[2]).to(torch.float8_e4m3fn),
-                    key_weight.t(),
-                    bias=None,
-                    out_dtype=torch.bfloat16,
-                    scale_a=torch.tensor(1.0, device='cuda'),
-                    scale_b=torch.tensor(1.0, device='cuda'),
-                    use_fast_accum = True
-                    )
-                #print(f's0 = {S0} s1 = {S1} kshape = {key_weight.shape[-1]}')
-                #print(f'xkg shape {xkg.shape}')
-                xkg = xkg.view(S0, S1, -1)
-                xkg = (torch.relu(xkg) ** 2)
-            else:
-                xkg = (torch.relu(xk.to(dtype=key_weight.dtype) @ key_weight.t()) ** 2)
-            #print(f'xkg = {xkg}')
-            if value_weight.dtype == torch.float8_e4m3fn:
-                S0=xkg.shape[0] 
-                S1=xkg.shape[1]
-                xkg = xkg * 0.333
-                xkg = torch.clamp(xkg, min=-448.0, max=448.0)
-                xkv, output_amax = torch._scaled_mm(
-                    xkg.view(-1,xkg.shape[2]).to(torch.float8_e4m3fn),
-                    value_weight.t(),
-                    bias=None,
-                    out_dtype=torch.bfloat16,
-                    scale_a=torch.tensor(3.333, device='cuda'),
-                    scale_b=torch.tensor(1.0, device='cuda'),
-                    use_fast_accum = True
-                    )
-                kv = xkv.view(S0, S1, -1)# * 2
-            else:
-                kv = xkg @ value_weight.t()
-
-            if receptance_weight.dtype == torch.float8_e4m3fn:
-                S0=xr.shape[0] 
-                S1=xr.shape[1]
-                xkr, output_amax = torch._scaled_mm(
-                    xr.view(-1,xr.shape[2]).to(torch.float8_e4m3fn),
-                    receptance_weight.t(),
-                    bias=None,
-                    out_dtype=torch.bfloat16,
-                    scale_a=torch.tensor(1.0, device='cuda'),
-                    scale_b=torch.tensor(1.0, device='cuda'),
-                    use_fast_accum = True
-                    )
-                xkr = xkr.view(S0, S1, -1)
-                return torch.sigmoid(xkr) * kv, last_state
-            else:
-                return torch.sigmoid(
-                                    xr.to(dtype=receptance_weight.dtype) @ receptance_weight.t() 
-                                    ) * kv, last_state
-
-            
         
+        if key_weight.dtype == torch.float8_e4m3fn:
+            S0=xk.shape[0] 
+            S1=xk.shape[1]
+            xkg, output_amax = torch._scaled_mm(
+                xk.view(-1,xk.shape[2]).to(torch.float8_e4m3fn),
+                key_weight.t(),
+                bias=None,
+                out_dtype=torch.bfloat16,
+                scale_a=torch.tensor(1.0, device='cuda'),
+                scale_b=torch.tensor(1.0, device='cuda'),
+                use_fast_accum = True
+                )
+            xkg = xkg.view(S0, S1, -1)
+            xkg = (torch.relu(xkg) ** 2)
         else:
-            kv = (torch.relu(xk.to(dtype=key_weight.dtype) @ key_weight.t()) ** 2) @ value_weight.t()
+            xkg = (torch.relu(xk.to(dtype=key_weight.dtype) @ key_weight.t()) ** 2)
+        if value_weight.dtype == torch.float8_e4m3fn:
+            S0=xkg.shape[0] 
+            S1=xkg.shape[1]
+            #xkg = xkg * 0.333
+            xkg = torch.clamp(xkg, min=-448.0, max=448.0)
+            xkv, output_amax = torch._scaled_mm(
+                xkg.view(-1,xkg.shape[2]).to(torch.float8_e4m3fn),
+                value_weight.t(),
+                bias=None,
+                out_dtype=torch.bfloat16,
+                scale_a=torch.tensor(1.0, device='cuda'),
+                scale_b=torch.tensor(1.0, device='cuda'),
+                use_fast_accum = True
+                )
+            kv = xkv.view(S0, S1, -1)# * 2
+        else:
+            kv = xkg @ value_weight.t()
 
+        if receptance_weight.dtype == torch.float8_e4m3fn:
+            S0=xr.shape[0] 
+            S1=xr.shape[1]
+            xkr, output_amax = torch._scaled_mm(
+                xr.view(-1,xr.shape[2]).to(torch.float8_e4m3fn),
+                receptance_weight.t(),
+                bias=None,
+                out_dtype=torch.bfloat16,
+                scale_a=torch.tensor(1.0, device='cuda'),
+                scale_b=torch.tensor(1.0, device='cuda'),
+                use_fast_accum = True
+                )
+            xkr = xkr.view(S0, S1, -1)
+            return torch.sigmoid(xkr) * kv, last_state
+        else:
             return torch.sigmoid(
-                                    xr.to(dtype=receptance_weight.dtype) @ receptance_weight.t() 
-                                    ) * kv, last_state
+                                xr.to(dtype=receptance_weight.dtype) @ receptance_weight.t() 
+                                ) * kv, last_state
+
     
     @MyStatic
-    def ChannelMix_FC_Quant8_Step1(x,last_state,
+    def ChannelMix_FC_Int8_Step1(x,last_state,
                                     ln2_weight,
                                     ln2_bias,
                                     n_embd:int,
@@ -844,8 +751,6 @@ class RWKV_6(nn.Module):
         xk = xx * time_maa_k + x * (1 - time_maa_k)
         xr = xx * time_maa_r + x * (1 - time_maa_r)
 
-        #kv = (torch.relu(xk.to(dtype=torch.bfloat16) @ key_weight) ** 2) @ value_weight
-
         kv = custom_matmul(torch.relu(
                                     custom_matmul(
                                                     xk.to(dtype=time_maa_k.dtype),key_weight,
@@ -854,56 +759,73 @@ class RWKV_6(nn.Module):
                                     )** 2 ,value_weight,
                            vmx,vrx,vmy,vry
                            )
-        
-        
 
-        #return torch.sigmoid(
-        #                          xr.to(dtype=torch.bfloat16) @ receptance_weight 
-        #                        ) * kv, last_state
         return torch.sigmoid(
                                   custom_matmul(
                                       xr.to(dtype=time_maa_k.dtype), receptance_weight,
                                       rmx,rrx,rmy,rry
                                   )
                             ) * kv, last_state
-    #@torch.compile 
+    @MyStatic
+    def Final(x,head_weight,n_embd:int,ln_out_weight,ln_out_bias):
+        x = F.layer_norm(x.to(dtype=ln_out_weight.dtype), (n_embd,), weight=ln_out_weight, bias=ln_out_bias)
+        
+        if head_weight.dtype == torch.float8_e4m3fn:
+
+            S0=x.shape[0]
+            S1=x.shape[1]
+
+            x = torch.clamp(x, min=-448.0, max=448.0)
+
+            x, output_amax = torch._scaled_mm(
+                x.view(-1,x.shape[2]).to(torch.float8_e4m3fn),
+                head_weight.t(),
+                bias=None,
+                out_dtype=torch.bfloat16,
+                scale_a=torch.tensor(1.0, device='cuda'),
+                scale_b=torch.tensor(1.0, device='cuda'),
+                use_fast_accum = True
+            )
+            x = x.view(S0, S1, -1)
+            return x
+        else:
+            x = x.to(dtype=head_weight.dtype)
+            x = x @ head_weight.t()
+            return x
+        
+    @MyStatic
+    def Final_int8(x,head_weight,head_mx,head_rx,head_my,head_ry,n_embd:int,ln_out_weight,ln_out_bias):
+        x = F.layer_norm(x.to(dtype=ln_out_weight.dtype), (n_embd,), weight=ln_out_weight, bias=ln_out_bias)
+        x = custom_matmul(x,head_weight,head_mx,head_rx,head_my,head_ry)
+        return x
+
     def forward(self, idx: torch.Tensor, last_shift_states: List[torch.Tensor],
                 last_wkv_states: List[torch.Tensor]):
+        StrategyMode = 0 # 0 is Fully BF16 or FP16 or FP8
+        if self.bit8quant == True:
+            StrategyMode = 1
+        elif self.bit4quant == True:
+            StrategyMode = 2
+            
         with torch.no_grad():
             #
             z = self.z
-            x = self.emb(idx)
+            H = self.n_head
 
-            x = F.layer_norm(x.to(dtype=z['blocks.0.ln0.weight'].dtype), (self.n_embd,), weight=z['blocks.0.ln0.weight'], bias=z['blocks.0.ln0.bias'])
+            x = self.First(z['emb.weight'],idx,self.n_embd,z['blocks.0.ln0.weight'],z['blocks.0.ln0.bias'])
             x=x.to(dtype=self.base_precision)
+            B, T, C = x.size()
+
             for i in range(self.n_layer):
                 bbb = f'blocks.{i}.'
                 att = f'blocks.{i}.att.'
                 ffn = f'blocks.{i}.ffn.'
 
-                #time_mix_shift,channel_mix_shift,time_mix_state
-                #x,last_shift_states[i*2],last_shift_states[i*2+1], last_wkv_states[i]
                 time_mix_shift = last_shift_states[i*2]
                 channel_mix_state = last_shift_states[i*2+1]
                 time_mix_state = last_wkv_states[i]
 
-                #xx = F.layer_norm(x, (self.n_embd,), weight=z[bbb+'ln1.weight'], bias=z[bbb+'ln1.bias'])
-
-                B, T, C = x.size()
-                H = self.n_head
-
-                StrategyMode = 0 # 0 is Fully BF16 or FP16 or FP8
-
-                if self.bit8quant == True:
-                    StrategyMode = 1
-                elif self.bit4quant == True:
-                    StrategyMode = 2
-
                 if StrategyMode == 0:
-                    # B:int,T:int, C:int, H:int,x, last_state_shift, 
-                    # time_maa_x, time_wkvrg, time_maa_w1, time_maa_w2,
-                    # time_decay_w1, time_decay_w2,time_decay,
-                    # receptance_weight, key_weight, value_weight, gate_weight,
                     r,k,v,g,w,xx = self.TimeMix_FC_Step1(B,T,C,H,self.n_embd,x,time_mix_shift,
                                                     z[att+'time_maa_x'], z[att+'time_maa_wkvrg'], z[att+'time_maa_w1'], z[att+'time_maa_w2'],
                                                     z[att+'time_decay_w1'], z[att+'time_decay_w2'],z[att+'time_decay'],
@@ -911,20 +833,12 @@ class RWKV_6(nn.Module):
                                                     z[bbb+'ln1.weight'],z[bbb+'ln1.bias']
                                                     )
                     if T>1:
-                        #  B,T,C,H,ctx,
-                        #  x,last_state_wkv,
-                        #  r,w,k,v,g,
-                        #  time_faaaa,
                         att1, time_mix_state = self.TimeMix_FC_Step2_Seq(B,T,C,H,self.ctx,
                                                                       xx,time_mix_state,
                                                                       r,w,k,v,g,
                                                                       z[att+'time_faaaa']
                                                                       )
                     else:
-                        #  B,T,C,H,ctx,
-                        #  x,last_state_wkv,
-                        #  r,w,k,v,g,
-                        #  time_faaaa,
                         if B < 16:
                             att1, time_mix_state = self.TimeMix_FC_Step2_One(B,T,C,H,self.ctx,
                                                                         xx,time_mix_state,
@@ -937,24 +851,14 @@ class RWKV_6(nn.Module):
                                                                         r,w,k,v,g,
                                                                         z[att+'time_faaaa']
                                                                         )
-                    #B:int,T:int,C:int,x,g,dim_head:int,
-                    # ln_x_weight,ln_x_bias,
-                    # output_weight,
+
                     att1 = self.TimeMix_FC_Step3(B,T,C,att1,g,self.n_head,
                                                z[att+'ln_x.weight'],z[att+'ln_x.bias'],
                                                z[att+'output.weight']
                                                )
                     
-                    #Finished TimeMix xx,time_mix_shift,time_mix_state
-                    #x,last_state,
-                    # time_maa_k,
-                    # time_maa_r,
-                    # receptance_weight,
-                    # key_weight,
-                    # value_weight
+
                     x = x + att1
-                    #print(f'att1={torch.sum(att1)} i={i}')
-                    #xx2 = F.layer_norm(x.to(dtype=z[bbb+'ln2.weight'].dtype), (self.n_embd,), weight=z[bbb+'ln2.weight'], bias=z[bbb+'ln2.bias'])
 
                     ffn1, channel_mix_state = self.ChannelMix_FC_Step1(x,channel_mix_state,
                                                                      z[bbb+'ln2.weight'],
@@ -968,17 +872,11 @@ class RWKV_6(nn.Module):
                                                                      )
                     
                     x = x + ffn1
-                    #print(f'ffn1={torch.sum(ffn1)} i={i}')
 
-                elif StrategyMode == 1: # 8bit Quantize
-                    # B:int,T:int, C:int, H:int,x, last_state_shift, 
-                    # time_maa_x, time_wkvrg, time_maa_w1, time_maa_w2,
-                    # time_decay_w1, time_decay_w2,time_decay,
-                    # receptance_weight, key_weight, value_weight, gate_weight,
 
-                    #rmx,rmy,rrx,rry,
+                elif StrategyMode == 1: # int 8bit Quantize
 
-                    r,k,v,g,w,xx = self.TimeMix_FC_Quant8_Step1(B,T,C,H,self.n_embd,x,time_mix_shift,
+                    r,k,v,g,w,xx = self.TimeMix_FC_Int8_Step1(B,T,C,H,self.n_embd,x,time_mix_shift,
                                                     z[att+'time_maa_x'], z[att+'time_maa_wkvrg'], z[att+'time_maa_w1'], z[att+'time_maa_w2'],
                                                     z[att+'time_decay_w1'], z[att+'time_decay_w2'],z[att+'time_decay'],
                                                     z[att+'receptance.weight'], z[att+'key.weight'], z[att+'value.weight'],z[att+'gate.weight'],
@@ -990,21 +888,13 @@ class RWKV_6(nn.Module):
                                                     z[att+'gate.weight'+'.mx'],z[att+'gate.weight'+'.my'],z[att+'gate.weight'+'.rx'],z[att+'gate.weight'+'.ry'],
                                                     )
                     if T>1:
-                        #  B,T,C,H,ctx,
-                        #  x,last_state_wkv,
-                        #  r,w,k,v,g,
-                        #  time_faaaa,
                         att1, time_mix_state = self.TimeMix_FC_Step2_Seq(B,T,C,H,self.ctx,
                                                                       xx,time_mix_state,
                                                                       r,w,k,v,g,
                                                                       z[att+'time_faaaa']
                                                                       )
                     else:
-                        #  B,T,C,H,ctx,
-                        #  x,last_state_wkv,
-                        #  r,w,k,v,g,
-                        #  time_faaaa,
-                        if B < 64:
+                        if B < 16:
                             att1, time_mix_state = self.TimeMix_FC_Step2_One(B,T,C,H,self.ctx,
                                                                         xx,time_mix_state,
                                                                         r,w,k,v,g,
@@ -1016,26 +906,16 @@ class RWKV_6(nn.Module):
                                                                         r,w,k,v,g,
                                                                         z[att+'time_faaaa']
                                                                         )
-                    #B:int,T:int,C:int,x,g,dim_head:int,
-                    # ln_x_weight,ln_x_bias,
-                    # output_weight,
-                    att1 = self.TimeMix_FC_Quant8_Step3(B,T,C,att1,g,self.n_head,
+
+                    att1 = self.TimeMix_FC_Int8_Step3(B,T,C,att1,g,self.n_head,
                                                z[att+'ln_x.weight'],z[att+'ln_x.bias'],
                                                z[att+'output.weight'],
                                                z[att+'output.weight'+'.mx'],z[att+'output.weight'+'.my'],z[att+'output.weight'+'.rx'],z[att+'output.weight'+'.ry'],
                                                )
                     
-                    #Finished TimeMix xx,time_mix_shift,time_mix_state
-                    #x,last_state,
-                    # time_maa_k,
-                    # time_maa_r,
-                    # receptance_weight,
-                    # key_weight,
-                    # value_weight
                     x = x + att1
-                    #xx2 = F.layer_norm(x.to(dtype=z[bbb+'ln2.weight'].dtype), (self.n_embd,), weight=z[bbb+'ln2.weight'], bias=z[bbb+'ln2.bias'])
-                    #xx2 = xx2.to(dtype = x.dtype)
-                    ffn1, channel_mix_state = self.ChannelMix_FC_Quant8_Step1(x,channel_mix_state,
+
+                    ffn1, channel_mix_state = self.ChannelMix_FC_Int8_Step1(x,channel_mix_state,
                                                                      z[bbb+'ln2.weight'],
                                                                      z[bbb+'ln2.bias'],
                                                                      int(self.n_embd),
@@ -1049,24 +929,16 @@ class RWKV_6(nn.Module):
                                                                      z[ffn+'key.weight'+'.mx'],z[ffn+'key.weight'+'.my'],z[ffn+'key.weight'+'.rx'],z[ffn+'key.weight'+'.ry'],
                                                                      z[ffn+'value.weight'+'.mx'],z[ffn+'value.weight'+'.my'],z[ffn+'value.weight'+'.rx'],z[ffn+'value.weight'+'.ry'],
                                                                      )
-                    
-                    
-                    
                     x = x + ffn1
 
 
 
                 if StrategyMode == 2: #NF4 Mode
-                    # B:int,T:int, C:int, H:int,x, last_state_shift, 
-                    # time_maa_x, time_wkvrg, time_maa_w1, time_maa_w2,
-                    # time_decay_w1, time_decay_w2,time_decay,
-                    # receptance_weight, key_weight, value_weight, gate_weight,
+
                     r,k,v,g,w,xx = self.TimeMix_FC_Step1(B,T,C,H,self.n_embd,x,time_mix_shift,
                                                     z[att+'time_maa_x'], z[att+'time_maa_wkvrg'], z[att+'time_maa_w1'], z[att+'time_maa_w2'],
                                                     z[att+'time_decay_w1'], z[att+'time_decay_w2'],z[att+'time_decay'],
 
-
-                                                    #z[att+'receptance.weight'], z[att+'key.weight'], z[att+'value.weight'],z[att+'gate.weight'],
                                                     bnb.functional.dequantize_4bit(z[att+'receptance.weight'],
                                                                                    quant_state=z[att+'receptance.weight.qstate']) ,
                                                     bnb.functional.dequantize_4bit(z[att+'key.weight'],
@@ -1081,21 +953,15 @@ class RWKV_6(nn.Module):
                                                     z[bbb+'ln1.weight'],z[bbb+'ln1.bias']
                                                     )
                     if T>1:
-                        #  B,T,C,H,ctx,
-                        #  x,last_state_wkv,
-                        #  r,w,k,v,g,
-                        #  time_faaaa,
+
                         att1, time_mix_state = self.TimeMix_FC_Step2_Seq(B,T,C,H,self.ctx,
                                                                       xx,time_mix_state,
                                                                       r,w,k,v,g,
                                                                       z[att+'time_faaaa']
                                                                       )
                     else:
-                        #  B,T,C,H,ctx,
-                        #  x,last_state_wkv,
-                        #  r,w,k,v,g,
-                        #  time_faaaa,
-                        if B < 64:
+
+                        if B < 16:
                             att1, time_mix_state = self.TimeMix_FC_Step2_One(B,T,C,H,self.ctx,
                                                                         xx,time_mix_state,
                                                                         r,w,k,v,g,
@@ -1107,26 +973,14 @@ class RWKV_6(nn.Module):
                                                                         r,w,k,v,g,
                                                                         z[att+'time_faaaa']
                                                                         )
-                    #B:int,T:int,C:int,x,g,dim_head:int,
-                    # ln_x_weight,ln_x_bias,
-                    # output_weight,
+
                     att1 = self.TimeMix_FC_Step3(B,T,C,att1,g,self.n_head,
                                                z[att+'ln_x.weight'],z[att+'ln_x.bias'],
-                                               #z[att+'output.weight']
                                                bnb.functional.dequantize_4bit(z[att+'output.weight'],
                                                                                    quant_state=z[att+'output.weight.qstate'])
                                                )
                     
-                    #Finished TimeMix xx,time_mix_shift,time_mix_state
-                    #x,last_state,
-                    # time_maa_k,
-                    # time_maa_r,
-                    # receptance_weight,
-                    # key_weight,
-                    # value_weight
                     x = x + att1
-                    #print(f'att1={torch.sum(att1)} i={i}')
-                    #xx2 = F.layer_norm(x.to(dtype=z[bbb+'ln2.weight'].dtype), (self.n_embd,), weight=z[bbb+'ln2.weight'], bias=z[bbb+'ln2.bias'])
 
                     ffn1, channel_mix_state = self.ChannelMix_FC_Step1(x,channel_mix_state,
                                                                      z[bbb+'ln2.weight'],
@@ -1134,10 +988,6 @@ class RWKV_6(nn.Module):
                                                                      int(self.n_embd),
                                                                      z[ffn+'time_maa_k'],
                                                                      z[ffn+'time_maa_r'],
-                                                                    
-                                                                     #z[ffn+'receptance.weight'],
-                                                                     #z[ffn+'key.weight'],
-                                                                     #z[ffn+'value.weight']
                                                                      bnb.functional.dequantize_4bit(z[ffn+'receptance.weight'],
                                                                                    quant_state=z[ffn+'receptance.weight.qstate']),
                                                                      bnb.functional.dequantize_4bit(z[ffn+'key.weight'],
@@ -1152,45 +1002,14 @@ class RWKV_6(nn.Module):
                 last_shift_states[i*2+1] = channel_mix_state
                 last_wkv_states[i] = time_mix_state
 
-                        
-            x = F.layer_norm(x.to(dtype=z['ln_out.weight'].dtype), (self.n_embd,), weight=z['ln_out.weight'], bias=z['ln_out.bias'])
-            x = x.to(dtype=self.base_precision)
-
             if self.bit8quant:
-                x = custom_matmul(x,z['head.weight'],
-                                   z['head.weight'+'.mx'],z['head.weight'+'.rx'],z['head.weight'+'.my'],z['head.weight'+'.ry'],
-                                   )#.float()
+                x = self.Final_int8(x,z['head.weight'],z['head.weight'+'.mx'],z['head.weight'+'.rx'],z['head.weight'+'.my'],z['head.weight'+'.ry'],
+                                    self.n_embd,z['ln_out.weight'],z['ln_out.bias'])
             elif self.bit4quant:
-                x = x @ bnb.functional.dequantize_4bit(z['head.weight'],quant_state=z['head.weight.qstate']).t()
+                x = self.Final(x,bnb.functional.dequantize_4bit(z['head.weight'],quant_state=z['head.weight.qstate']),
+                               self.n_embd,z['ln_out.weight'],z['ln_out.bias'])
             else:
-                if z['head.weight'].dtype == torch.float8_e4m3fn:
-                    #print('fp8')
-                    #print(f'xr shape = {xr.shape}')
-                    #xg = x * g
-                    S0=x.shape[0]
-                    S1=x.shape[1]
-
-                    x = torch.clamp(x, min=-448.0, max=448.0)
-
-                    #print(f'xg max = {xg.abs().max()}')
-                    
-                    x, output_amax = torch._scaled_mm(
-                        x.view(S0*S1,x.shape[2]).to(torch.float8_e4m3fn),
-                        z['head.weight'].t(),
-                        bias=None,
-                        out_dtype=torch.bfloat16,
-                        scale_a=torch.tensor(1.0, device='cuda'),
-                        scale_b=torch.tensor(1.0, device='cuda'),
-                        use_fast_accum = True
-                    )
-                    x = x.view(S0, S1, -1)
-                else:
-                    x = x @ z['head.weight'].t()
-
-            #print(f'x = {x}')
-            #exit()
-
-            
+                x = self.Final(x,z['head.weight'],self.n_embd,z['ln_out.weight'],z['ln_out.bias'])            
 
             return x, last_shift_states, last_wkv_states
     def load_state(self,state_filename):
@@ -1257,13 +1076,12 @@ class RWKV_6(nn.Module):
 if __name__ == '__main__':
     from argparse import ArgumentParser
     parser = ArgumentParser()
-    parser.add_argument("--tb", default="1", type=int) 
-    #parser.add_argument("--port", default=9000, type=int) 
+    parser.add_argument("--tb", default="1", type=int) #batch size 
     args = parser.parse_args()
     print('RWKV x060Core with FLA Test')
 
     pipeline = PIPELINE()
-    model = RWKV_6('../models/RWKV-x060-Jpn-7B-20240816-ctx4096.pth',False,'bf16')
+    model = RWKV_6('../models/RWKV-x060-Jpn-7B-20240816-ctx4096.pth','fp8')
     Target_batch = args.tb#16
 
     States = model.new_state(Target_batch)#state_empty(32, 1, 2560, 2560 // 32)
@@ -1311,14 +1129,9 @@ if __name__ == '__main__':
             prompts.append(torch.tensor(tokens).unsqueeze(0).to('cuda'))
         else:
             prompts.append(torch.tensor(tokens2).unsqueeze(0).to('cuda'))
-    #idx = torch.cat([torch.tensor(tokens).unsqueeze(0).to('cuda')], dim=0)
+
 
     idx = torch.cat(prompts, dim=0)
-
-    #shift_states = States.shift_states
-    #wkv_states = States.wkv_states
-
-    #exit()
 
     print(f'{idx.shape}')
 
@@ -1360,7 +1173,7 @@ if __name__ == '__main__':
         
         t0 = time.perf_counter()
         x[:, 0, 0] -= 1e10
-        # 2. sample_logits_blink をバッチ全体に適用
+
         otokens = pipeline.improved_nucleus_sampling_multi_static(x[:, 0], temperature=temperature, top_p=top_p).tolist()
 
         tokens = []
@@ -1408,20 +1221,4 @@ if __name__ == '__main__':
     tokensec = maxtoken / (t001-t000)
     print(f'TargetBatch = {Target_batch} Total token/s = {round(tokensec*Target_batch,2)} Single token/s = {round(tokensec,2)}')
 
-    #print(f'\n[ {round(1/min_time_all,2)} (real) {round(1/min_time_all_single,2)} (singlereal) / {round(1/min_time,2)} (ignore sampling & tokenizer) token/s = {round(time.perf_counter()-t000,3)}s ]', end='')
-
-
-
-
-
-
-                    
-
     
-
-
- 
-
-
-        
-
