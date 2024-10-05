@@ -28,6 +28,21 @@ By combining multiple states, MRSS integrates knowledge from different "experts,
   - True multi batch generation with Flash-Linear-Attention
   - multi batch sampling
   - On an RTX4090, a 7B parameter model can run over 256 batches of inference.
+- **Inference Speed examples(RTX4090)**:
+<div align=center>
+
+| Batch | 7b_fp8(t/s) | 7b_bf16(t/s)|
+|-------|--------|---------|
+| 1     | 75     | 50.08   |
+| 2     | 132.93 | 90.26   |
+| 4     | 284.12 | 192.24  |
+| 8     | 545.31 | 368.41  |
+| 16    | 967.88 | 731.11  |
+| 32    | 1886.72| 1281.16 |
+| 64    | 3261.67| 2233.9  |
+| 128   | 4792.06| 3629.7  |
+| 256   | 5911.39| 4751.32 |
+</div>
 
 ---
 
