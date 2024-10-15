@@ -94,7 +94,7 @@ class LLMWorker:
         print('Initializing LLM Worker')
         
         self.llm_batch_chunk = 1024 #FLA Preprocess Prompt chunks
-        self.llm_batch_cycle = 4 #Preprocess cycle if 4, Pre,single,single,single,Pre,....
+        self.llm_batch_cycle = 10 #Preprocess cycle if 4, Pre,single,single,single,Pre,....
         self.llm_work_cycle = 0
 
         self.llm_max_batch_count = max_batch_size#16
@@ -178,7 +178,15 @@ class LLMWorker:
                 yield "", copy.deepcopy(prompt_queue.prompts[queue_id].use_exist_state_wkv.to('cpu')), copy.deepcopy(prompt_queue.prompts[queue_id].use_exist_state_shift.to('cpu'))
                 prompt_queue.prompts[queue_id] = None
                 break
-            await asyncio.sleep(0.001)
+            if output is not None:
+                if len(output) > 0:
+                    await asyncio.sleep(0.001)
+                else:
+                    await asyncio.sleep(0.1)
+            else:
+                await asyncio.sleep(0.1)
+
+            
 
 
 
@@ -238,7 +246,7 @@ class LLMWorker:
                         
                         #print(data)
                         
-                        self.llM_current_batch_info[i] = copy.deepcopy(data)
+                        self.llM_current_batch_info[i] = data#copy.deepcopy(data)
                         del data
                         
                         self.proceed_total_batches = self.proceed_total_batches + 1
@@ -448,32 +456,60 @@ class LLMWorker:
                     start_times = []
                     end_times = []
 
-                    for i in range(self.llm_max_batch_count):
-                        work = self.llM_current_batch_info[i]
-                        if work['proceedtokens'] >= len(work['prompt']) and work['slotstatus'] == 'processing':
-                                #prompts.append(work['prompt'][work['proceedtokens']:work['proceedtokens']+token_max])
-                                token.append(work['currenttoken'])
-                                token_ids.append(work['prompt_id'])
-                                b_wkv_states.append(work['wkv_states'])
-                                b_shift_states.append(work['shift_states'])
-                                current_prob.append(work['current_prob'])
-                                temperature.append(torch.Tensor([float(work['temperature'])]))
-                                top_p.append(torch.Tensor([float(work['top_p'])]))
-                                outputs.append(work['output'])
-                                out_tokens.append(work['out_tokens'])
-                                out_last.append(work['out_last'])
-                                max_tokens.append(work['max_tokens'])
-                                statuss.append(work['slotstatus']) 
-                                end_token.append(work['end_token']) 
-                                occurrence.append(work['occurrence']) 
-                                counts.append(work['count']) 
-                                start_times.append(work['start_time'])
-                                end_times.append(work['end_time'])
-                                mrss_info.append({'use_contain_originalstate':work['use_contain_originalstate'], # True or False
-                                                  'use_mrss':work['use_mrss'], # True or False
-                                                  'mrss_gating_param':work['mrss_gating_param'], # gating params list
-                                                  'mrss_state_count':work['mrss_state_count'],
-                                                  })
+                    # for i in range(self.llm_max_batch_count):
+                    #     work = self.llM_current_batch_info[i]
+                    #     if work['proceedtokens'] >= len(work['prompt']) and work['slotstatus'] == 'processing':
+                    #             #prompts.append(work['prompt'][work['proceedtokens']:work['proceedtokens']+token_max])
+                    #             token.append(work['currenttoken'])
+                    #             token_ids.append(work['prompt_id'])
+                    #             b_wkv_states.append(work['wkv_states'])
+                    #             b_shift_states.append(work['shift_states'])
+                    #             current_prob.append(work['current_prob'])
+                    #             temperature.append(torch.Tensor([float(work['temperature'])]))
+                    #             top_p.append(torch.Tensor([float(work['top_p'])]))
+                    #             outputs.append(work['output'])
+                    #             out_tokens.append(work['out_tokens'])
+                    #             out_last.append(work['out_last'])
+                    #             max_tokens.append(work['max_tokens'])
+                    #             statuss.append(work['slotstatus']) 
+                    #             end_token.append(work['end_token']) 
+                    #             occurrence.append(work['occurrence']) 
+                    #             counts.append(work['count']) 
+                    #             start_times.append(work['start_time'])
+                    #             end_times.append(work['end_time'])
+                    #             mrss_info.append({'use_contain_originalstate':work['use_contain_originalstate'], # True or False
+                    #                               'use_mrss':work['use_mrss'], # True or False
+                    #                               'mrss_gating_param':work['mrss_gating_param'], # gating params list
+                    #                               'mrss_state_count':work['mrss_state_count'],
+                    #                               })
+
+                    # フィルタリング条件
+                    valid_works = [work for work in self.llM_current_batch_info[:self.llm_max_batch_count]
+                                if work['proceedtokens'] >= len(work['prompt']) and work['slotstatus'] == 'processing']
+
+                    # リスト内包表記を使用してデータを抽出
+                    token = [work['currenttoken'] for work in valid_works]
+                    token_ids = [work['prompt_id'] for work in valid_works]
+                    b_wkv_states = [work['wkv_states'] for work in valid_works]
+                    b_shift_states = [work['shift_states'] for work in valid_works]
+                    current_prob = [work['current_prob'] for work in valid_works]
+                    temperature = [torch.Tensor([float(work['temperature'])]) for work in valid_works]
+                    top_p = [torch.Tensor([float(work['top_p'])]) for work in valid_works]
+                    outputs = [work['output'] for work in valid_works]
+                    out_tokens = [work['out_tokens'] for work in valid_works]
+                    out_last = [work['out_last'] for work in valid_works]
+                    max_tokens = [work['max_tokens'] for work in valid_works]
+                    statuss = [work['slotstatus'] for work in valid_works]
+                    end_token = [work['end_token'] for work in valid_works]
+                    occurrence = [work['occurrence'] for work in valid_works]
+                    counts = [work['count'] for work in valid_works]
+                    start_times = [work['start_time'] for work in valid_works]
+                    end_times = [work['end_time'] for work in valid_works]
+                    mrss_info = [{'use_contain_originalstate': work['use_contain_originalstate'],
+                                'use_mrss': work['use_mrss'],
+                                'mrss_gating_param': work['mrss_gating_param'],
+                                'mrss_state_count': work['mrss_state_count']}
+                                for work in valid_works]
 
                     if self.time_debug:
                         start_time1 = time.time()
@@ -640,6 +676,7 @@ class LLMWorker:
                                         #print(tmp,end="", flush=True)
                                         outputs[j] = outputs[j] + tmp
                                         out_last[j] = counts[j] + 1
+                                #print(f'outtokens = {len(out_tokens[j])}')
                                 if len(out_tokens[j]) > max_tokens[j]:
                                     #Reached Max Token
                                     statuss[j] = 'idle'
@@ -651,6 +688,7 @@ class LLMWorker:
                                     if stop in tmp:
                                         #yield tmp
                                         #output_text = output_text + tmp
+                                        print(f'Endtoken = {repr(tmp)}')
                                         outputs[j] = outputs[j] + tmp
                                         exit_flag = True
                                 if exit_flag:
@@ -658,7 +696,13 @@ class LLMWorker:
                                     print(f'batch {j} is finished cause got endtoken')
                                     #print(outputs[j])
 
-                            except:
+                            except Exception as e:
+                                print('exceptions')
+                                #print(f"エラーが発生しました: {type(e).__name__}")
+                                #print(f"エラーの詳細: {str(e)}")
+                                tmp = ''
+                                outputs[j] = outputs[j] + tmp
+                                out_last[j] = counts[j] + 1
                                 pass
 
                         if self.time_debug:
@@ -841,4 +885,4 @@ class LLMWorker:
 
 
 
-            await asyncio.sleep(0.0001) # Every 1ms
+            await asyncio.sleep(0.00001) # Every 1ms
