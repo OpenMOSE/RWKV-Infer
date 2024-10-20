@@ -8,3 +8,4 @@ triton
 bitsandbytes
 einops
 transformers
+torchao

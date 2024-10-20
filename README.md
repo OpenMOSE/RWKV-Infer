@@ -51,8 +51,9 @@ By combining multiple states, MRSS integrates knowledge from different "experts,
 
 ## How To Use
    - 0. Python >= 3.12
-   - 1. Install Latest? Pytorch with Cuda(2.4+ tested)
-   - 2. install requirements with triton==3.0.0+(in rocm >=3.0.0)
+   - 1. Install Latest? Pytorch with Cuda(2.5+ tested) 
+   - 2. some case need (conda install libstdcxx -c conda-forge --override-channels) for building cuda kernel
+   - 3. install requirements with triton==3.0.0+(in rocm >=3.0.0)
 ```sh
 pip install -r requirements_fla.txt
 ```    
