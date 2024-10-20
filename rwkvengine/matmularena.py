@@ -109,7 +109,7 @@ def fp8_hybrod_matmul(a,b):
 
             #print(f'xg max = {xg.abs().max()}')
             
-            x, output_amax = torch._scaled_mm(
+            x = torch._scaled_mm(
                 xg.view(S0*S1,xg.shape[2]).to(torch.float8_e4m3fn).contiguous(),
                 b.contiguous(),
                 bias=None,
