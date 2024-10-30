@@ -3,7 +3,7 @@
 
 #Test Torchao
 import torchao
-from torchao.dtypes.fpx import to_scaled_tc_fpx
+from torchao.dtypes.floatx import to_scaled_tc_floatx
 from torchao.ops import quant_llm_linear
 
 
@@ -217,7 +217,7 @@ class RWKV_6(nn.Module):
         QuantList = ['.receptance.weight','.key.weight','.value.weight','.gate.weight','.output.weight','head.weight']
 
         QuantListFP8 = ['att.receptance.weight','att.key.weight','att.value.weight','att.gate.weight','att.output.weight','ffn.key.weight','ffn.receptance.weight','ffn.value.weight','head.weight'] #, ,
-        QuantListFP6 = ['att.key.weight','att.value.weight','att.gate.weight','att.output.weight','ffn.key.weight','ffn.receptance.weight','ffn.value.weight','head.weight'] #, ,
+        QuantListFP6 = ['att.receptance.weight','att.key.weight','att.value.weight','att.gate.weight','att.output.weight','ffn.key.weight','ffn.receptance.weight','ffn.value.weight','head.weight'] #, ,
  
         # 4bit Quantize Mode via Bitsandbytes NF4
         if self.bit4quant == True:
@@ -299,7 +299,7 @@ class RWKV_6(nn.Module):
 
                         # pre-process the weight. this will quantize the weight to FP6 and pack it in a special
                         # layout for tensor cores. refer to paper for more details.
-                        z[k], z[k+'.qstate'] = to_scaled_tc_fpx(z[k], 3, 2)
+                        z[k], z[k+'.qstate'] = to_scaled_tc_floatx(z[k], 3, 2)
                         #z[k], z[k+'.qstate']= bnb.functional.quantize_nf4(z[k])
 
                 if QuantKeyFound == False:
@@ -656,7 +656,7 @@ class RWKV_6(nn.Module):
             S0=xv.shape[0]
             S1=xv.shape[1]
             xv = xv.to(dtype=torch.float16).view(-1,xv.shape[2])
-            v = quant_llm_linear(ebits, mbits, xv, value_weight, key_qstate).view(S0,S1,-1)
+            v = quant_llm_linear(ebits, mbits, xv, value_weight, value_qstate).view(S0,S1,-1)
         else:
             v = (xv.to(dtype=time_maa_x.dtype) @ value_weight.t())
 
