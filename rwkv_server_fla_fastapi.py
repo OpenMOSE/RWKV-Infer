@@ -141,8 +141,9 @@ params_base = {
             "frequency_penalty": 0.5,
             "penalty_decay": 0.996,
             "half_life": 400,
-            "stop": ['\x17','\n\n'] #\n\n
+            "stop": ['\n\n'] #\n\n
         }
+Endtoken = '\n\n'
 @app.post("/removemodel")
 async def removemodel():
     #global wrappers
@@ -521,43 +522,43 @@ async def rwkv_completions(request: Request):
     for element in messages[:-minimum_gen_count]:
         if element['role'] == 'user':
             input_prompt = input_prompt + f'{user_name}:{element["content"]}'
-            input_prompt = re.sub(r'\n{3,}', '\n\n', input_prompt)
+            input_prompt = re.sub(r'\n{3,}', Endtoken, input_prompt)
             input_prompt_stm = input_prompt_stm + f'{user_name}:{element["content"]}'
-            input_prompt_stm = re.sub(r'\n{3,}', '\n\n', input_prompt_stm)
-            if not input_prompt_stm.endswith('\n\n'):
-                input_prompt_stm += '\n\n'
-            if not input_prompt.endswith('\n\n'):
-                input_prompt += '\n\n'
+            input_prompt_stm = re.sub(r'\n{3,}', Endtoken, input_prompt_stm)
+            if not input_prompt_stm.endswith(Endtoken):
+                input_prompt_stm += Endtoken
+            if not input_prompt.endswith(Endtoken):
+                input_prompt += Endtoken
         elif element['role'] == 'assistant':
             input_prompt = input_prompt + f'{assistant_name}:{element["content"]}'
-            input_prompt = re.sub(r'\n{3,}', '\n\n', input_prompt)
+            input_prompt = re.sub(r'\n{3,}', Endtoken, input_prompt)
             input_prompt_stm = input_prompt_stm + f'{assistant_name}:{element["content"]}'
-            input_prompt_stm = re.sub(r'\n{3,}', '\n\n', input_prompt_stm)
-            if not input_prompt_stm.endswith('\n\n'):
-                input_prompt_stm += '\n\n'
-            if not input_prompt.endswith('\n\n'):
-                input_prompt += '\n\n'
+            input_prompt_stm = re.sub(r'\n{3,}', Endtoken, input_prompt_stm)
+            if not input_prompt_stm.endswith(Endtoken):
+                input_prompt_stm += Endtoken
+            if not input_prompt.endswith(Endtoken):
+                input_prompt += Endtoken
         elif element['role'] == 'system':
             input_prompt = input_prompt + f'{system_name}:{element["content"]}'
-            input_prompt = re.sub(r'\n{3,}', '\n\n', input_prompt)
+            input_prompt = re.sub(r'\n{3,}', Endtoken, input_prompt)
             input_prompt_stm = input_prompt_stm + f'{system_name}:{element["content"]}'
-            input_prompt_stm = re.sub(r'\n{3,}', '\n\n', input_prompt_stm)
-            if not input_prompt_stm.endswith('\n\n'):
-                input_prompt_stm += '\n\n'
-            if not input_prompt.endswith('\n\n'):
-                input_prompt += '\n\n'
+            input_prompt_stm = re.sub(r'\n{3,}', Endtoken, input_prompt_stm)
+            if not input_prompt_stm.endswith(Endtoken):
+                input_prompt_stm += Endtoken
+            if not input_prompt.endswith(Endtoken):
+                input_prompt += Endtoken
         elif element['role'] == 'rag':
             input_prompt = input_prompt + f'{system_name}:{element["content"]}'
-            input_prompt = re.sub(r'\n{3,}', '\n\n', input_prompt)
+            input_prompt = re.sub(r'\n{3,}', Endtoken, input_prompt)
 
             if delete_ragprompt == False:
                 input_prompt_stm = input_prompt_stm + f'{system_name}:{element["content"]}'
-                input_prompt_stm = re.sub(r'\n{3,}', '\n\n', input_prompt_stm)
-                if not input_prompt_stm.endswith('\n\n'):
-                    input_prompt_stm += '\n\n'
+                input_prompt_stm = re.sub(r'\n{3,}', Endtoken, input_prompt_stm)
+                if not input_prompt_stm.endswith(Endtoken):
+                    input_prompt_stm += Endtoken
 
-            if not input_prompt.endswith('\n\n'):
-                input_prompt += '\n\n'
+            if not input_prompt.endswith(Endtoken):
+                input_prompt += Endtoken
 
     input_prompt_b = input_prompt
     input_prompt_stm_b = input_prompt_stm
@@ -573,44 +574,44 @@ async def rwkv_completions(request: Request):
     for element in last_two_elements:
         if element['role'] == 'user':
             input_prompt = input_prompt + f'{user_name}:{element["content"]}'
-            input_prompt = re.sub(r'\n{3,}', '\n\n', input_prompt)
-            if not input_prompt.endswith('\n\n'):
-                    input_prompt += '\n\n'
+            input_prompt = re.sub(r'\n{3,}', Endtoken, input_prompt)
+            if not input_prompt.endswith(Endtoken):
+                    input_prompt += Endtoken
             input_prompt_stm = input_prompt_stm + f'{user_name}:{element["content"]}'
-            input_prompt_stm = re.sub(r'\n{3,}', '\n\n', input_prompt_stm)
-            if not input_prompt_stm.endswith('\n\n'):
-                input_prompt_stm += '\n\n'
+            input_prompt_stm = re.sub(r'\n{3,}', Endtoken, input_prompt_stm)
+            if not input_prompt_stm.endswith(Endtoken):
+                input_prompt_stm += Endtoken
         elif element['role'] == 'assistant':
             input_prompt = input_prompt + f'{assistant_name}:{element["content"]}'
-            input_prompt = re.sub(r'\n{3,}', '\n\n', input_prompt)
-            if not input_prompt.endswith('\n\n'):
-                    input_prompt += '\n\n'
+            input_prompt = re.sub(r'\n{3,}', Endtoken, input_prompt)
+            if not input_prompt.endswith(Endtoken):
+                    input_prompt += Endtoken
             input_prompt_stm = input_prompt_stm + f'{assistant_name}:{element["content"]}'
-            input_prompt_stm = re.sub(r'\n{3,}', '\n\n', input_prompt_stm)
-            if not input_prompt_stm.endswith('\n\n'):
-                input_prompt_stm += '\n\n'
+            input_prompt_stm = re.sub(r'\n{3,}', Endtoken, input_prompt_stm)
+            if not input_prompt_stm.endswith(Endtoken):
+                input_prompt_stm += Endtoken
         elif element['role'] == 'system':
             input_prompt = input_prompt + f'{system_name}:{element["content"]}'
-            input_prompt = re.sub(r'\n{3,}', '\n\n', input_prompt)
-            if not input_prompt.endswith('\n\n'):
-                    input_prompt += '\n\n'
+            input_prompt = re.sub(r'\n{3,}', Endtoken, input_prompt)
+            if not input_prompt.endswith(Endtoken):
+                    input_prompt += Endtoken
             input_prompt_stm = input_prompt_stm + f'{system_name}:{element["content"]}'
-            input_prompt_stm = re.sub(r'\n{3,}', '\n\n', input_prompt_stm)
-            if not input_prompt_stm.endswith('\n\n'):
-                input_prompt_stm += '\n\n'
+            input_prompt_stm = re.sub(r'\n{3,}', Endtoken, input_prompt_stm)
+            if not input_prompt_stm.endswith(Endtoken):
+                input_prompt_stm += Endtoken
 
         elif element['role'] == 'rag':
             input_prompt = input_prompt + f'{system_name}:{element["content"]}'
-            input_prompt = re.sub(r'\n{3,}', '\n\n', input_prompt)
+            input_prompt = re.sub(r'\n{3,}', Endtoken, input_prompt)
 
             if delete_ragprompt == False:
                 input_prompt_stm = input_prompt_stm + f'{system_name}:{element["content"]}'
-                input_prompt_stm = re.sub(r'\n{3,}', '\n\n', input_prompt_stm)
-                if not input_prompt_stm.endswith('\n\n'):
-                    input_prompt_stm += '\n\n'
+                input_prompt_stm = re.sub(r'\n{3,}', Endtoken, input_prompt_stm)
+                if not input_prompt_stm.endswith(Endtoken):
+                    input_prompt_stm += Endtoken
 
-            if not input_prompt.endswith('\n\n'):
-                input_prompt += '\n\n'
+            if not input_prompt.endswith(Endtoken):
+                input_prompt += Endtoken
 
     input_prompt = input_prompt + f'{assistant_name}:'
     input_prompt_stm = input_prompt_stm + f'{assistant_name}:'

@@ -1,5 +1,5 @@
 import torch
-from torchao.dtypes.fpx import to_scaled_tc_fpx
+from torchao.dtypes.floatx import to_scaled_tc_floatx
 from torchao.ops import quant_llm_linear
 
 fp32_weight = torch.randn(1024, 4096).cuda()
@@ -7,7 +7,7 @@ ebits, mbits = 3, 2
 
 # pre-process the weight. this will quantize the weight to FP6 and pack it in a special
 # layout for tensor cores. refer to paper for more details.
-fp6_weight, scales = to_scaled_tc_fpx(fp32_weight, ebits, mbits)
+fp6_weight, scales = to_scaled_tc_floatx(fp32_weight, ebits, mbits)
 
 
 

@@ -22,6 +22,7 @@ By combining multiple states, MRSS integrates knowledge from different "experts,
 
 - **Quantization Support**:
   - FP8 (Experiment. need NVIDIA H100 or Ada series gpu)
+  - FP6 (Early Experiment. slightly degradation. toachao fpx e3m2)
   - Int8 (only CUDA)
   - Bitsandbytes NF4 (currently slow)
 - **Multi Batch Generation**:
