@@ -1,5 +1,6 @@
 models/
 states/
+adapters/
 experiment/
 __pycache__/
 fla/__pycache__/__init__.cpython-310.pyc

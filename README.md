@@ -20,6 +20,10 @@ By combining multiple states, MRSS integrates knowledge from different "experts,
 
    - State reusability: Enables efficient creation of new models through state recombination.
 
+- **Hot swapping of adapter models**: 
+  - Bone(Block Affine Transformation) Adapter
+  - LoRA Adapter
+
 - **Quantization Support**:
   - FP8 (Experiment. need NVIDIA H100 or Ada series gpu)
   - FP6 (Early Experiment. slightly degradation. toachao fpx e3m2)
@@ -75,6 +79,10 @@ curl http://127.0.0.1:9000/loadmodel -X POST -H "Content-Type: application/json"
    - 1. Model Load
 ```sh
 curl http://127.0.0.1:9000/loadmodel -X POST -H "Content-Type: application/json" -d '{"model_filename":"models/RWKV-x060-World-1B6-v2.1-20240328-ctx4096.pth","model_viewname":"RWKV x060 1B6 Base","model_strategy":"","default_temperature":"1.0", "default_top_p":"0.3"}'
+```
+   - 1. Model Load + Adapter
+```sh
+curl http://127.0.0.1:9000/loadmodel -X POST -H "Content-Type: application/json" -d '{"model_filename":"models/RWKV-x060-World-1B6-v2.1-20240328-ctx4096.pth","model_viewname":"RWKV x060 1B6 Base","model_strategy":"","adapter_filename":"adapters/rwkv-9-bone.pth","adapter_mode":"bone","default_temperature":"1.0", "default_top_p":"0.3"}'
 ```
    - 2. Add Single state
 ```sh

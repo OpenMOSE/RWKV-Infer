@@ -259,8 +259,8 @@ class PIPELINE():
         #print(samples)
         
         return samples.tolist()
-    @MyStatic
-    def improved_nucleus_sampling_multi_static(logits, temperature, top_p):
+    #@MyStatic
+    def improved_nucleus_sampling_multi_static(self,logits, temperature, top_p):
         #batch_size = logits.size(0)
         device = logits.device
         #vocab_size = logits.size(-1)
