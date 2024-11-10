@@ -141,7 +141,7 @@ params_base = {
             "frequency_penalty": 0.5,
             "penalty_decay": 0.996,
             "half_life": 400,
-            "stop": ['\n\n'] #\n\n
+            "stop": ['\n\n'] #\n\n \x17
         }
 Endtoken = '\n\n'
 @app.post("/removemodel")
@@ -178,6 +178,11 @@ async def loadmodel(request: Request):
         model_filename = data.get('model_filename')
         model_viewname = data.get('model_viewname','default model')
         model_strategy = data.get('model_strategy','None')
+
+        adapter_filename = data.get('adapter_filename','')
+        adapter_mode = data.get('adapter_mode','')
+        adapter_scaling = float(data.get('adapter_scaling','2.0'))
+
         default_temperature = data.get('default_temperature',None)
         default_top_p = data.get('default_top_p',None)
 
@@ -221,6 +226,9 @@ async def loadmodel(request: Request):
         elif model_strategy == 'fp6':
             Quant = False
             precision = 'fp6'
+        elif model_strategy == 'fp5':
+            Quant = False
+            precision = 'fp5'
         elif model_strategy == 'nf4':
             Quant = False
             precision = 'nf4'
@@ -232,7 +240,7 @@ async def loadmodel(request: Request):
         StateList = []
         DynamicStateList = []
         
-        engine1.LoadModel(model_filename,Quant,precision)
+        engine1.LoadModel(model_filename,Quant,precision,adapter_model=adapter_filename,adapter_mode=adapter_mode,adapter_scale=adapter_scaling)
         ModelList = [{"object":"models","id":f"{model_viewname}"}]
         #return jsonify({"status": "success"}), 200
         return {"status": "success"}

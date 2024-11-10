@@ -22,6 +22,7 @@ import os, sys
 import time
 import bitsandbytes as bnb
 import functools
+from einops import rearrange
 
 #from rwkvengine.misc import PIPELINE
 from rwkvengine.misc import PIPELINE
@@ -138,17 +139,20 @@ def fused_recurrent_rwkv6_torch(
 
 class RWKV_6(nn.Module):
 
-    def __init__(self,load_model: str,base_precision: str = 'int8'):
+    def __init__(self,load_model: str,base_precision: str = 'int8',adapter_model:str = '', adapter_mode:str = '', adapter_scale:float=2.0):
 
         print('Helloworld RWKV v060 :) Initializing')
 
         super().__init__()
+        self.transfer_stream = torch.cuda.Stream()
 
         #GANBATTE CODE KAKOU
         self.bit8quant = False
         self.bit4quant = False
         self.bitfp8quant = False
         self.bitfp6quant = False
+
+        self.ExtremeCPUOffload = False
 
         if base_precision == 'fp16':
             self.base_precision = torch.float16
@@ -175,12 +179,82 @@ class RWKV_6(nn.Module):
             self.bit4quant = False
             self.bitfp8quant = False
             self.bitfp6quant = True
+            self.bitfp5quant = False
+        elif base_precision == 'fp5':
+            self.base_precision = torch.bfloat16
+            self.bit8quant = False
+            self.bit4quant = False
+            self.bitfp8quant = False
+            self.bitfp6quant = True
+            self.bitfp5quant = True
         else:
             self.base_precision = torch.bfloat16
         
         modelpath = load_model
 
         z = torch.load(modelpath,map_location="cpu",mmap=True)
+        self.ModeMode = 'standard'
+        if adapter_model != '' and adapter_mode != '':
+            print('Adapter LoadMode')
+            if 'lora' in adapter_mode or 'LoRA' in adapter_mode:
+                print('LoRA Mode Lets Merge!')
+                self.ModeMode = 'lora'
+                z_adapter = torch.load(adapter_model,map_location="cpu",mmap=True)
+            elif 'bone' in adapter_mode or 'Bone' in adapter_mode:
+                print('Bone(Block Affine Transformation) Mode Lets Merge!')
+                self.ModeMode = 'bone'
+                z_adapter = torch.load(adapter_model,map_location="cpu",mmap=True)
+
+        def Attach_Adapter(keyname,weight,adapter,mode,scaling=2.0,device='cuda'): #from JL-er lora merge inspired
+            print(f'AttachAdapter = {keyname}')
+            if keyname.endswith('.weight') or keyname.endswith('head'):
+                adapterkeys = list(adapter.keys())
+                #print(adapterkeys)
+#                for k in adapterkeys:
+                if mode == 'lora':
+                    prefix = keyname[:-len('.weight')]
+                    lora_A = prefix + '.lora_A'
+                    lora_B = prefix + '.lora_B'
+                    if lora_A in adapterkeys:
+                        w=adapter
+                        assert lora_B in adapterkeys
+                        print(f'lora merging {lora_A} and {lora_B} into {k}')
+                        assert w[lora_B].shape[1] == w[lora_A].shape[0]
+                        lora_r = w[lora_B].shape[1]
+                        w[k] = w[k].to(device=device)
+                        w[lora_A] = w[lora_A].to(device=device)
+                        w[lora_B] = w[lora_B].to(device=device)
+                        weight = weight + w[lora_B] @ w[lora_A] * scaling
+                        del w[lora_A]
+                        del w[lora_B]
+                        return weight
+                    return weight
+                elif mode == 'bone':
+                    prefix = keyname[:-len('.weight')]
+                    gbmm = prefix + '.bone'
+                    print(f'gbmm target = {gbmm}')
+                    if gbmm in adapterkeys:
+                        w=adapter
+                        print(f'bone merging {gbmm} into {k}')
+                        w[gbmm] = w[gbmm].to(device=device)
+                        b,r,_ = w[gbmm].shape
+                        bone = rearrange(weight, '(a r1) (b r2) -> a b r1 r2', r1 = r, r2 = r)@w[gbmm]+w[gbmm]
+                        weight += rearrange(bone, 'a b r1 r2 ->(a r1) (b r2) ')
+                        del w[gbmm]
+                        return weight
+                    return weight
+                else:
+                    return weight
+            else:
+                adapterkeys = list(adapter.keys())
+                for key in adapterkeys:
+                    if key == keyname:
+                        weight = adapter[key].to(dtype=torch.bfloat16,device=device)
+                        print(f'key = {key} is swapped from Adapter')
+                #print('no target bone merge')
+                return weight
+                    
+
         keys = list(z.keys())
         print("keys", keys)
 
@@ -222,6 +296,11 @@ class RWKV_6(nn.Module):
         # 4bit Quantize Mode via Bitsandbytes NF4
         if self.bit4quant == True:
             for k in keys:
+
+                if k.endswith('.weight') and self.ModeMode != 'standard':
+                    z[k] = z[k].to(device='cuda', dtype=torch.bfloat16)
+                    z[k] = Attach_Adapter(keyname=k,weight=z[k],adapter=z_adapter,mode=self.ModeMode,scaling=adapter_scale,device='cuda')
+
                 QuantKeyFound = False
                 for QuantKey in QuantList:
                     if k.endswith(QuantKey):
@@ -233,6 +312,7 @@ class RWKV_6(nn.Module):
 
                 if QuantKeyFound == False:
                     z[k] = z[k].to(device='cuda')
+
                     if k.endswith('.time_decay'): z[k] = z[k].float()
                     elif k.endswith('.time_faaaa'): z[k] = z[k].float()
                     elif k.endswith('.ln1.weight'): z[k] = z[k].to(dtype=torch.bfloat16)
@@ -253,6 +333,11 @@ class RWKV_6(nn.Module):
         elif self.bitfp8quant == True:
             for k in keys:
                 print(f' k = {k} shape = {z[k].shape}' )
+
+                if self.ModeMode != 'standard':
+                    z[k] = z[k].to(device='cuda', dtype=torch.bfloat16)
+                    z[k] = Attach_Adapter(keyname=k,weight=z[k],adapter=z_adapter,mode=self.ModeMode,scaling=adapter_scale,device='cuda')
+
                 QuantKeyFound = False
                 for QuantKey in QuantListFP8:
                     if k.endswith(QuantKey):
@@ -288,18 +373,29 @@ class RWKV_6(nn.Module):
 
         # FP6 Quantize Mode via Torch.AO
         elif self.bitfp6quant == True:
-            self.ebits, self.mbits = 3, 2
+            if self.bitfp5quant:
+                self.ebits, self.mbits = 2, 2
+            else:
+                self.ebits, self.mbits = 3, 2
             for k in keys:
                 QuantKeyFound = False
                 for QuantKey in QuantListFP6:
                     if k.endswith(QuantKey):
-                        print(f'Quant {k} to FP6 shape = {z[k].shape}' )
+                        if self.bitfp5quant:
+                            print(f'Quant {k} to FP5 shape = {z[k].shape}' )
+                        else:
+                            print(f'Quant {k} to FP6 shape = {z[k].shape}' )
                         QuantKeyFound = True
                         z[k] = z[k].to(device='cuda',dtype=torch.float16)#.t() 
 
                         # pre-process the weight. this will quantize the weight to FP6 and pack it in a special
                         # layout for tensor cores. refer to paper for more details.
-                        z[k], z[k+'.qstate'] = to_scaled_tc_floatx(z[k], 3, 2)
+                        z[k], z[k+'.qstate'] = to_scaled_tc_floatx(z[k], self.ebits, self.mbits)
+
+                        if self.ExtremeCPUOffload:
+                            z[k] = z[k].to(device='cpu')
+                            z[k+'.qstate'] = z[k+'.qstate'].to(device='cpu')
+
                         #z[k], z[k+'.qstate']= bnb.functional.quantize_nf4(z[k])
 
                 if QuantKeyFound == False:
@@ -536,7 +632,7 @@ class RWKV_6(nn.Module):
         return r, k, v, g, w, xx
     
 
-    #@torch.compile#(mode="reduce-overhead", fullgraph=True)
+    @torch.compile(mode="reduce-overhead")
     def TimeMix_FC_FP6_Step1(self,B:int,T:int, C:int, H:int, embd:int,x, last_state_shift, 
                               time_maa_x, time_wkvrg, time_maa_w1, time_maa_w2,
                               time_decay_w1, time_decay_w2,time_decay,
@@ -905,7 +1001,8 @@ class RWKV_6(nn.Module):
             return (x * g).to(dtype=output_weight.dtype) @ output_weight.t()
         
     #@MyStatic
-    @torch.compile
+    #@torch.compile
+    @torch.compile(mode="reduce-overhead")
     def TimeMix_FC_FP6_Step3(self,B:int,T:int,C:int,x,g,dim_head:int,
                               ln_x_weight,ln_x_bias,
                               output_weight,
@@ -1233,7 +1330,7 @@ class RWKV_6(nn.Module):
         x = F.layer_norm(x.to(dtype=ln_out_weight.dtype), (n_embd,), weight=ln_out_weight, bias=ln_out_bias)
         x = custom_matmul(x,head_weight,head_mx,head_rx,head_my,head_ry)
         return x
-
+    #@torch.compile
     def forward(self, idx: torch.Tensor, last_shift_states: List[torch.Tensor],
                 last_wkv_states: List[torch.Tensor]):
         StrategyMode = 0 # 0 is Fully BF16 or FP16 or FP8
@@ -1257,6 +1354,8 @@ class RWKV_6(nn.Module):
                 bbb = f'blocks.{i}.'
                 att = f'blocks.{i}.att.'
                 ffn = f'blocks.{i}.ffn.'
+
+
 
                 time_mix_shift = last_shift_states[i*2]
                 channel_mix_state = last_shift_states[i*2+1]
@@ -1440,14 +1539,14 @@ class RWKV_6(nn.Module):
                     r,k,v,g,w,xx = self.TimeMix_FC_FP6_Step1(B,T,C,H,self.n_embd,x,time_mix_shift,
                                                     z[att+'time_maa_x'], z[att+'time_maa_wkvrg'], z[att+'time_maa_w1'], z[att+'time_maa_w2'],
                                                     z[att+'time_decay_w1'], z[att+'time_decay_w2'],z[att+'time_decay'],
-                                                    z[att+'receptance.weight'],
-                                                    z[att+'receptance.weight.qstate'],
-                                                    z[att+'key.weight'],
-                                                    z[att+'key.weight.qstate'],
-                                                    z[att+'value.weight'],
-                                                    z[att+'value.weight.qstate'],
-                                                    z[att+'gate.weight'],
-                                                    z[att+'gate.weight.qstate'],
+                                                    z[att+'receptance.weight'].to(device='cuda'),
+                                                    z[att+'receptance.weight.qstate'].to(device='cuda'),
+                                                    z[att+'key.weight'].to(device='cuda'),
+                                                    z[att+'key.weight.qstate'].to(device='cuda'),
+                                                    z[att+'value.weight'].to(device='cuda'),
+                                                    z[att+'value.weight.qstate'].to(device='cuda'),
+                                                    z[att+'gate.weight'].to(device='cuda'),
+                                                    z[att+'gate.weight.qstate'].to(device='cuda'),
                                                     z[bbb+'ln1.weight'],z[bbb+'ln1.bias'],
                                                     self.ebits, self.mbits
                                                     )
@@ -1473,8 +1572,8 @@ class RWKV_6(nn.Module):
 
                     att1 = self.TimeMix_FC_FP6_Step3(B,T,C,att1,g,self.n_head,
                                                z[att+'ln_x.weight'],z[att+'ln_x.bias'],
-                                               z[att+'output.weight'],
-                                               z[att+'output.weight.qstate'],
+                                               z[att+'output.weight'].to(device='cuda'),
+                                               z[att+'output.weight.qstate'].to(device='cuda'),
                                                self.ebits, self.mbits
                                                )
                     # att1 = self.TimeMix_FC_Step3(B,T,C,att1,g,self.n_head,
@@ -1491,12 +1590,12 @@ class RWKV_6(nn.Module):
                                                                      int(self.n_embd),
                                                                      z[ffn+'time_maa_k'],
                                                                      z[ffn+'time_maa_r'],
-                                                                     z[ffn+'receptance.weight'],
-                                                                     z[ffn+'receptance.weight.qstate'],
-                                                                     z[ffn+'key.weight'],
-                                                                     z[ffn+'key.weight.qstate'],
-                                                                     z[ffn+'value.weight'],
-                                                                     z[ffn+'value.weight.qstate'],
+                                                                     z[ffn+'receptance.weight'].to(device='cuda'),
+                                                                     z[ffn+'receptance.weight.qstate'].to(device='cuda'),
+                                                                     z[ffn+'key.weight'].to(device='cuda'),
+                                                                     z[ffn+'key.weight.qstate'].to(device='cuda'),
+                                                                     z[ffn+'value.weight'].to(device='cuda'),
+                                                                     z[ffn+'value.weight.qstate'].to(device='cuda'),
                                                                      self.ebits, self.mbits
                                                                      )
                     # ffn1, channel_mix_state = self.ChannelMix_FC_Step1(x,channel_mix_state,
@@ -1525,7 +1624,8 @@ class RWKV_6(nn.Module):
                 # x = self.Final_NF4(x,z['head.weight'],z['head.weight.qstate'],
                 #                self.n_embd,z['ln_out.weight'],z['ln_out.bias'])
             elif self.bitfp6quant:
-                x = self.Final_FP6(x,z['head.weight'],z['head.weight.qstate'],
+                x = self.Final_FP6(x,z['head.weight'].to(device='cuda'),
+                                   z['head.weight.qstate'].to(device='cuda'),
                             self.n_embd,z['ln_out.weight'],z['ln_out.bias'],
                             self.ebits, self.mbits
                             )
