@@ -297,7 +297,7 @@ class RWKV_6(nn.Module):
         if self.bit4quant == True:
             for k in keys:
 
-                if k.endswith('.weight') and self.ModeMode != 'standard':
+                if self.ModeMode != 'standard':
                     z[k] = z[k].to(device='cuda', dtype=torch.bfloat16)
                     z[k] = Attach_Adapter(keyname=k,weight=z[k],adapter=z_adapter,mode=self.ModeMode,scaling=adapter_scale,device='cuda')
 
@@ -333,6 +333,9 @@ class RWKV_6(nn.Module):
         elif self.bitfp8quant == True:
             for k in keys:
                 print(f' k = {k} shape = {z[k].shape}' )
+                if self.ModeMode != 'standard':
+                    z[k] = z[k].to(device='cuda', dtype=torch.bfloat16)
+                    z[k] = Attach_Adapter(keyname=k,weight=z[k],adapter=z_adapter,mode=self.ModeMode,scaling=adapter_scale,device='cuda')
 
                 if self.ModeMode != 'standard':
                     z[k] = z[k].to(device='cuda', dtype=torch.bfloat16)
@@ -378,6 +381,9 @@ class RWKV_6(nn.Module):
             else:
                 self.ebits, self.mbits = 3, 2
             for k in keys:
+                if self.ModeMode != 'standard':
+                    z[k] = z[k].to(device='cuda', dtype=torch.bfloat16)
+                    z[k] = Attach_Adapter(keyname=k,weight=z[k],adapter=z_adapter,mode=self.ModeMode,scaling=adapter_scale,device='cuda')
                 QuantKeyFound = False
                 for QuantKey in QuantListFP6:
                     if k.endswith(QuantKey):
@@ -429,6 +435,9 @@ class RWKV_6(nn.Module):
         # int 8bit Quantize Mode via Custom Kernel
         elif self.bit8quant == True:
             for k in keys:
+                if self.ModeMode != 'standard':
+                    z[k] = z[k].to(device='cuda', dtype=torch.bfloat16)
+                    z[k] = Attach_Adapter(keyname=k,weight=z[k],adapter=z_adapter,mode=self.ModeMode,scaling=adapter_scale,device='cuda')
                 QuantKeyFound = False
                 for QuantKey in QuantList:
                     if k.endswith(QuantKey):
@@ -481,6 +490,9 @@ class RWKV_6(nn.Module):
         # Non Quantize Mode FP16 or BF16
         else:
             for k in keys:
+                if self.ModeMode != 'standard':
+                    z[k] = z[k].to(device='cuda', dtype=torch.bfloat16)
+                    z[k] = Attach_Adapter(keyname=k,weight=z[k],adapter=z_adapter,mode=self.ModeMode,scaling=adapter_scale,device='cuda')
                 #if             '.time_' in k: z[k] = z[k].squeeze()
                 z[k] = z[k].to(device='cuda')
                 #if k.endswith('.time_decay'): z[k] = z[k].float()
