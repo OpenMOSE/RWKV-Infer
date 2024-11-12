@@ -15,6 +15,7 @@ import torch
 from functools import wraps
 from argparse import ArgumentParser
 import uvicorn
+import codecs
 from starlette.concurrency import run_in_threadpool
 from starlette.background import BackgroundTask
 
@@ -134,7 +135,7 @@ params_base = {
             "user_name": "User", 
             "assistant_name": "Assistant",
             "model": 'model',
-            "max_tokens": 1024,
+            "max_tokens": 4096,
             "top_p": 0.3,
             "temperature": 1,
             "presence_penalty": 0.5,
@@ -143,7 +144,9 @@ params_base = {
             "half_life": 400,
             "stop": ['\n\n'] #\n\n \x17
         }
+DefaultEndtoken = '\n\n'
 Endtoken = '\n\n'
+
 @app.post("/removemodel")
 async def removemodel():
     #global wrappers
@@ -173,11 +176,19 @@ async def loadmodel(request: Request):
     global ModelList
     global StateList
     global DynamicStateList
+    global Endtoken
     try:
         data = await request.json()
         model_filename = data.get('model_filename')
         model_viewname = data.get('model_viewname','default model')
         model_strategy = data.get('model_strategy','None')
+
+
+
+        model_endtoken = data.get('endtoken',DefaultEndtoken)
+        Endtoken = model_endtoken.encode().decode('unicode_escape')
+
+        print(f'endtoken = {Endtoken}')
 
         adapter_filename = data.get('adapter_filename','')
         adapter_mode = data.get('adapter_mode','')
@@ -515,7 +526,7 @@ async def rwkv_completions(request: Request):
     presence_penalty = params.get('presence_penalty', 0.3)
     frequency_penalty = params.get('frequency_penalty', 0.3)
     penalty_decay = params.get('penalty_decay', 0.996)
-    stop = params.get('stop', ['\x00','\n\n'])
+    #stop = [Endtoken] #params.get('stop', [Endtoken])
 
     max_tokens = data.get('max_tokens',max_tokens)
     #top_p = data.get('top_p',top_p)
@@ -523,7 +534,8 @@ async def rwkv_completions(request: Request):
     presence_penalty = data.get('presence_penalty',presence_penalty)
     frequency_penalty = data.get('frequency_penalty',frequency_penalty)
     penalty_decay = data.get('penalty_decay',penalty_decay)
-    stop = data.get('stop',stop)
+    stop = data.get('stop',Endtoken)
+    stop = [stop]
 
     input_prompt = ""
     input_prompt_stm = ""

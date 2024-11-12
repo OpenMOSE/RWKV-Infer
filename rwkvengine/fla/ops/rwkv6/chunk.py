@@ -8,8 +8,8 @@ import torch
 import triton
 import triton.language as tl
 
-from fla.ops.utils import chunk_reversed_cumsum_fwd
-from fla.utils import contiguous
+from rwkvengine.fla.ops.utils import chunk_reversed_cumsum_fwd
+from rwkvengine.fla.utils import contiguous
 
 
 @triton.autotune(
