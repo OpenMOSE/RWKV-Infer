@@ -10,12 +10,12 @@ import torch
 import torch.nn as nn
 from einops import rearrange
 
-from fla.modules import GroupNorm
-from fla.modules.activations import ACT2FN
-from fla.ops.rwkv6 import chunk_rwkv6, fused_recurrent_rwkv6
+from rwkvengine.fla.modules import GroupNorm
+from rwkvengine.fla.modules.activations import ACT2FN
+from rwkvengine.fla.ops.rwkv6 import chunk_rwkv6, fused_recurrent_rwkv6
 
 if TYPE_CHECKING:
-    from fla.models.utils import Cache
+    from rwkv.fla.models.utils import Cache
 
 
 class RWKV6Attention(nn.Module):

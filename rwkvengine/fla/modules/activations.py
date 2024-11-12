@@ -7,7 +7,7 @@ import torch.nn.functional as F
 import triton
 import triton.language as tl
 
-from fla.utils import contiguous
+from rwkvengine.fla.utils import contiguous
 
 sigmoid_fwd_codestring = """
 template <typename T> T sigmoid_fwd(T x) {

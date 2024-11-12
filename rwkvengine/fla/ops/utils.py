@@ -7,7 +7,7 @@ import torch
 import triton
 import triton.language as tl
 
-from fla.utils import contiguous
+from rwkvengine.fla.utils import contiguous
 
 
 @triton.autotune(

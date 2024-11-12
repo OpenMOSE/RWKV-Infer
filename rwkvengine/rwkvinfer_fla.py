@@ -14,7 +14,7 @@ import gc
 import copy
 import time
 import os
-
+import re
 
 #from rwkv6fla import PIPELINE, RWKV6 as RWKV_6
 from rwkvengine.rwkvcore import RWKV_6
@@ -89,6 +89,90 @@ class PromptQueue:
 prompt_queue = PromptQueue()
 
 
+class TextProcessor:
+    def __init__(self, target="<RWKVArtifact"):
+        self.target = target
+        self.buffer = ""
+        self.tag_buffer = ""
+        self.is_in_tag = False
+
+    def process_text(self, new_text):
+        if not new_text:
+            return "", None
+
+        output = ""
+        tag_output = None
+        
+        if self.is_in_tag:
+            # タグ処理中の場合
+            end_pos = new_text.find('>')
+            if end_pos >= 0:
+                # タグの終了を見つけた
+                self.tag_buffer += new_text[:end_pos + 1]
+                tag_output = self.tag_buffer
+                self.is_in_tag = False
+                self.tag_buffer = ""
+                output = new_text[end_pos + 1:]  # タグ後のテキストは即時出力
+            else:
+                # タグが未完了
+                self.tag_buffer += new_text
+        else:
+            # 通常テキスト処理中の場合
+            process_text = self.buffer + new_text
+            self.buffer = ""
+            
+            # targetの検索
+            pos = process_text.find(self.target)
+            
+            if pos >= 0:
+                # タグの開始を検出
+                output = process_text[:pos]  # タグ前のテキストを出力
+                self.is_in_tag = True
+                self.tag_buffer = self.target
+                remaining = process_text[pos + len(self.target):]
+                
+                # 残りのテキストでタグの終了を確認
+                end_pos = remaining.find('>')
+                if end_pos >= 0:
+                    self.tag_buffer += remaining[:end_pos + 1]
+                    tag_output = self.tag_buffer
+                    self.is_in_tag = False
+                    self.tag_buffer = ""
+                    output += remaining[end_pos + 1:]  # タグ後のテキストも出力
+                else:
+                    self.tag_buffer += remaining
+            else:
+                # タグの部分一致をチェック
+                for i in range(1, min(len(self.target) + 1, len(process_text) + 1)):
+                    if self.target.startswith(process_text[-i:]):
+                        # 部分一致を見つけた
+                        output = process_text[:-i]
+                        self.buffer = process_text[-i:]
+                        break
+                else:
+                    # 部分一致もない場合は全て出力
+                    output = process_text
+
+        return output, tag_output
+    
+    def get_type_from_artifact(self,text):
+        #try:
+            # type属性の値を取得
+            print('re search')
+            type_value = re.search(r'language="([^"]*)"', text)
+            print(type_value)
+            if type_value:
+                return type_value.group(1)
+            else:
+                # typeが見つからない場合はMarkdownを返す
+                if 'html' in text:
+                    return 'html'
+                return "text/markdown"
+        #except Exception as e:
+        #    # エラーが発生した場合もMarkdownを返す
+        #    print(f"エラーが発生しました: {e}")
+        #    return "text/markdown"
+
 class LLMWorker:
     def __init__(self,max_batch_size = 16):
         print('Initializing LLM Worker')
@@ -161,6 +245,8 @@ class LLMWorker:
         global prompt_queue
         queue_id = await prompt_queue.add_prompt(Queues)
         currenttoken = ''
+        Artifact = TextProcessor('<RWKVArtifact')
+        Artifact2 = TextProcessor(target='</RWKVArtifact')
         while True:
             output = prompt_queue.prompts[queue_id].result
            # print(output)
@@ -169,8 +255,17 @@ class LLMWorker:
                 if len(output) > 0:
                     if len(currenttoken) < len(output):
                         splittext = output[len(currenttoken):]
+                        splittext, tag = Artifact.process_text(splittext)
+                        splittext, tag2 = Artifact2.process_text(splittext)
+                        #print(f'tag = {tag}')
+                        if tag is not None:
+                            print('Artifact Detected. Analyzing')
+                            typestyle = Artifact.get_type_from_artifact(tag)
+                            print(f'gettype = {typestyle}')
+                            splittext = f'```{typestyle}' + splittext
+                        if tag2 is not None:
+                            splittext = f'\n```' + splittext
                         currenttoken = output
-                        #print(f'chunk = {splittext}')
                         yield splittext, None, None
 
 
@@ -201,10 +296,11 @@ class LLMWorker:
 
             IdleSlot = 0
             async with lock:
+                prompt = await prompt_queue.get_prompt()
                 for i in range(self.llm_max_batch_count):
                     if self.llM_current_batch_info[i]['slotstatus'] == 'idle':
                         IdleSlot = IdleSlot + 1
-                        prompt = await prompt_queue.get_prompt()
+                        #prompt = await prompt_queue.get_prompt()
                         #print(prompt)
                         prompt_queue.update_prompt(prompt.id, PromptStatus.PROCESSING)
                         self.llM_current_batch_info[i]['slotstatus'] = 'processing'
@@ -252,6 +348,7 @@ class LLMWorker:
                         self.proceed_total_batches = self.proceed_total_batches + 1
                         if self.proceed_total_batches > 2000000000:
                             self.proceed_total_batches = 0
+                        break
                     
 
                     
@@ -546,7 +643,7 @@ class LLMWorker:
                                 #print(f'mrss_state_count = {mrss_state_count}')
                                 for k in range(mrss_state_count):
                                     for n in occurrence[j]:
-                                        current_prob[j][k][-1][n] -= 0 + occurrence[j][n] * 2.0
+                                        current_prob[j][k][-1][n] -= 0.2 + occurrence[j][n] * 0.3
                                     #print(f'current_prob[j] length = {len(current_prob[j])}')
                                     current_prob[j][k][-1][0] -= 1e10
                                     if logits_combined is None:
@@ -564,7 +661,7 @@ class LLMWorker:
                                 realbatchcount = realbatchcount + 1
 
                                 for n in occurrence[j]:
-                                    current_prob[j][-1][n] -= 0 + occurrence[j][n] * 1.0
+                                    current_prob[j][-1][n] -= 0.2 + occurrence[j][n] * 0.3
 
                                 current_prob[j][-1][0] -= 1e10 
 
@@ -667,7 +764,7 @@ class LLMWorker:
                             out_tokens[j] += [otokens[j]]
                             try:
                                 tmp = self.pipeline.decode(out_tokens[j][out_last[j]:])
-                                if ("\ufffd" not in tmp) and (not tmp.endswith("\n")):
+                                if ("\ufffd" not in tmp) and (not tmp.endswith("\n")) and (not tmp.endswith(end_token[j][0])):
                                         #yield tmp
                                         #if j == Target_batch - 1:
                                         #print(tmp,end="", flush=True)
@@ -689,10 +786,12 @@ class LLMWorker:
                                         #yield tmp
                                         #output_text = output_text + tmp
                                         print(f'Endtoken = {repr(tmp)}')
-                                        outputs[j] = outputs[j] + tmp
+                                        tmp = tmp.replace(stop,'')
+                                        #outputs[j] = outputs[j] + tmp
                                         exit_flag = True
                                 if exit_flag:
                                     statuss[j] = 'idle'
+                                    outputs[j] = outputs[j] + tmp
                                     print(f'batch {j} is finished cause got endtoken')
                                     #print(outputs[j])
 
@@ -700,8 +799,8 @@ class LLMWorker:
                                 print('exceptions')
                                 #print(f"エラーが発生しました: {type(e).__name__}")
                                 #print(f"エラーの詳細: {str(e)}")
-                                tmp = ''
-                                outputs[j] = outputs[j] + tmp
+                                #tmp = ''
+                                outputs[j] = outputs[j] #+ tmp
                                 out_last[j] = counts[j] + 1
                                 pass
 

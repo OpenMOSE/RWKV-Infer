@@ -3,8 +3,8 @@
 import torch
 from einops import rearrange
 
-from fla.ops.rwkv6.chunk import chunk_rwkv6
-from fla.ops.rwkv6.recurrent_fuse import fused_recurrent_rwkv6
+from rwkvengine.fla.ops.rwkv6.chunk import chunk_rwkv6
+from rwkvengine.fla.ops.rwkv6.recurrent_fuse import fused_recurrent_rwkv6
 
 
 def naive_chunk_rwkv6(

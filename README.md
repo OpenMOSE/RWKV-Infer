@@ -27,7 +27,7 @@ By combining multiple states, MRSS integrates knowledge from different "experts,
 - **Quantization Support**:
   - FP8 (Experiment. need NVIDIA H100 or Ada series gpu)
   - FP6 (Early Experiment. slightly degradation. toachao fpx e3m2)
-  - Int8 (only CUDA)
+  - FP5 (Early Experiment. ppl 10% degradation. toachao fpx e2m2)
   - Bitsandbytes NF4 (currently slow)
 - **Multi Batch Generation**:
   - True multi batch generation with Flash-Linear-Attention
@@ -78,11 +78,11 @@ curl http://127.0.0.1:9000/loadmodel -X POST -H "Content-Type: application/json"
 ## API Examples
    - 1. Model Load
 ```sh
-curl http://127.0.0.1:9000/loadmodel -X POST -H "Content-Type: application/json" -d '{"model_filename":"models/RWKV-x060-World-1B6-v2.1-20240328-ctx4096.pth","model_viewname":"RWKV x060 1B6 Base","model_strategy":"","default_temperature":"1.0", "default_top_p":"0.3"}'
+curl http://127.0.0.1:9000/loadmodel -X POST -H "Content-Type: application/json" -d '{"model_filename":"models/RWKV-x060-World-1B6-v2.1-20240328-ctx4096.pth","model_viewname":"RWKV x060 1B6 Base","model_strategy":"","default_temperature":"1.0", "default_top_p":"0.3", "endtoken":"\\n\\n"}'
 ```
    - 1. Model Load + Adapter
 ```sh
-curl http://127.0.0.1:9000/loadmodel -X POST -H "Content-Type: application/json" -d '{"model_filename":"models/RWKV-x060-World-1B6-v2.1-20240328-ctx4096.pth","model_viewname":"RWKV x060 1B6 Base","model_strategy":"","adapter_filename":"adapters/rwkv-9-bone.pth","adapter_mode":"bone","default_temperature":"1.0", "default_top_p":"0.3"}'
+curl http://127.0.0.1:9000/loadmodel -X POST -H "Content-Type: application/json" -d '{"model_filename":"models/RWKV-x060-World-1B6-v2.1-20240328-ctx4096.pth","model_viewname":"RWKV x060 1B6 Base","model_strategy":"","adapter_filename":"adapters/rwkv-9-bone.pth","adapter_mode":"bone","default_temperature":"1.0", "default_top_p":"0.3", "endtoken":"\\n\\n"}'
 ```
    - 2. Add Single state
 ```sh
