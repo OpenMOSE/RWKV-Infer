@@ -5,7 +5,7 @@
 </p>
 
 <div align="center"> 
-A lightweight RWKV inference platform that operates in Cuda and Rocm environments, supporting multi-batch inference.
+A lightweight RWKV inference platform that operates in Cuda and Rocm environments, supporting multi-batch inference.(RWKV v6,v7)
 </div>
 
 ## Key Features
@@ -30,7 +30,7 @@ By combining multiple states, MRSS integrates knowledge from different "experts,
   - FP5 (Early Experiment. ppl 10% degradation. toachao fpx e2m2)
   - Bitsandbytes NF4 (currently slow)
 - **Multi Batch Generation**:
-  - True multi batch generation with Flash-Linear-Attention
+  - True multi batch generation with Flash-Linear-Attention(x060)
   - multi batch sampling
   - On an RTX4090, a 7B parameter model can run over 256 batches of inference.
 - **Inference Speed examples(RTX4090)**:

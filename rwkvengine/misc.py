@@ -15,6 +15,7 @@ import triton
 import triton.language as tl
 from torch.utils.cpp_extension import load
 from torch.profiler import profile, record_function, ProfilerActivity
+from tokenizers import Tokenizer
 
 MyStatic = torch.jit.script
 
@@ -84,11 +85,16 @@ class RWKV_TOKENIZER():
         return self.decodeBytes(tokens).decode('utf-8')
 
 class PIPELINE():
-    def __init__(self, model='dummy'):
-        self.model = model
+    def __init__(self, mode='world'):
+        self.mode = mode
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
         #from rwkv_tokenizer import TRIE_TOKENIZER_MOSE
-        self.tokenizer = RWKV_TOKENIZER(os.path.dirname(os.path.abspath(__file__)) + '/rwkv_vocab_v20230424.txt')        
+        if mode == 'world':
+            self.tokenizer = RWKV_TOKENIZER(os.path.dirname(os.path.abspath(__file__)) + '/rwkv_vocab_v20230424.txt')  
+        elif mode == 'pile':
+            print(f'Pile Tokenizer')
+            self.tokenizer = Tokenizer.from_file(os.path.dirname(os.path.abspath(__file__)) + "/20B_tokenizer.json")
+
 
     def refine_context(self, context):
         context = context.strip().split('\n')
@@ -101,7 +107,8 @@ class PIPELINE():
         return context
 
     def encode(self, x):
-        if 'Tokenizer' in str(type(self.tokenizer)):
+        if self.mode == 'pile':
+            print('pile')
             return self.tokenizer.encode(x).ids
         else:
             return self.tokenizer.encode(x)

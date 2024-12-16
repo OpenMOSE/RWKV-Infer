@@ -1,6 +1,8 @@
 #RWKVInfer with Flash-Linear-Attention
 #2024 OpenMOSE
 
+#2024.12.16 x070 Test Implement
+
 #Implement 'Multi Recurrent State Sampling'
 
 import asyncio
@@ -17,7 +19,7 @@ import os
 import re
 
 #from rwkv6fla import PIPELINE, RWKV6 as RWKV_6
-from rwkvengine.rwkvcore import RWKV_6
+from rwkvengine.rwkvcore import RWKV_x
 from rwkvengine.misc import PIPELINE
 
 
@@ -228,7 +230,7 @@ class LLMWorker:
         self.model = None
         gc.collect()
         torch.cuda.empty_cache()
-        self.model = RWKV_6(modelpath,base_precision=precision,adapter_model=adapter_model,adapter_mode=adapter_mode,adapter_scale=adapter_scale)
+        self.model = RWKV_x(modelpath,base_precision=precision,adapter_model=adapter_model,adapter_mode=adapter_mode,adapter_scale=adapter_scale)
         gc.collect()
         torch.cuda.empty_cache()
         print('model loaded')
@@ -447,8 +449,12 @@ class LLMWorker:
         
                         self.States = self.model.new_state(realbatchcount)
 
-                        shift_states = self.States.shift_states.permute(1, 0, 2, 3)
-                        wkv_states = self.States.wkv_states.permute(1, 0, 2, 3, 4)
+                        if self.model.RWKVMode == 6:
+                            shift_states = self.States.shift_states.permute(1, 0, 2, 3)
+                            wkv_states = self.States.wkv_states.permute(1, 0, 2, 3, 4)
+                        elif self.model.RWKVMode == 7:
+                            shift_states = self.States.shift_states.permute(1, 0, 2)
+                            wkv_states = self.States.wkv_states.permute(1, 0, 2, 3, 4)
 
                         NowTensorPosition = 0
                         for i in range(len(prompts)):
@@ -492,20 +498,30 @@ class LLMWorker:
                                 NowTensorPosition = NowTensorPosition + 1
 
 
-
-                        shift_states = shift_states.permute(1,0,2,3) 
-                        wkv_states = wkv_states.permute(1, 0, 2, 3, 4) 
-                        
+                        if self.model.RWKVMode == 6:
+                            shift_states = shift_states.permute(1,0,2,3) 
+                            wkv_states = wkv_states.permute(1, 0, 2, 3, 4) 
+                        elif self.model.RWKVMode == 7:
+                            shift_states = shift_states.permute(1,0,2) 
+                            wkv_states = wkv_states.permute(1, 0, 2, 3, 4) 
 
                         x, shift_states, wkv_states = self.model.forward(idx, shift_states, wkv_states)
 
+                        
+
+                        if x.dim() == 2:
+                            x = x.view(x.shape[0],1,x.shape[1])
+                        print(f'x shape = {x.shape}')
                         print(f'{token_max} forwarded')
 
                         #print(f'x = {x}')
                         #print(f'x.shape = {x.shape}')
-
-                        shift_states = shift_states.permute(1,0,2,3)
-                        wkv_states = wkv_states.permute(1, 0, 2, 3, 4)
+                        if self.model.RWKVMode == 6:
+                            shift_states = shift_states.permute(1,0,2,3) 
+                            wkv_states = wkv_states.permute(1, 0, 2, 3, 4) 
+                        elif self.model.RWKVMode == 7:
+                            shift_states = shift_states.permute(1,0,2) 
+                            wkv_states = wkv_states.permute(1, 0, 2, 3, 4) 
 
                         j = -1
                         NowTensorPosition = 0
@@ -812,9 +828,12 @@ class LLMWorker:
                         self.States = self.model.new_state((realbatchcount))
 
                         #print(f'realbatchcount={realbatchcount}')
-
-                        shift_states = self.States.shift_states.permute(1, 0, 2, 3) 
-                        wkv_states = self.States.wkv_states.permute(1, 0, 2, 3, 4) 
+                        if self.model.RWKVMode == 6:
+                            shift_states = self.States.shift_states.permute(1, 0, 2, 3) 
+                            wkv_states = self.States.wkv_states.permute(1, 0, 2, 3, 4) 
+                        elif self.model.RWKVMode == 7:
+                            shift_states = self.States.shift_states.permute(1, 0, 2) 
+                            wkv_states = self.States.wkv_states.permute(1, 0, 2, 3, 4) 
 
                         # for i in range(len(token)):
                         #     if b_wkv_states[i] is not None:
@@ -865,19 +884,29 @@ class LLMWorker:
                                     shift_states[NowTensorPosition] = b_shift_states[i]
                                 
                                 NowTensorPosition = NowTensorPosition + 1
-
-                        shift_states = shift_states.permute(1,0,2,3)
-                        wkv_states = wkv_states.permute(1, 0, 2, 3, 4)
+                        if self.model.RWKVMode == 6:
+                            shift_states = shift_states.permute(1,0,2,3)
+                            wkv_states = wkv_states.permute(1, 0, 2, 3, 4)
+                        elif self.model.RWKVMode == 7:
+                            shift_states = shift_states.permute(1,0,2)
+                            wkv_states = wkv_states.permute(1, 0, 2, 3, 4)
 
                         x, shift_states, wkv_states = self.model.forward(idx, shift_states, wkv_states)
+
+                        if x.dim() == 2:
+                            x = x.view(x.shape[0],1,x.shape[1])
 
                         if self.time_debug:
                             start_time3 = time.time()
 
                         #print(f'probs shape = {x.shape}')
 
-                        shift_states = shift_states.permute(1,0,2,3)
-                        wkv_states = wkv_states.permute(1, 0, 2, 3, 4)
+                        if self.model.RWKVMode == 6:
+                            shift_states = shift_states.permute(1,0,2,3)
+                            wkv_states = wkv_states.permute(1, 0, 2, 3, 4)
+                        elif self.model.RWKVMode == 7:
+                            shift_states = shift_states.permute(1,0,2)
+                            wkv_states = wkv_states.permute(1, 0, 2, 3, 4)
 
                         j = -1
                         NowTensorPosition = 0

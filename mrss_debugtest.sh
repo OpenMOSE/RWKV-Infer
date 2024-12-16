@@ -1,12 +1,13 @@
 #!/bin/bash
 curl http://127.0.0.1:9000/healthcheck
+curl http://127.0.0.1:9000/loadmodel -X POST -H "Content-Type: application/json" -d '{"model_filename":"models/RWKV-x070-World-0.1B-v2.8-20241210-ctx4096.pth","model_viewname":"RWKV x070 0.1B","model_strategy":"fp16"}'
 
-#curl http://127.0.0.1:9000/loadmodel -X POST -H "Content-Type: application/json" -d '{"model_filename":"models/RWKV-x060-Jpn-7B-20240816-ctx4096.pth","model_viewname":"RWKV x060 7B JPN","model_strategy":"fp5"}'
+#curl http://127.0.0.1:9000/loadmodel -X POST -H "Content-Type: application/json" -d '{"model_filename":"models/RWKV-x060-Jpn-7B-20240816-ctx4096.pth","model_viewname":"RWKV x060 7B JPN","model_strategy":"fp6"}'
 
+#curl http://127.0.0.1:9000/loadmodel -X POST -H "Content-Type: application/json" -d '{"model_filename":"models/RWKV-x060-Jpn-7B-20240816-ctx4096.pth","model_viewname":"RWKV x060 7B JPN SFT infctx 32k e17","model_strategy":"fp6"}'
+#curl http://127.0.0.1:9000/loadmodel -X POST -H "Content-Type: application/json" -d '{"model_filename":"models/RWKV-x060-Jpn-7B-20240816-ctx4096.pth","model_viewname":"RWKV x060 7B JPN SFT infctx 32k e17","model_strategy":"fp6","adapter_filename":"adapters/rwkv-17.pth","adapter_mode":"bone","endtoken":"\\n\\n\\x17"}'
 
-curl http://127.0.0.1:9000/loadmodel -X POST -H "Content-Type: application/json" -d '{"model_filename":"models/RWKV-x060-Jpn-7B-20240816-ctx4096.pth","model_viewname":"RWKV x060 7B JPN SFT infctx 32k e51 fs1.8","model_strategy":"fp8","adapter_filename":"adapters/7b-kure-40-bone.pth","adapter_mode":"bone","endtoken":"\\n\\n\\x17"}'
-
-#curl http://127.0.0.1:9000/loadmodel -X POST -H "Content-Type: application/json" -d '{"model_filename":"models/RWKV-x060-Jpn-14B-20240819-ctx4096.pth","model_viewname":"RWKV x060 14B JPN CoT RC0","model_strategy":"fp8","adapter_filename":"adapters/14b-general-23-bone.pth","adapter_mode":"bone"}'
+#curl http://127.0.0.1:9000/loadmodel -X POST -H "Content-Type: application/json" -d '{"model_filename":"models/RWKV-x060-Jpn-14B-20240819-ctx4096.pth","model_viewname":"RWKV x060 14B JPN CoT RC0","model_strategy":"fp6","adapter_filename":"adapters/14b-general-23-bone.pth","adapter_mode":"bone","endtoken":"\\n\\n\\x17"}'
 
 
 #curl http://127.0.0.1:9000/loadmodel -X POST -H "Content-Type: application/json" -d '{"model_filename":"/home/client/Projects/RWKV-LM-RLHF/v6/6B-SRD-nsfw2/rwkv-6b-nsfw-10-merged.pth","model_viewname":"RWKV NSFW 6B","model_strategy":"quantbf16"}'
