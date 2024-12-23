@@ -276,7 +276,7 @@ async def loadstatemodel(request: Request):
              default_top_p = float(default_top_p)
 
 
-         state_tensor_wkv = engine1.model.load_state(state_filename) # if correct, have tensors :)
+         state_tensor_wkv = engine1.model.x060_load_state(state_filename) # if correct, have tensors :)
          if type(state_tensor_wkv) == str:
              print('State Loading Error')
              raise HTTPException(status_code=500, detail='State file is incorrect. check filename or tensor size.')
@@ -346,7 +346,7 @@ async def mrss_loadstatemodel(request: Request):
 
          for i in range(state_count):
             print(f'loading state {state_filenames[i]}')
-            state_tensor_wkv = engine1.model.load_state(state_filenames[i]) # if correct, have tensors :)
+            state_tensor_wkv = engine1.model.x060_load_state(state_filenames[i]) # if correct, have tensors :)
             if type(state_tensor_wkv) == str:
                 print('State Loading Error')
                 raise HTTPException(status_code=500, detail=f'{ state_filenames[i] } State file is incorrect. check filename or tensor size.')
