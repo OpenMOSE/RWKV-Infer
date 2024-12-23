@@ -237,6 +237,7 @@ class RWKV_x(nn.Module):
                 #print(adapterkeys)
 #                for k in adapterkeys:
                 if mode == 'lora':
+                    print(f'scaling = {scaling}')
                     prefix = keyname[:-len('.weight')]
                     lora_A = prefix + '.lora_A'
                     lora_B = prefix + '.lora_B'
@@ -244,11 +245,18 @@ class RWKV_x(nn.Module):
                         w=adapter
                         assert lora_B in adapterkeys
                         print(f'lora merging {lora_A} and {lora_B} into {k}')
+                        
                         assert w[lora_B].shape[1] == w[lora_A].shape[0]
+                        
                         lora_r = w[lora_B].shape[1]
-                        w[k] = w[k].to(device=device)
+
+                        
+                        #w[k] = w[k].to(device=device)
+                        #print(f'weightshape = {weight.shape} loraA shape = {w[lora_A].shape} loraB shape = {w[lora_B].shape}')
                         w[lora_A] = w[lora_A].to(device=device)
+                        
                         w[lora_B] = w[lora_B].to(device=device)
+                        
                         weight = weight + w[lora_B] @ w[lora_A] * scaling
                         del w[lora_A]
                         del w[lora_B]
