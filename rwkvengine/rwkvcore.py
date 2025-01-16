@@ -174,6 +174,8 @@ class RWKV_x(nn.Module):
 
         self.ExtremeCPUOffload = False
 
+        self.debug = False
+
         self.eval()
 
         if base_precision == 'fp16':
@@ -217,6 +219,7 @@ class RWKV_x(nn.Module):
         modelpath = load_model
 
         z = torch.load(modelpath,map_location="cpu",mmap=True)
+        z_adapter_keys = None
         self.ModeMode = 'standard'
         if adapter_model != '' and adapter_mode != '':
             print('Adapter LoadMode')
@@ -224,10 +227,24 @@ class RWKV_x(nn.Module):
                 print('LoRA Mode Lets Merge!')
                 self.ModeMode = 'lora'
                 z_adapter = torch.load(adapter_model,map_location="cpu",mmap=True)
+                z_adapter_keys = list(z_adapter.keys())
+                for zkeys in z_adapter_keys:
+                    if 'weight' not in zkeys:
+                        z[zkeys] = z_adapter[zkeys]
             elif 'bone' in adapter_mode or 'Bone' in adapter_mode:
                 print('Bone(Block Affine Transformation) Mode Lets Merge!')
                 self.ModeMode = 'bone'
                 z_adapter = torch.load(adapter_model,map_location="cpu",mmap=True)
+                z_adapter_keys = list(z_adapter.keys())
+                for zkeys in z_adapter_keys:
+                    z[zkeys] = z_adapter[zkeys]
+                    # if 'weight' not in zkeys:
+                    #     z[zkeys] = z_adapter[zkeys]
+                    # elif 'ln0' in zkeys:
+                    #     z[zkeys] = z_adapter[zkeys]
+
+                print(f'adapter keys = {z_adapter_keys}')
+                #exit()
 
         def Attach_Adapter(keyname,weight,adapter,mode,scaling=2.0,device='cuda'): #from JL-er lora merge inspired
             
@@ -261,6 +278,10 @@ class RWKV_x(nn.Module):
                         del w[lora_A]
                         del w[lora_B]
                         return weight
+                    for key in adapterkeys:
+                        if key == keyname:
+                            weight = adapter[key].to(dtype=torch.bfloat16,device=device)
+                            print(f'key = {key} is swapped from Adapter')
                     return weight
                 elif mode == 'bone':
                     prefix = keyname[:-len('.weight')]
@@ -273,8 +294,14 @@ class RWKV_x(nn.Module):
                         b,r,_ = w[gbmm].shape
                         bone = rearrange(weight, '(a r1) (b r2) -> a b r1 r2', r1 = r, r2 = r)@w[gbmm]+w[gbmm]
                         weight += rearrange(bone, 'a b r1 r2 ->(a r1) (b r2) ')
+                        print(weight)
                         del w[gbmm]
                         return weight
+                    #adapterkeys = list(adapter.keys())
+                    for key in adapterkeys:
+                        if key == keyname:
+                            weight = adapter[key].to(dtype=torch.bfloat16,device=device)
+                            print(f'key = {key} is swapped from Adapter')
                     return weight
                 else:
                     return weight
@@ -286,7 +313,8 @@ class RWKV_x(nn.Module):
                         print(f'key = {key} is swapped from Adapter')
                 #print('no target bone merge')
                 return weight
-                    
+            
+                   
 
         keys = list(z.keys())
         print("keys", keys)
@@ -300,6 +328,13 @@ class RWKV_x(nn.Module):
                 print("RWKV x070 Mode :) with Native Pytorch Implementation")
                 RWKVMode = 7
                 break
+
+        if z_adapter_keys is not None:
+            for key in z_adapter_keys:
+                if 'blocks.0.att.r_k' in key:
+                    print("RWKV x070 Mode :) with Native Pytorch Implementation")
+                    RWKVMode = 7
+                    break
 
         if RWKVMode == 6:
             print('RWKV x060 Mode :) with Flash-Linear-Attention')
@@ -1549,7 +1584,7 @@ class RWKV_x(nn.Module):
 
             return x, last_shift_states, last_wkv_states
         
-    def x060_load_state(self,state_filename):
+    def load_state(self,state_filename):
         try:
             state_raw = torch.load(state_filename, map_location="cpu")
         except Exception as e:
@@ -1637,8 +1672,8 @@ class RWKV_x(nn.Module):
         xx = xx + ((r * k * r_k).view(B,H,N).sum(dim=-1, keepdim=True) * v.view(B,H,N)).view(B,H*N)
         return (xx * g) @ O_, x, state, v_first
     
-    #@MyStatic
-    def x070_TimeMix_seq(self,layer_id: int, H: int, N: int,
+    @MyStatic
+    def x070_TimeMix_seq(layer_id: int, H: int, N: int,
                         x, x_prev, v_first, state,
                         x_r, x_w, x_k, x_v, x_a, x_g,
                         w0, w1, w2, a0, a1, a2,
@@ -1669,14 +1704,44 @@ class RWKV_x(nn.Module):
 
         ######## cuda-free method 
         w = torch.exp(-0.606531 * torch.sigmoid((w0 + w).float())) # 0.606531 = exp(-0.5)
+
+    
+        # for t in range(T):
+        #     r_, w_, k_, v_, kk_, a_ = r[:,t], w[:,t], k[:,t], v[:,t], kk[:,t], a[:,t]
+        #     vk = v_.view(B,H,N,1) @ k_.view(B,H,1,N)
+        #     ab = (-kk_).view(B,H,N,1) @ (kk_*a_).view(B,H,1,N)
+        #     state = state * w_.view(B,H,1,N) + state @ ab.float() + vk.float()
+        #     xx[:,t] = (state.to(dtype=x.dtype) @ r_.view(B,H,N,1)).view(B,H*N)
+ 
+
         for t in range(T):
-            r_, w_, k_, v_, kk_, a_ = r[:,t], w[:,t], k[:,t], v[:,t], kk[:,t], a[:,t]
-            vk = v_.view(B,H,N,1) @ k_.view(B,H,1,N)
-            ab = (-kk_).view(B,H,N,1) @ (kk_*a_).view(B,H,1,N)
-            #print(f'state shape = {state.shape}')
-            #print(f'w_.view(B,H,1,N) = {w_.view(B,H,1,N).shape}')
-            state = state * w_.view(B,H,1,N) + state @ ab.float() + vk.float()
-            xx[:,t] = (state.to(dtype=x.dtype) @ r_.view(B,H,N,1)).view(B,H*N)
+             # まずは形状変換を1回ずつに抑える
+            r_  = r[:, t].view(B, H, N, 1)
+            w_  = w[:, t].view(B, H, 1, N)
+            k_  = k[:, t].view(B, H, 1, N)
+            v_  = v[:, t].view(B, H, N, 1)
+            kk_ = kk[:, t].view(B, H, N, 1)
+            a_  = a[:, t].view(B, H, N, 1)
+
+            # 行列積
+            # v_: (B,H,N,1), k_: (B,H,1,N) => vk: (B,H,N,N)
+            vk = v_ @ k_
+
+            # ab: (B,H,N,1) @ (B,H,1,N) => (B,H,N,N)
+            # -kk_ = -1 * kk_ (多くの場合はブロードキャストでOK)
+            # kk_ * a_ -> (B,H,N,1), transpose(-2,-1)で (B,H,1,N) になる
+            ab = (-kk_) @ ((kk_ * a_).transpose(-2, -1))
+
+            # state更新 (同じdtype想定)
+            # state: (B,H,N,N) を仮定
+            new_state = state * w_ + state @ ab.float() + vk.float()
+
+            # xx[:,t] 計算
+            # (B,H,N,N) @ (B,H,N,1) => (B,H,N,1) => view(B,H*N)
+            xx[:, t] = (new_state.to(dtype=x.dtype) @ r_).view(B, H*N)
+
+            # 次のループに備えて state を更新
+            state = new_state
 
         xx = xx.permute(0, 2, 1)  # (B,H*N,T)
 
@@ -1735,6 +1800,7 @@ class RWKV_x(nn.Module):
 
                 last_shift_states[i*2] = time_mix_shift
                 last_shift_states[i*2+1] = channel_mix_state
+                
                 last_wkv_states[i] = time_mix_state
             
             x = F.layer_norm(x, (self.n_embd,), weight=z['ln_out.weight'], bias=z['ln_out.bias'])
@@ -1748,6 +1814,8 @@ class RWKV_x(nn.Module):
             z = self.z
             x = z['emb.weight'][idx]
 
+            #print(x)
+
             v_first = torch.empty_like(x)
             for i in range(self.n_layer):
                 bbb = f'blocks.{i}.'
@@ -1760,13 +1828,16 @@ class RWKV_x(nn.Module):
 
                 xx = F.layer_norm(x, (self.n_embd,), weight=z[bbb+'ln1.weight'], bias=z[bbb+'ln1.bias'])
 
+                #print(f'layer {i} ln1 xx {xx}')
+
                 xx, time_mix_shift, time_mix_state, v_first = self.x070_TimeMix_seq(i, self.n_head, self.head_size, xx, time_mix_shift, v_first, time_mix_state,
                     z[att+'x_r'], z[att+'x_w'], z[att+'x_k'], z[att+'x_v'], z[att+'x_a'], z[att+'x_g'],
                     z[att+'w0'], z[att+'w1'], z[att+'w2'], z[att+'a0'], z[att+'a1'], z[att+'a2'], z[att+'v0'], z[att+'v1'], z[att+'v2'],
                     z[att+'g1'], z[att+'g2'], z[att+'k_k'], z[att+'k_a'], z[att+'r_k'],
                     z[att+'receptance.weight'], z[att+'key.weight'], z[att+'value.weight'], z[att+'output.weight'],
                     z[att+'ln_x.weight'], z[att+'ln_x.bias'])
-                #print(xx)
+                #print(f'layer {i} TimeMix xx {xx}')
+                #exit()
                 x = x + xx
 
                 xx = F.layer_norm(x, (self.n_embd,), weight=z[bbb+'ln2.weight'], bias=z[bbb+'ln2.bias'])
@@ -1776,6 +1847,7 @@ class RWKV_x(nn.Module):
                 xx, channel_mix_state = self.x070_ChannelMix_seq(xx, channel_mix_state, z[ffn+'x_k'], z[ffn+'key.weight'], z[ffn+'value.weight'])
 
                 #print(f'after cmix x shape = {xx.shape}')
+                #print(f'cmix x = {xx}')
                 x = x + xx
 
                 last_shift_states[i*2] = time_mix_shift
@@ -1787,6 +1859,7 @@ class RWKV_x(nn.Module):
             if not full_output: x = x[:, -1, :]  # 最後のタイムステップだけを選択し、バッチ次元を保持
             x = F.layer_norm(x, (self.n_embd,), weight=z['ln_out.weight'], bias=z['ln_out.bias'])
             x = x @ z['head.weight']
+            #print(last_shift_states.shape)
             #print(f'last x shape = {x.shape}')
             return x, last_shift_states, last_wkv_states
     def x070_forward(self, idx, last_shift_states: List[torch.Tensor],

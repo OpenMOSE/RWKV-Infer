@@ -514,7 +514,7 @@ class LLMWorker:
                         print(f'x shape = {x.shape}')
                         print(f'{token_max} forwarded')
 
-                        #print(f'x = {x}')
+                        print(f'x = {x}')
                         #print(f'x.shape = {x.shape}')
                         if self.model.RWKVMode == 6:
                             shift_states = shift_states.permute(1,0,2,3) 

@@ -26,7 +26,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 parser = ArgumentParser()
 parser.add_argument("--localhost", default="0.0.0.0", type=str) 
 parser.add_argument("--port", default=9000, type=int) 
-parser.add_argument("--debug", default=False, type=bool) 
+parser.add_argument("--debug", default=True, type=bool) 
 parser.add_argument("--workers", default=64, type=int)
 parser.add_argument("--mrssmax", default=4, type=int) #If workers 8, mrssmax 4, maximum batch inference = 8 * (4 + 1) = 40
 
@@ -135,7 +135,7 @@ params_base = {
             "user_name": "User", 
             "assistant_name": "Assistant",
             "model": 'model',
-            "max_tokens": 4096,
+            "max_tokens": 1024,
             "top_p": 0.3,
             "temperature": 1,
             "presence_penalty": 0.5,
@@ -276,7 +276,7 @@ async def loadstatemodel(request: Request):
              default_top_p = float(default_top_p)
 
 
-         state_tensor_wkv = engine1.model.x060_load_state(state_filename) # if correct, have tensors :)
+         state_tensor_wkv = engine1.model.load_state(state_filename) # if correct, have tensors :)
          if type(state_tensor_wkv) == str:
              print('State Loading Error')
              raise HTTPException(status_code=500, detail='State file is incorrect. check filename or tensor size.')
@@ -346,7 +346,7 @@ async def mrss_loadstatemodel(request: Request):
 
          for i in range(state_count):
             print(f'loading state {state_filenames[i]}')
-            state_tensor_wkv = engine1.model.x060_load_state(state_filenames[i]) # if correct, have tensors :)
+            state_tensor_wkv = engine1.model.load_state(state_filenames[i]) # if correct, have tensors :)
             if type(state_tensor_wkv) == str:
                 print('State Loading Error')
                 raise HTTPException(status_code=500, detail=f'{ state_filenames[i] } State file is incorrect. check filename or tensor size.')
