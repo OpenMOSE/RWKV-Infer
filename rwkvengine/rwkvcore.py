@@ -25,7 +25,9 @@ from einops import rearrange
 from rwkvengine.misc import PIPELINE
 from rwkvengine.matmularena import fp8_hybrod_matmul
 from rwkvengine.fla.ops.rwkv6.chunk import chunk_rwkv6,ChunkRWKV6Function
-from rwkvengine.fla.ops.rwkv6.recurrent_fuse import fused_recurrent_rwkv6
+from rwkvengine.fla.ops.rwkv6.fused_recurrent import fused_recurrent_rwkv6
+from rwkvengine.fla.ops.rwkv7 import chunk_rwkv7
+from rwkvengine.cuda.wkv7triton import rwkv7_attn_triton
 
 torch.backends.cudnn.benchmark = True
 torch.backends.cudnn.benchmark = True
@@ -155,6 +157,35 @@ def fused_recurrent_rwkv6_torch(
 
         return o, final_state
 
+# from torch.utils.cpp_extension import load
+# HEAD_SIZE = 64
+# DTYPE = torch.bfloat16
+# current_path = os.path.dirname(os.path.abspath(__file__))
+# load(name="wkv7s", sources=[f"{current_path}/cuda/rwkv7_op.cpp", f"{current_path}/cuda/rwkv7.cu"], is_python_module=False,
+#                     verbose=True, extra_cuda_cflags=["-res-usage", "--use_fast_math", "-O3", "-Xptxas -O3", "--extra-device-vectorization", f"-D_N_={HEAD_SIZE}"])
+# class WKV_7(torch.autograd.Function):
+#     @staticmethod
+#     def forward(ctx, state, r, w, k, v, a, b):
+#         with torch.no_grad():
+#             B, T, C = r.size()
+#             H = C // HEAD_SIZE
+#             N = HEAD_SIZE
+#             assert HEAD_SIZE == C // H
+#             assert all(x.dtype == DTYPE for x in [r,w,k,v,a,b])
+#             assert all(x.is_contiguous() for x in [r,w,k,v,a,b])
+#             y = torch.empty((T, C), device='cuda', dtype=r.dtype, requires_grad=False, memory_format=torch.contiguous_format)
+
+#             if DTYPE == torch.float16:
+#                 torch.ops.wkv7s.forward_fp16(B, T, C, H, state, r, w, k, v, a, b, y)
+#             elif DTYPE == torch.bfloat16:
+#                 torch.ops.wkv7s.forward_bf16(B, T, C, H, state, r, w, k, v, a, b, y)
+#             elif DTYPE == torch.float32:
+#                 torch.ops.wkv7s.forward_fp32(B, T, C, H, state, r, w, k, v, a, b, y)
+
+#             return y
+# def RWKV7_OP(state, r, w, k, v, a, b):
+#     return WKV_7.apply(state, r, w, k, v, a, b)
+
 
 class RWKV_x(nn.Module):
 
@@ -229,8 +260,8 @@ class RWKV_x(nn.Module):
                 z_adapter = torch.load(adapter_model,map_location="cpu",mmap=True)
                 z_adapter_keys = list(z_adapter.keys())
                 for zkeys in z_adapter_keys:
-                    if 'weight' not in zkeys:
-                        z[zkeys] = z_adapter[zkeys]
+                    z[zkeys] = z_adapter[zkeys]
+
             elif 'bone' in adapter_mode or 'Bone' in adapter_mode:
                 print('Bone(Block Affine Transformation) Mode Lets Merge!')
                 self.ModeMode = 'bone'
@@ -238,11 +269,6 @@ class RWKV_x(nn.Module):
                 z_adapter_keys = list(z_adapter.keys())
                 for zkeys in z_adapter_keys:
                     z[zkeys] = z_adapter[zkeys]
-                    # if 'weight' not in zkeys:
-                    #     z[zkeys] = z_adapter[zkeys]
-                    # elif 'ln0' in zkeys:
-                    #     z[zkeys] = z_adapter[zkeys]
-
                 print(f'adapter keys = {z_adapter_keys}')
                 #exit()
 
@@ -267,9 +293,6 @@ class RWKV_x(nn.Module):
                         
                         lora_r = w[lora_B].shape[1]
 
-                        
-                        #w[k] = w[k].to(device=device)
-                        #print(f'weightshape = {weight.shape} loraA shape = {w[lora_A].shape} loraB shape = {w[lora_B].shape}')
                         w[lora_A] = w[lora_A].to(device=device)
                         
                         w[lora_B] = w[lora_B].to(device=device)
@@ -340,43 +363,7 @@ class RWKV_x(nn.Module):
             print('RWKV x060 Mode :) with Flash-Linear-Attention')
 
         self.RWKVMode = RWKVMode
-        # if RWKVMode == 7:
-        #     #z = self.z
-        #     self.n_head, self.head_size = z['blocks.0.att.r_k'].shape
-
-        #     keys = list(z.keys())
-        #     for k in keys:
-        #         z[k] = z[k].to(device='cuda')
-        #         if 'key.weight' in k or 'value.weight' in k or 'receptance.weight' in k or 'output.weight' in k or 'head.weight' in k:
-        #             z[k] = z[k].t()
-        #         z[k] = z[k].squeeze().to(dtype=self.base_precision)
-        #         if k.endswith('att.r_k'): z[k] = z[k].flatten()
-        #     #assert self.head_size == args.head_size
-        #     vocab_size, n_embd = z["emb.weight"].shape
-        #     self.n_embd = n_embd
-        #     self.vocab_size = vocab_size
-        #     z['emb.weight'] = F.layer_norm(z['emb.weight'], (self.n_embd,), weight=z['blocks.0.ln0.weight'], bias=z['blocks.0.ln0.bias'])
-        #     z['blocks.0.att.v0'] = z['blocks.0.att.a0'] # actually ignored
-        #     z['blocks.0.att.v1'] = z['blocks.0.att.a1'] # actually ignored
-        #     z['blocks.0.att.v2'] = z['blocks.0.att.a2'] # actually ignored
-
-        #     self.z = z
-        #     self.device = z['emb.weight'].device
-        #     self.dtype = z['emb.weight'].dtype
-
-        #     n_layer = 0
-        #     for key in keys:
-        #         if key.startswith("blocks."):
-        #             layer = int(key.split(".")[1])
-        #             if layer > n_layer:
-        #                 n_layer = layer
-
-        #     n_layer = n_layer + 1
-        #     print("n_layer", n_layer)
-        #     self.n_layer = n_layer
-
-
-        #return
+     
 
         
 
@@ -987,7 +974,8 @@ class RWKV_x(nn.Module):
             w.view(B,T,H,-1).transpose(1,2),
             time_faaaa.view(H,-1),1.0,
             last_state_wkv,True,
-            0)
+            None,
+            True)
         x =x.transpose(1,2)
         x = x.reshape(B,T,C)
         return x, last_state_wkv
@@ -1644,9 +1632,13 @@ class RWKV_x(nn.Module):
     # modified from RWKV-LM v7 demo_fast code @ BlinkDL
     # Ongoing cuda custom kernel.(if we can avoid atomicadd(its difficult solve on Rocm lol.))
 
-    #@MyStatic
-    def x070_TimeMix_one(self,layer_id: int, H:int, N:int, x, x_prev, v_first, state, x_r, x_w, x_k, x_v, x_a, x_g, w0, w1, w2, a0, a1, a2, v0, v1, v2, g1, g2, k_k, k_a, r_k, R_, K_, V_, O_, ln_w, ln_b):
-        B, _ = x.shape  # B, T, H*N
+    @MyStatic
+    def x070_TimeMix_one(layer_id: int, H:int, N:int, x, x_prev, v_first, state, x_r, x_w, x_k, x_v, x_a, x_g, w0, w1, w2, a0, a1, a2, v0, v1, v2, g1, g2, k_k, k_a, r_k, R_, K_, V_, O_, ln_w, ln_b):
+        #print('forward one')
+
+        #print(f'x shape = {x.shape}')
+        #x = x.view(x.shape[0],-1)
+        B, _ ,_= x.shape  # B, T, H*N
         xx = x_prev - x
         xr, xw, xk, xv, xa, xg = x+xx*x_r, x+xx*x_w, x+xx*x_k, x+xx*x_v, x+xx*x_a, x+xx*x_g
 
@@ -1672,8 +1664,101 @@ class RWKV_x(nn.Module):
         xx = xx + ((r * k * r_k).view(B,H,N).sum(dim=-1, keepdim=True) * v.view(B,H,N)).view(B,H*N)
         return (xx * g) @ O_, x, state, v_first
     
-    @MyStatic
-    def x070_TimeMix_seq(layer_id: int, H: int, N: int,
+    def x070_TimeMix_seq_cuda(self,layer_id: int, H: int, N: int,
+                        x, x_prev, v_first, state,
+                        x_r, x_w, x_k, x_v, x_a, x_g,
+                        w0, w1, w2, a0, a1, a2,
+                        v0, v1, v2, g1, g2,
+                        k_k, k_a, r_k, R_, K_, V_, O_,
+                        ln_w, ln_b):
+
+        dtype = x.dtype
+        B, T, _ = x.shape  # B, T, H*N
+
+        #print(x_prev.shape)
+        #print(x[:, :-1, :].shape)
+        
+        xx = torch.cat([x_prev.unsqueeze(1), x[:, :-1]], dim=1) - x  # (B,T,H*N) 
+        xr, xw, xk, xv, xa, xg = x+xx*x_r, x+xx*x_w, x+xx*x_k, x+xx*x_v, x+xx*x_a, x+xx*x_g
+
+        r = xr @ R_
+        #w = torch.tanh(xw @ w1) @ w2
+        w = -F.softplus(-(w0 + torch.tanh(xw @ w1) @ w2)) - 0.5
+        k = xk @ K_
+        v = xv @ V_
+        a = torch.sigmoid(a0 + (xa @ a1) @ a2)
+        g = torch.sigmoid(xg @ g1) @ g2
+
+        kk = torch.nn.functional.normalize((k * k_k).view(B,T,H,N), dim=-1, p=2.0).view(B,T,H*N)
+        k = k * (1 + (a-1) * k_a)
+        if layer_id == 0: v_first = v
+        else: v = v + (v_first - v) * torch.sigmoid(v0 + (xv @ v1) @ v2)
+
+        ######## cuda-free method 
+        #w = w0 + w.float()
+        #w = torch.exp(-0.606531 * torch.sigmoid(w))
+        #w = torch.exp(-0.606531 * torch.sigmoid((w0 + w).float())) # 0.606531 = exp(-0.5)
+
+        #w = -F.softplus(-(w0 + w)) - 0.5
+
+    
+
+        # r= r.to(dtype=torch.bfloat16)
+        # k= k.to(dtype=torch.bfloat16)
+        # v= v.to(dtype=torch.bfloat16)
+        # w= w.to(dtype=torch.bfloat16)
+        
+
+        B,T,HC = w.shape
+        C = 64
+        H = int(HC//C)
+        print(f'H={H}')
+        w=-torch.exp(w)
+
+        aa=-kk
+        bb=kk*a
+
+        # aa= aa.to(dtype=torch.bfloat16)
+        # bb= bb.to(dtype=torch.bfloat16)
+
+
+
+        r_,w_,k_,v_,aa_,bb_ = [i.view(B,T,H,C) for i in [r,w,k,v,aa,bb]]
+
+        #print(f'state = {state.shape}')
+        #exit()
+
+        xx, state = chunk_rwkv7(r_.float(), w_.float(), k_.float(), v_.float(), aa_.float(), bb_.float(), scale=1.0, initial_state=state, output_final_state=True, head_first=False)
+
+        #xx =xx.reshape(B,T,H,C).to(dtype=r_.dtype)#.permute(0,1,3,2)
+        
+
+
+        xx = xx.view(B,T,-1).to(dtype=r.dtype)
+        #print(f'x shape = {x.shape}')
+ 
+
+        #print(f'xx shape = {xx.shape}')
+        xx = xx.permute(0, 2, 1)  # (B,H*N,T)
+        #xx = xx.permute(0, 2, 1)  # (B,H*N,T)
+        #xx = x.view(B*T,-1).to(dtype = ln_w.dtype)
+        print(xx)
+
+        # group_norm適用
+        xx = torch.nn.functional.group_norm(xx, num_groups=H, weight=ln_w, bias=ln_b, eps=64e-5)#.view(B*T,-1)
+        #xx = xx.view(B * T, -1)
+        #xx = torch.nn.functional.group_norm(xx,num_groups = xx.shape[1],weight=ln_w, bias=ln_b, eps=64e-5).view(B, T, C)
+
+        #x = x.view(B,T,-1)#.to(dtype=torch.float16)
+
+        # 元の形状 (B,T,H*N) に戻す
+        xx = xx.permute(0, 2, 1)
+        #xx = xx.view(B,T,-1)
+        xx = xx + ((r * k * r_k).view(B,T,H,N).sum(dim=-1, keepdim=True) * v.view(B,T,H,N)).view(B,T,H*N)
+        xx=xx.to(dtype=g.dtype)
+        return (xx * g) @ O_, x[:,-1], state.float(), v_first
+    
+    def x070_TimeMix_seq_triton(self,layer_id: int, H: int, N: int,
                         x, x_prev, v_first, state,
                         x_r, x_w, x_k, x_v, x_a, x_g,
                         w0, w1, w2, a0, a1, a2,
@@ -1691,7 +1776,202 @@ class RWKV_x(nn.Module):
         xr, xw, xk, xv, xa, xg = x+xx*x_r, x+xx*x_w, x+xx*x_k, x+xx*x_v, x+xx*x_a, x+xx*x_g
 
         r = xr @ R_
+        #w = torch.tanh(xw @ w1) @ w2
+        w = -F.softplus(-(w0 + torch.tanh(xw @ w1) @ w2)) - 0.5
+        k = xk @ K_
+        v = xv @ V_
+        a = torch.sigmoid(a0 + (xa @ a1) @ a2)
+        g = torch.sigmoid(xg @ g1) @ g2
+
+        kk = torch.nn.functional.normalize((k * k_k).view(B,T,H,N), dim=-1, p=2.0).view(B,T,H*N)
+        k = k * (1 + (a-1) * k_a)
+        if layer_id == 0: v_first = v
+        else: v = v + (v_first - v) * torch.sigmoid(v0 + (xv @ v1) @ v2)
+
+        ######## cuda-free method 
+        #w = w0 + w.float()
+        #w = torch.exp(-0.606531 * torch.sigmoid(w))
+        #w = torch.exp(-0.606531 * torch.sigmoid((w0 + w).float())) # 0.606531 = exp(-0.5)
+
+        #w = -F.softplus(-(w0 + w)) - 0.5
+
+        xx,state = rwkv7_attn_triton(r,w,k,v,-kk,kk*a,64,'fp32',state)
+
+    
+
+        # r= r.to(dtype=torch.bfloat16)
+        # k= k.to(dtype=torch.bfloat16)
+        # v= v.to(dtype=torch.bfloat16)
+        # w= w.to(dtype=torch.bfloat16)
+        
+
+        B,T,HC = w.shape
+        C = 64
+        H = HC//C
+        # w=-torch.exp(w)
+
+        # aa=-kk
+        # bb=kk*a
+
+        # aa= aa.to(dtype=torch.bfloat16)
+        # bb= bb.to(dtype=torch.bfloat16)
+
+
+
+        # r_,w_,k_,v_,aa_,bb_ = [i.view(B,T,H,C) for i in [r,w,k,v,aa,bb]]
+
+        # #print(f'state = {state.shape}')
+        # #exit()
+
+        # xx, state = chunk_rwkv7(r_, w_, k_, v_, aa_, bb_, scale=1.0, initial_state=state, output_final_state=True, head_first=False)
+
+        #xx =xx.reshape(B,T,H,C)#.permute(0,1,3,2)
+        
+
+
+        xx = xx.view(B,T,-1)
+        #print(f'x shape = {x.shape}')
+ 
+
+        #print(f'xx shape = {xx.shape}')
+        xx = xx.permute(0, 2, 1)  # (B,H*N,T)
+        #xx = xx.permute(0, 2, 1)  # (B,H*N,T)
+        #xx = x.view(B*T,-1).to(dtype = ln_w.dtype)
+
+        # group_norm適用
+        xx = torch.nn.functional.group_norm(xx, num_groups=H, weight=ln_w, bias=ln_b, eps=64e-5)#.view(B*T,-1)
+        #xx = xx.view(B * T, -1)
+        #xx = torch.nn.functional.group_norm(xx,num_groups = xx.shape[1],weight=ln_w, bias=ln_b, eps=64e-5).view(B, T, C)
+
+        #x = x.view(B,T,-1)#.to(dtype=torch.float16)
+
+        # 元の形状 (B,T,H*N) に戻す
+        xx = xx.permute(0, 2, 1)
+        #xx = xx.view(B,T,-1)
+        xx = xx + ((r * k * r_k).view(B,T,H,N).sum(dim=-1, keepdim=True) * v.view(B,T,H,N)).view(B,T,H*N)
+        xx=xx.to(dtype=g.dtype)
+        return (xx * g) @ O_, x[:,-1,:], state.float(), v_first
+    
+    def x070_TimeMix_seq_fla(self,layer_id: int, H: int, N: int,
+                        x, x_prev, v_first, state,
+                        x_r, x_w, x_k, x_v, x_a, x_g,
+                        w0, w1, w2, a0, a1, a2,
+                        v0, v1, v2, g1, g2,
+                        k_k, k_a, r_k, R_, K_, V_, O_,
+                        ln_w, ln_b):
+
+        dtype = x.dtype
+        B, T, _ = x.shape  # B, T, H*N
+
+        #print(x_prev.shape)
+        #print(x[:, :-1, :].shape)
+        
+        xx = torch.cat([x_prev.unsqueeze(1), x[:, :-1]], dim=1) - x  # (B,T,H*N) 
+        xr, xw, xk, xv, xa, xg = x+xx*x_r, x+xx*x_w, x+xx*x_k, x+xx*x_v, x+xx*x_a, x+xx*x_g
+
+        r = xr @ R_
+        #w = torch.tanh(xw @ w1) @ w2
+        w = -F.softplus(-(w0 + torch.tanh(xw @ w1) @ w2)) - 0.5
+        k = xk @ K_
+        v = xv @ V_
+        a = torch.sigmoid(a0 + (xa @ a1) @ a2)
+        g = torch.sigmoid(xg @ g1) @ g2
+
+        kk = torch.nn.functional.normalize((k * k_k).view(B,T,H,N), dim=-1, p=2.0).view(B,T,H*N)
+        k = k * (1 + (a-1) * k_a)
+        if layer_id == 0: v_first = v
+        else: v = v + (v_first - v) * torch.sigmoid(v0 + (xv @ v1) @ v2)
+
+        ######## cuda-free method 
+        #w = w0 + w.float()
+        #w = torch.exp(-0.606531 * torch.sigmoid(w))
+        #w = torch.exp(-0.606531 * torch.sigmoid((w0 + w).float())) # 0.606531 = exp(-0.5)
+
+        #w = -F.softplus(-(w0 + w)) - 0.5
+
+    
+
+        # r= r.to(dtype=torch.bfloat16)
+        # k= k.to(dtype=torch.bfloat16)
+        # v= v.to(dtype=torch.bfloat16)
+        # w= w.to(dtype=torch.bfloat16)
+        
+
+        B,T,HC = w.shape
+        C = 64
+        H = int(HC//C)
+        print(f'H={H}')
+        w=-torch.exp(w)
+
+        aa=-kk
+        bb=kk*a
+
+        # aa= aa.to(dtype=torch.bfloat16)
+        # bb= bb.to(dtype=torch.bfloat16)
+
+
+
+        r_,w_,k_,v_,aa_,bb_ = [i.view(B,T,H,C) for i in [r,w,k,v,aa,bb]]
+
+        #print(f'state = {state.shape}')
+        #exit()
+
+        xx, state = chunk_rwkv7(r_.float(), w_.float(), k_.float(), v_.float(), aa_.float(), bb_.float(), scale=1.0, initial_state=state, output_final_state=True, head_first=False)
+
+        #xx =xx.reshape(B,T,H,C).to(dtype=r_.dtype)#.permute(0,1,3,2)
+        
+
+
+        xx = xx.view(B,T,-1).to(dtype=r.dtype)
+        #print(f'x shape = {x.shape}')
+ 
+
+        #print(f'xx shape = {xx.shape}')
+        xx = xx.permute(0, 2, 1)  # (B,H*N,T)
+        #xx = xx.permute(0, 2, 1)  # (B,H*N,T)
+        #xx = x.view(B*T,-1).to(dtype = ln_w.dtype)
+        print(xx)
+
+        # group_norm適用
+        xx = torch.nn.functional.group_norm(xx, num_groups=H, weight=ln_w, bias=ln_b, eps=64e-5)#.view(B*T,-1)
+        #xx = xx.view(B * T, -1)
+        #xx = torch.nn.functional.group_norm(xx,num_groups = xx.shape[1],weight=ln_w, bias=ln_b, eps=64e-5).view(B, T, C)
+
+        #x = x.view(B,T,-1)#.to(dtype=torch.float16)
+
+        # 元の形状 (B,T,H*N) に戻す
+        xx = xx.permute(0, 2, 1)
+        #xx = xx.view(B,T,-1)
+        xx = xx + ((r * k * r_k).view(B,T,H,N).sum(dim=-1, keepdim=True) * v.view(B,T,H,N)).view(B,T,H*N)
+        xx=xx.to(dtype=g.dtype)
+        return (xx * g) @ O_, x[:,-1], state.float(), v_first
+    
+    @MyStatic
+    def x070_TimeMix_seq(layer_id: int, H: int, N: int,
+                        x, x_prev, v_first, state,
+                        x_r, x_w, x_k, x_v, x_a, x_g,
+                        w0, w1, w2, a0, a1, a2,
+                        v0, v1, v2, g1, g2,
+                        k_k, k_a, r_k, R_, K_, V_, O_,
+                        ln_w, ln_b):
+
+        dtype = x.dtype
+        B, T, _ = x.shape  # B, T, H*N
+
+        #print(x_prev.shape)
+        #print(x[:, :-1, :].shape)
+        
+        xx = torch.cat([x_prev.unsqueeze(1), x[:, :-1]], dim=1) - x  # (B,T,H*N) 
+
+        #print(f'xx = {xx.shape}')
+
+
+
+        xr, xw, xk, xv, xa, xg = x+xx*x_r, x+xx*x_w, x+xx*x_k, x+xx*x_v, x+xx*x_a, x+xx*x_g
+
+        r = xr @ R_
         w = torch.tanh(xw @ w1) @ w2
+        #w = -F.softplus(-(w0 + torch.tanh(xw @ w1) @ w2)) - 0.5
         k = xk @ K_
         v = xv @ V_
         a = torch.sigmoid(a0 + (xa @ a1) @ a2)
@@ -1704,44 +1984,30 @@ class RWKV_x(nn.Module):
 
         ######## cuda-free method 
         w = torch.exp(-0.606531 * torch.sigmoid((w0 + w).float())) # 0.606531 = exp(-0.5)
+        #w = -torch.nn.functional.softplus(-(w0 + w.float())) - 0.5
+        #w = torch.exp(-torch.exp(w))
+        #w = -torch.nn.functional.softplus(-(w0 + w)) - 0.5
 
-    
+        #w= w0 + w.float()
+        #w = torch.exp(-0.606531 * torch.sigmoid((w0 + w).float())) # 0.606531 = exp(-0.5)
+   
         # for t in range(T):
         #     r_, w_, k_, v_, kk_, a_ = r[:,t], w[:,t], k[:,t], v[:,t], kk[:,t], a[:,t]
         #     vk = v_.view(B,H,N,1) @ k_.view(B,H,1,N)
         #     ab = (-kk_).view(B,H,N,1) @ (kk_*a_).view(B,H,1,N)
         #     state = state * w_.view(B,H,1,N) + state @ ab.float() + vk.float()
         #     xx[:,t] = (state.to(dtype=x.dtype) @ r_.view(B,H,N,1)).view(B,H*N)
- 
+  
 
         for t in range(T):
-             # まずは形状変換を1回ずつに抑える
-            r_  = r[:, t].view(B, H, N, 1)
-            w_  = w[:, t].view(B, H, 1, N)
-            k_  = k[:, t].view(B, H, 1, N)
-            v_  = v[:, t].view(B, H, N, 1)
-            kk_ = kk[:, t].view(B, H, N, 1)
-            a_  = a[:, t].view(B, H, N, 1)
+            r_, w_, k_, v_, kk_, a_ = r[:,t], w[:,t], k[:,t], v[:,t], kk[:,t], a[:,t]
+            vk = v_.view(B,H,N,1) @ k_.view(B,H,1,N)
+            ab = (-kk_).view(B,H,N,1) @ (kk_*a_).view(B,H,1,N)
+            state = state * w_.view(B,H,1,N) + state @ ab.float() + vk.float()
+            xx[:,t] = (state.to(dtype=x.dtype) @ r_.view(B,H,N,1)).view(B,H*N)
 
-            # 行列積
-            # v_: (B,H,N,1), k_: (B,H,1,N) => vk: (B,H,N,N)
-            vk = v_ @ k_
-
-            # ab: (B,H,N,1) @ (B,H,1,N) => (B,H,N,N)
-            # -kk_ = -1 * kk_ (多くの場合はブロードキャストでOK)
-            # kk_ * a_ -> (B,H,N,1), transpose(-2,-1)で (B,H,1,N) になる
-            ab = (-kk_) @ ((kk_ * a_).transpose(-2, -1))
-
-            # state更新 (同じdtype想定)
-            # state: (B,H,N,N) を仮定
-            new_state = state * w_ + state @ ab.float() + vk.float()
-
-            # xx[:,t] 計算
-            # (B,H,N,N) @ (B,H,N,1) => (B,H,N,1) => view(B,H*N)
-            xx[:, t] = (new_state.to(dtype=x.dtype) @ r_).view(B, H*N)
-
-            # 次のループに備えて state を更新
-            state = new_state
+        #print(f'xx shapes = {xx.shape}')
+ 
 
         xx = xx.permute(0, 2, 1)  # (B,H*N,T)
 
@@ -1751,7 +2017,8 @@ class RWKV_x(nn.Module):
         # 元の形状 (B,T,H*N) に戻す
         xx = xx.permute(0, 2, 1)
         xx = xx + ((r * k * r_k).view(B,T,H,N).sum(dim=-1, keepdim=True) * v.view(B,T,H,N)).view(B,T,H*N)
-        return (xx * g) @ O_, x[:,-1,:], state, v_first
+        
+        return (xx * g) @ O_, x[:,-1], state.float(), v_first
     
     @MyStatic
     def x070_ChannelMix_one(x, x_prev, x_k, K_, V_):
@@ -1830,12 +2097,49 @@ class RWKV_x(nn.Module):
 
                 #print(f'layer {i} ln1 xx {xx}')
 
-                xx, time_mix_shift, time_mix_state, v_first = self.x070_TimeMix_seq(i, self.n_head, self.head_size, xx, time_mix_shift, v_first, time_mix_state,
+                B, T, X = xx.shape
+
+                # xx1, time_mix_shift1, time_mix_state1, v_first1 = self.x070_TimeMix_seq_fla(i, self.n_head, self.head_size, xx, time_mix_shift, v_first, time_mix_state,
+                #     z[att+'x_r'], z[att+'x_w'], z[att+'x_k'], z[att+'x_v'], z[att+'x_a'], z[att+'x_g'],
+                #     z[att+'w0'], z[att+'w1'], z[att+'w2'], z[att+'a0'], z[att+'a1'], z[att+'a2'], z[att+'v0'], z[att+'v1'], z[att+'v2'],
+                #     z[att+'g1'], z[att+'g2'], z[att+'k_k'], z[att+'k_a'], z[att+'r_k'],
+                #     z[att+'receptance.weight'], z[att+'key.weight'], z[att+'value.weight'], z[att+'output.weight'],
+                #     z[att+'ln_x.weight'], z[att+'ln_x.bias'])
+
+                # xx, time_mix_shift, time_mix_state, v_first = self.x070_TimeMix_seq(i, self.n_head, self.head_size, xx, time_mix_shift, v_first, time_mix_state,
+                #     z[att+'x_r'], z[att+'x_w'], z[att+'x_k'], z[att+'x_v'], z[att+'x_a'], z[att+'x_g'],
+                #     z[att+'w0'], z[att+'w1'], z[att+'w2'], z[att+'a0'], z[att+'a1'], z[att+'a2'], z[att+'v0'], z[att+'v1'], z[att+'v2'],
+                #     z[att+'g1'], z[att+'g2'], z[att+'k_k'], z[att+'k_a'], z[att+'r_k'],
+                #     z[att+'receptance.weight'], z[att+'key.weight'], z[att+'value.weight'], z[att+'output.weight'],
+                #     z[att+'ln_x.weight'], z[att+'ln_x.bias'])
+                
+                # # xx, time_mix_shift, time_mix_state, v_first = self.x070_TimeMix_seq(i, self.n_head, self.head_size, xx, time_mix_shift, v_first, time_mix_state,
+                # #     z[att+'x_r'], z[att+'x_w'], z[att+'x_k'], z[att+'x_v'], z[att+'x_a'], z[att+'x_g'],
+                # #     z[att+'w0'], z[att+'w1'], z[att+'w2'], z[att+'a0'], z[att+'a1'], z[att+'a2'], z[att+'v0'], z[att+'v1'], z[att+'v2'],
+                # #     z[att+'g1'], z[att+'g2'], z[att+'k_k'], z[att+'k_a'], z[att+'r_k'],
+                # #     z[att+'receptance.weight'], z[att+'key.weight'], z[att+'value.weight'], z[att+'output.weight'],
+                # #     z[att+'ln_x.weight'], z[att+'ln_x.bias'])
+
+                if T>10000000:
+                    xx, time_mix_shift, time_mix_state, v_first = self.x070_TimeMix_seq_fla(i, self.n_head, self.head_size, xx, time_mix_shift, v_first, time_mix_state,
+                        z[att+'x_r'], z[att+'x_w'], z[att+'x_k'], z[att+'x_v'], z[att+'x_a'], z[att+'x_g'],
+                        z[att+'w0'], z[att+'w1'], z[att+'w2'], z[att+'a0'], z[att+'a1'], z[att+'a2'], z[att+'v0'], z[att+'v1'], z[att+'v2'],
+                        z[att+'g1'], z[att+'g2'], z[att+'k_k'], z[att+'k_a'], z[att+'r_k'],
+                        z[att+'receptance.weight'], z[att+'key.weight'], z[att+'value.weight'], z[att+'output.weight'],
+                        z[att+'ln_x.weight'], z[att+'ln_x.bias'])
+                else:
+                    xx, time_mix_shift, time_mix_state, v_first = self.x070_TimeMix_seq(i, self.n_head, self.head_size, xx, time_mix_shift, v_first, time_mix_state,
                     z[att+'x_r'], z[att+'x_w'], z[att+'x_k'], z[att+'x_v'], z[att+'x_a'], z[att+'x_g'],
                     z[att+'w0'], z[att+'w1'], z[att+'w2'], z[att+'a0'], z[att+'a1'], z[att+'a2'], z[att+'v0'], z[att+'v1'], z[att+'v2'],
                     z[att+'g1'], z[att+'g2'], z[att+'k_k'], z[att+'k_a'], z[att+'r_k'],
                     z[att+'receptance.weight'], z[att+'key.weight'], z[att+'value.weight'], z[att+'output.weight'],
                     z[att+'ln_x.weight'], z[att+'ln_x.bias'])
+
+                # print(f'xx-xx1 = {torch.sum(xx.float()-xx1.float())}')
+                # print(f'time_mix_shift-time_mix_shift1 = {torch.sum(time_mix_shift.float()-time_mix_shift1.float())}')
+                # print(f'time_mix_state-time_mix_state1 = {torch.sum(time_mix_state.float()-time_mix_state1.float())}')
+
+                #exit()
                 #print(f'layer {i} TimeMix xx {xx}')
                 #exit()
                 x = x + xx

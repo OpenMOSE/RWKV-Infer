@@ -1,5 +1,5 @@
 import torch
-from rwkvengine.rwkvcore import RWKV_6, PIPELINE
+from rwkvengine.rwkvcore import RWKV_x, PIPELINE
 import time
 
 
@@ -11,12 +11,12 @@ if __name__ == '__main__':
     print('RWKV x060Core with FLA Test')
 
     pipeline = PIPELINE()
-    model = RWKV_6('models/RWKV-x060-Jpn-7B-20240816-ctx4096.pth','fp5')
+    model = RWKV_x('/home/client/Projects/RWKV-LM-RLHF/main/myfolder/models/rwkv-x070-1b5-world-v3-60%trained-20250113-ctx4k.pth','bf16')
     Target_batch = args.tb#16
 
     States = model.new_state(Target_batch)#state_empty(32, 1, 2560, 2560 // 32)
 
-    context =  'User: Tell me advantage of C++.\n\nAssistant:'
+    context =  'User: Tell me advantage of C++. also write examples\n\nAssistant:'
     context2 = 'User: Tell me advantage of C++.\n\nAssistant:'
 
     #model.load_state('states/ojousama2.pth')
@@ -60,7 +60,12 @@ if __name__ == '__main__':
 
     x, shift_states, wkv_states = model.forward(idx, shift_states, wkv_states)
 
+    if x.dim() == 2:
+        x = x.view(x.shape[0],1,x.shape[1])
+
     print(f'x = {x}')
+
+    #exit()
 
     print(context)
     out_tokens = [[] for _ in range(Target_batch)]
@@ -75,10 +80,10 @@ if __name__ == '__main__':
     min_time_all = 1e10
     min_time_all_single = 1e10
 
-    maxtoken= 1000
+    maxtoken= 100
 
     temperature = torch.full((Target_batch,), 1.0)
-    top_p = torch.full((Target_batch,), 0.7)
+    top_p = torch.full((Target_batch,), 0.3)
 
 
     SamplingSum = 0
@@ -104,7 +109,7 @@ if __name__ == '__main__':
                 tmp = pipeline.decode(out_tokens[j][out_last[j]:])
                 if ("\ufffd" not in tmp) and (not tmp.endswith("\n")):
                         #if j == Target_batch - 1:
-                        #print(tmp,end="", flush=True)
+                        print(tmp,end="", flush=True)
                         output_text[j] = output_text[j] + tmp
                         out_last[j] = i + 1
             except:
@@ -112,6 +117,9 @@ if __name__ == '__main__':
         t2 = time.perf_counter()
 
         x, shift_states, wkv_states = model.forward(idx, shift_states, wkv_states)
+        if x.dim() == 2:
+            x = x.view(x.shape[0],1,x.shape[1])
+        #print(x)
         t3 = time.perf_counter()
         ForwardSum += (t3 - t2)
         DecodeSum += (t2 - t1)
