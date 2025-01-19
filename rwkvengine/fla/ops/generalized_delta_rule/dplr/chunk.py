@@ -134,163 +134,163 @@ class ChunkDPLRDeltaRuleFunction(torch.autograd.Function):
             head_first=head_first,
             chunk_size=chunk_size
         )
-        ctx.save_for_backward(q, k, v, a, b, gk, initial_state)
-        ctx.head_first = head_first
-        ctx.offsets = offsets
-        ctx.indices = indices
-        ctx.scale = scale
-        ctx.chunk_size = chunk_size
+        # ctx.save_for_backward(q, k, v, a, b, gk, initial_state)
+        # ctx.head_first = head_first
+        # ctx.offsets = offsets
+        # ctx.indices = indices
+        # ctx.scale = scale
+        # ctx.chunk_size = chunk_size
         return o.to(q.dtype), final_state
 
-    @staticmethod
-    @contiguous
-    @autocast_custom_bwd
-    def backward(
-        ctx,
-        do: torch.Tensor,
-        dht: torch.Tensor
-    ):
-        q, k, v, a, b, gk, initial_state = ctx.saved_tensors
-        BT = ctx.chunk_size
-        head_first = ctx.head_first
-        offsets = ctx.offsets
-        indices = ctx.indices
-        scale = ctx.scale
+    # @staticmethod
+    # @contiguous
+    # @autocast_custom_bwd
+    # def backward(
+    #     ctx,
+    #     do: torch.Tensor,
+    #     dht: torch.Tensor
+    # ):
+    #     q, k, v, a, b, gk, initial_state = ctx.saved_tensors
+    #     BT = ctx.chunk_size
+    #     head_first = ctx.head_first
+    #     offsets = ctx.offsets
+    #     indices = ctx.indices
+    #     scale = ctx.scale
         
-        # ******* start recomputing everything, otherwise i believe the gpu memory will be exhausted *******
-        gi, ge = chunk_rwkv6_fwd_cumsum(gk, BT, offsets=offsets, head_first=head_first)
+    #     # ******* start recomputing everything, otherwise i believe the gpu memory will be exhausted *******
+    #     gi, ge = chunk_rwkv6_fwd_cumsum(gk, BT, offsets=offsets, head_first=head_first)
 
-        A_ab, A_qk, A_ak, A_qb, qg, kg, ag, bg = chunk_fwd_intra_dplr_fn(
-            q=q,
-            k=k,
-            a=a,
-            b=b,
-            gi=gi,
-            ge=ge,
-            scale=scale,
-            offsets=offsets,
-            indices=indices,
-            BT=BT,
-            head_first=head_first
-        )
-        w, u, A_ab_inv = fwd_prepare_wy_repr(
-            ag=ag,
-            A_ab=A_ab,
-            A_ak=A_ak,
-            v=v,
-            offsets=offsets,
-            indices=indices,
-            head_first=head_first,
-            chunk_size=BT
-        )
-        h, v_new, _ = chunk_dplr_fwd_h(
-            kg=kg,
-            bg=bg,
-            v=v,
-            w=w,
-            u=u,
-            gk=gi,
-            initial_state=initial_state,
-            offsets=offsets,
-            head_first=head_first,
-            chunk_size=BT
-        )
-        u = None
-        # ******* end of recomputation *******
+    #     A_ab, A_qk, A_ak, A_qb, qg, kg, ag, bg = chunk_fwd_intra_dplr_fn(
+    #         q=q,
+    #         k=k,
+    #         a=a,
+    #         b=b,
+    #         gi=gi,
+    #         ge=ge,
+    #         scale=scale,
+    #         offsets=offsets,
+    #         indices=indices,
+    #         BT=BT,
+    #         head_first=head_first
+    #     )
+    #     w, u, A_ab_inv = fwd_prepare_wy_repr(
+    #         ag=ag,
+    #         A_ab=A_ab,
+    #         A_ak=A_ak,
+    #         v=v,
+    #         offsets=offsets,
+    #         indices=indices,
+    #         head_first=head_first,
+    #         chunk_size=BT
+    #     )
+    #     h, v_new, _ = chunk_dplr_fwd_h(
+    #         kg=kg,
+    #         bg=bg,
+    #         v=v,
+    #         w=w,
+    #         u=u,
+    #         gk=gi,
+    #         initial_state=initial_state,
+    #         offsets=offsets,
+    #         head_first=head_first,
+    #         chunk_size=BT
+    #     )
+    #     u = None
+    #     # ******* end of recomputation *******
 
-        dv_new_intra, dA_qk, dA_qb = chunk_dplr_bwd_dAu(
-            v=v,
-            v_new=v_new,
-            do=do,
-            A_qb=A_qb,
-            scale=scale,
-            offsets=offsets,
-            indices=indices,
-            head_first=head_first,
-            chunk_size=BT
-        )
+    #     dv_new_intra, dA_qk, dA_qb = chunk_dplr_bwd_dAu(
+    #         v=v,
+    #         v_new=v_new,
+    #         do=do,
+    #         A_qb=A_qb,
+    #         scale=scale,
+    #         offsets=offsets,
+    #         indices=indices,
+    #         head_first=head_first,
+    #         chunk_size=BT
+    #     )
 
 
-        dh, dh0, dv_new = chunk_dplr_bwd_dhu(
-            qg=qg,
-            bg=bg,
-            w=w,
-            gk=gi,
-            h0=initial_state,
-            dht=dht,
-            do=do,
-            dv=dv_new_intra,
-            offsets=offsets,
-            head_first=head_first,
-            chunk_size=BT
-        )
+    #     dh, dh0, dv_new = chunk_dplr_bwd_dhu(
+    #         qg=qg,
+    #         bg=bg,
+    #         w=w,
+    #         gk=gi,
+    #         h0=initial_state,
+    #         dht=dht,
+    #         do=do,
+    #         dv=dv_new_intra,
+    #         offsets=offsets,
+    #         head_first=head_first,
+    #         chunk_size=BT
+    #     )
 
-        dv = chunk_dplr_bwd_dv(
-            A_qk=A_qk,
-            kg=kg,
-            do=do,
-            dh=dh,
-            offsets=offsets,
-            indices=indices,
-            head_first=head_first,
-            chunk_size=BT
-        )
+    #     dv = chunk_dplr_bwd_dv(
+    #         A_qk=A_qk,
+    #         kg=kg,
+    #         do=do,
+    #         dh=dh,
+    #         offsets=offsets,
+    #         indices=indices,
+    #         head_first=head_first,
+    #         chunk_size=BT
+    #     )
  
-        dqg, dkg, dw, dbg, dgk_last = chunk_dplr_bwd_o(
-            k=kg,
-            b=bg,
-            v=v,
-            v_new=v_new,
-            do=do,
-            h=h,
-            dh=dh,
-            dv=dv_new,
-            w=w,
-            gk=gi,
-            offsets=offsets,
-            indices=indices,
-            chunk_size=BT,
-            scale=scale,
-            head_first=head_first,
-        )
+    #     dqg, dkg, dw, dbg, dgk_last = chunk_dplr_bwd_o(
+    #         k=kg,
+    #         b=bg,
+    #         v=v,
+    #         v_new=v_new,
+    #         do=do,
+    #         h=h,
+    #         dh=dh,
+    #         dv=dv_new,
+    #         w=w,
+    #         gk=gi,
+    #         offsets=offsets,
+    #         indices=indices,
+    #         chunk_size=BT,
+    #         scale=scale,
+    #         head_first=head_first,
+    #     )
 
-        dA_ab, dA_ak, dv2, dag = chunk_dplr_bwd_wy(
-            A_ab_inv=A_ab_inv,
-            A_ak=A_ak,
-            v=v,
-            ag=ag,
-            dw=dw,
-            du=dv_new,
-            offsets=offsets,
-            indices=indices,
-            head_first=head_first,
-            chunk_size=BT
-        )
+    #     dA_ab, dA_ak, dv2, dag = chunk_dplr_bwd_wy(
+    #         A_ab_inv=A_ab_inv,
+    #         A_ak=A_ak,
+    #         v=v,
+    #         ag=ag,
+    #         dw=dw,
+    #         du=dv_new,
+    #         offsets=offsets,
+    #         indices=indices,
+    #         head_first=head_first,
+    #         chunk_size=BT
+    #     )
 
-        dq, dk, da, db, dgk = chunk_dplr_bwd_dqk_intra(
-            q=q,
-            k=k,
-            a=a,
-            b=b,
-            gi=gi,
-            ge=ge,
-            dAqk=dA_qk,
-            dAqb=dA_qb,
-            dAak=dA_ak,
-            dAab=dA_ab,
-            dgk_last=dgk_last,
-            dqg=dqg,
-            dkg=dkg,
-            dag=dag,
-            dbg=dbg,
-            chunk_size=BT,
-            scale=scale,
-            head_first=head_first,
-            offsets=offsets,
-            indices=indices
-        )
-        dv.add_(dv2)
-        return dq.to(q.dtype), dk.to(k.dtype), dv.to(v.dtype), da.to(a.dtype), db.to(b.dtype), dgk.to(gk.dtype), None, dh0, None, None, None
+    #     dq, dk, da, db, dgk = chunk_dplr_bwd_dqk_intra(
+    #         q=q,
+    #         k=k,
+    #         a=a,
+    #         b=b,
+    #         gi=gi,
+    #         ge=ge,
+    #         dAqk=dA_qk,
+    #         dAqb=dA_qb,
+    #         dAak=dA_ak,
+    #         dAab=dA_ab,
+    #         dgk_last=dgk_last,
+    #         dqg=dqg,
+    #         dkg=dkg,
+    #         dag=dag,
+    #         dbg=dbg,
+    #         chunk_size=BT,
+    #         scale=scale,
+    #         head_first=head_first,
+    #         offsets=offsets,
+    #         indices=indices
+    #     )
+    #     dv.add_(dv2)
+    #     return dq.to(q.dtype), dk.to(k.dtype), dv.to(v.dtype), da.to(a.dtype), db.to(b.dtype), dgk.to(gk.dtype), None, dh0, None, None, None
 
 
 def chunk_dplr_delta_rule(

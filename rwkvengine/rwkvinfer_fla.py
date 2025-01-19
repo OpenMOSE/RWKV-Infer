@@ -180,6 +180,7 @@ class LLMWorker:
         print('Initializing LLM Worker')
         
         self.llm_batch_chunk = 1024 #FLA Preprocess Prompt chunks
+        self.llm_minimum_chunk = 128
         self.llm_batch_cycle = 10 #Preprocess cycle if 4, Pre,single,single,single,Pre,....
         self.llm_work_cycle = 0
 
@@ -398,6 +399,11 @@ class LLMWorker:
                             print(f"batch {i} input tokens = {len(work['prompt'])}")
                             if len(work['prompt']) - work['proceedtokens'] < token_max:
                                 token_max = len(work['prompt']) - work['proceedtokens']
+
+                    if token_max <= self.llm_minimum_chunk:
+                        token_max = token_max  
+                    else:
+                        token_max = (token_max // self.llm_minimum_chunk) * self.llm_minimum_chunk
                                 
                     for i in range(self.llm_max_batch_count):
                         work = self.llM_current_batch_info[i]
@@ -505,7 +511,13 @@ class LLMWorker:
                             shift_states = shift_states.permute(1,0,2) 
                             wkv_states = wkv_states.permute(1, 0, 2, 3, 4) 
 
-                        x, shift_states, wkv_states = self.model.forward(idx, shift_states, wkv_states)
+
+                        if token_max < self.llm_minimum_chunk:
+                            KernelMode = 2
+                        else:
+                            KernelMode = 0
+
+                        x, shift_states, wkv_states = self.model.forward(idx, shift_states, wkv_states,KernelMode=KernelMode)
 
                         
 
@@ -574,6 +586,8 @@ class LLMWorker:
                     # フィルタリング条件
                     valid_works = [work for work in self.llM_current_batch_info[:self.llm_max_batch_count]
                                 if work['proceedtokens'] >= len(work['prompt']) and work['slotstatus'] == 'processing']
+                    
+                    #print(valid_works)
 
                     # リスト内包表記を使用してデータを抽出
                     token = [work['currenttoken'] for work in valid_works]
@@ -703,7 +717,13 @@ class LLMWorker:
                                         outputs[j] = outputs[j] + tmp
                                         out_last[j] = counts[j] + 1
                                 #print(f'outtokens = {len(out_tokens[j])}')
-                                if len(out_tokens[j]) > max_tokens[j]:
+                                #print(f'{int(counts[j])} {max_tokens[j]}')
+                                if int(counts[j]) > int(max_tokens[j]):
+                                    #Reached Max Token
+                                    statuss[j] = 'idle'
+                                    print(f'batch {j} is reached max_tokens')
+                                    #print(outputs[j])
+                                if len(out_tokens[j]) > int(max_tokens[j]):
                                     #Reached Max Token
                                     statuss[j] = 'idle'
                                     print(f'batch {j} is finished')
@@ -806,7 +826,7 @@ class LLMWorker:
                             shift_states = shift_states.permute(1,0,2)
                             wkv_states = wkv_states.permute(1, 0, 2, 3, 4)
 
-                        x, shift_states, wkv_states = self.model.forward(idx, shift_states, wkv_states)
+                        x, shift_states, wkv_states = self.model.forward(idx, shift_states, wkv_states,one_mode=True)
 
                         if x.dim() == 2:
                             x = x.view(x.shape[0],1,x.shape[1])

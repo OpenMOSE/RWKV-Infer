@@ -529,6 +529,8 @@ async def rwkv_completions(request: Request):
     #stop = [Endtoken] #params.get('stop', [Endtoken])
 
     max_tokens = data.get('max_tokens',max_tokens)
+    if max_tokens > 8192:
+        max_tokens = 8192
     #top_p = data.get('top_p',top_p)
     #temperature = data.get('temperature',temperature)
     presence_penalty = data.get('presence_penalty',presence_penalty)

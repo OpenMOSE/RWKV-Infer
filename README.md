@@ -30,7 +30,7 @@ By combining multiple states, MRSS integrates knowledge from different "experts,
   - FP5 (Early Experiment. ppl 10% degradation. toachao fpx e2m2)
   - Bitsandbytes NF4 (currently slow)
 - **Multi Batch Generation**:
-  - True multi batch generation with Flash-Linear-Attention(x060)
+  - True multi batch generation with Flash-Linear-Attention(x060, x070)
   - multi batch sampling
   - On an RTX4090, a 7B parameter model can run over 256 batches of inference.
 - **Inference Speed examples(RTX4090)**:
