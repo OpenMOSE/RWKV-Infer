@@ -9,11 +9,13 @@ if __name__ == '__main__':
     from argparse import ArgumentParser
     parser = ArgumentParser()
     parser.add_argument("--tb", default="1", type=int) #batch size 
+    parser.add_argument("--fully_fused", default="1", type=int) #batch size 
     args = parser.parse_args()
     print('RWKV x070Core with FLA Test')
 
     pipeline = PIPELINE()
-    model = RWKV_x('models/rwkv-x070-2b9-world-v3-14%trained-20241223-ctx4k.pth','bf16')
+    #model = RWKV_x('/home/client/Projects/RWKV-LM-RLHF/main/myfolder/converted/x060-upgraded.pth','fp8',adapter_mode='bone',adapter_model='/home/client/Projects/RWKV-LM-RLHF/main/myfolder/Outputs/x070-7b-cje/rwkv-14.pth',fully_fusedrecurrent=args.fully_fused)
+    model = RWKV_x('/home/client/Projects/RWKV-LM-RLHF/main/myfolder/Outputs/rwkv-x070-2b9-cje-instruct-1.pth','fp8')
     Target_batch = args.tb
 
     States = model.new_state(Target_batch)#state_empty(32, 1, 2560, 2560 // 32)
@@ -122,7 +124,7 @@ Assistant:"""
     #for i in range(model.n_layer):
     #    wkv_states[i][0] = model.model_current_statetuned[i*3 + 1]
     #exit()
-    tokens0 = pipeline.encode(context2)
+    tokens0 = pipeline.encode(context)
     tokens = pipeline.encode(context2)
     tokens2 = pipeline.encode(context3)
 
@@ -227,7 +229,7 @@ Assistant:"""
     del wkv_states1
 
     t_prefill_0 = time.perf_counter()
-    x, shift_states, wkv_states = model.forward(copy.deepcopy(idx), shift_states, wkv_states,KernelMode=1) #FLA
+    x, shift_states, wkv_states = model.forward(copy.deepcopy(idx), shift_states, wkv_states,KernelMode=0) #FLA
     t_prefill_1 = time.perf_counter()
 
 
@@ -310,6 +312,10 @@ Assistant:"""
     for i in range(maxtoken):
         
         t0 = time.perf_counter()
+
+        #x = x.view(-1,1)
+        if x.dim() == 2:
+            x = x.view(x.shape[0],1,x.shape[1])
         x[:, -1, 0] -= 1e10
 
         otokens = pipeline.improved_nucleus_sampling_multi_static(x[:, -1], temperature=temperature, top_p=top_p).tolist()
@@ -326,7 +332,7 @@ Assistant:"""
                 tmp = pipeline.decode(out_tokens[j][out_last[j]:])
                 if ("\ufffd" not in tmp) and (not tmp.endswith("\n")):
                         #if j == Target_batch - 1:
-                        #print(tmp,end="", flush=True)
+                        #    print(tmp,end="", flush=True)
                         output_text[j] = output_text[j] + tmp
                         out_last[j] = i + 1
             except:

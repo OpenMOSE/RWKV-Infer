@@ -15,12 +15,9 @@ import triton.language as tl
 @triton.autotune(
     configs=[
         triton.Config({'BK': BK}, num_warps=num_warps, num_stages=num_stages)
-        # for BK in [32, 64]
-        # for num_warps in [1, 2, 4, 8]
-        # for num_stages in [2, 3, 4]
-        for BK in [32]
-        for num_warps in [1, 2]
-        for num_stages in [2]
+        for BK in [32, 64]
+        for num_warps in [1, 2, 4, 8]
+        for num_stages in [2, 3, 4]
     ],
     key=["BC", "K"]
 )

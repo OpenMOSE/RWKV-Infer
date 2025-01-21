@@ -5,9 +5,10 @@ from typing import Optional
 
 import torch
 
-from rwkvengine.fla.ops.generalized_delta_rule import chunk_dplr_delta_rule
+from rwkvengine.fla.ops.generalized_delta_rule import fused_recurrent_dplr_delta_rule
 
-def chunk_rwkv7(
+
+def fused_recurrent_rwkv7(
     r: torch.Tensor,
     log_w: torch.Tensor,
     k: torch.Tensor,
@@ -36,21 +37,17 @@ def chunk_rwkv7(
             b of shape `[B, H, T, K]` if `head_first=True` else `[B, T, H, K]`.
         scale (float):
             scale of the attention.
-        initial_state (Optional[torch.Tensor]):
-            Initial state of shape `[N, H, K, V]` for `N` input sequences.
-            For equal-length input sequences, `N` equals the batch size `B`.
-            Default: `None`.
-        output_final_state (Optional[bool]):
-            Whether to output the final state of shape `[N, H, K, V]`. Default: `False`.
+        initial_state (torch.Tensor):
+            initial state of shape `[B, H, K, V]` if cu_seqlens is None else `[N, H, K, V]` where N = len(cu_seqlens) - 1.
+        output_final_state (bool):
+            whether to output the final state.
         cu_seqlens (torch.LongTensor):
             Cumulative sequence lengths of shape `[N+1]` used for variable-length training,
             consistent with the FlashAttention API.
         head_first (bool):
             whether to use head first. Recommended to be False to avoid extra transposes.
     """
-    
-
-    return chunk_dplr_delta_rule(
+    return fused_recurrent_dplr_delta_rule(
         q=r,
         k=k,
         v=v,

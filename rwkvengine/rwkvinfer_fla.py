@@ -179,7 +179,7 @@ class LLMWorker:
     def __init__(self,max_batch_size = 16):
         print('Initializing LLM Worker')
         
-        self.llm_batch_chunk = 1024 #FLA Preprocess Prompt chunks
+        self.llm_batch_chunk = 4096 #FLA Preprocess Prompt chunks
         self.llm_minimum_chunk = 128
         self.llm_batch_cycle = 10 #Preprocess cycle if 4, Pre,single,single,single,Pre,....
         self.llm_work_cycle = 0
@@ -227,11 +227,11 @@ class LLMWorker:
 
         
 
-    def LoadModel(self,modelpath,quantize=False,precision='bf16',adapter_model = '',adapter_mode = '',adapter_scale=2.0):
+    def LoadModel(self,modelpath,quantize=False,precision='bf16',adapter_model = '',adapter_mode = '',adapter_scale=2.0, fully_fusedrecurrent = True):
         self.model = None
         gc.collect()
         torch.cuda.empty_cache()
-        self.model = RWKV_x(modelpath,base_precision=precision,adapter_model=adapter_model,adapter_mode=adapter_mode,adapter_scale=adapter_scale)
+        self.model = RWKV_x(modelpath,base_precision=precision,adapter_model=adapter_model,adapter_mode=adapter_mode,adapter_scale=adapter_scale,fully_fusedrecurrent=fully_fusedrecurrent)
         gc.collect()
         torch.cuda.empty_cache()
         print('model loaded')

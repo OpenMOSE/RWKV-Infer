@@ -16,8 +16,7 @@ from typing import Optional, Tuple
 @triton.autotune(
     configs=[
         triton.Config({}, num_warps=num_warps)
-        #for num_warps in [2, 4, 8]
-        for num_warps in [2, 4]
+        for num_warps in [2, 4, 8]
     ],
     key=['BT', 'BK', 'BV'],
 )

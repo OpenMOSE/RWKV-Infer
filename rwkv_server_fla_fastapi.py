@@ -36,6 +36,8 @@ parser.add_argument("--dynamic_state_cache_store", default='cpu', type=str) #if 
 parser.add_argument("--admin_key1", default='123874139713915425423541', type=str) 
 parser.add_argument("--admin_key2", default='d46871245412541544408014', type=str) 
 
+parser.add_argument("--fully_fusedrecurrent", default=0, type=int) 
+
 args = parser.parse_args()
 engine1 = LLMWorker(max_batch_size = args.workers)
 
@@ -251,7 +253,7 @@ async def loadmodel(request: Request):
         StateList = []
         DynamicStateList = []
         
-        engine1.LoadModel(model_filename,Quant,precision,adapter_model=adapter_filename,adapter_mode=adapter_mode,adapter_scale=adapter_scaling)
+        engine1.LoadModel(model_filename,Quant,precision,adapter_model=adapter_filename,adapter_mode=adapter_mode,adapter_scale=adapter_scaling,fully_fusedrecurrent=args.fully_fusedrecurrent)
         ModelList = [{"object":"models","id":f"{model_viewname}"}]
         #return jsonify({"status": "success"}), 200
         return {"status": "success"}

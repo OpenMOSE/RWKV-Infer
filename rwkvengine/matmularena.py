@@ -97,7 +97,7 @@ MyCompile = torch.compile()
 #         raise ValueError("Unsupported dtype")
     
 @MyStatic
-def fp8_hybrod_matmul(a,b):
+def hybrid_matmul(a:torch.Tensor,b:torch.Tensor):
     if b.dtype == torch.float8_e4m3fn:
             #print('fp8')
             #print(f'xr shape = {xr.shape}')
@@ -105,17 +105,22 @@ def fp8_hybrod_matmul(a,b):
             S0=xg.shape[0]
             S1=xg.shape[1]
 
-            xg = torch.clamp(xg, min=-448.0, max=448.0)
+            #xg = torch.clamp(xg, min=-448.0, max=448.0)#
+            xg = xg.clamp_(min=-448.0, max=448.0)#
+
+            if not xg.is_contiguous():
+                xg=xg.contiguous()
 
             #print(f'xg max = {xg.abs().max()}')
             
             x = torch._scaled_mm(
-                xg.view(S0*S1,xg.shape[2]).to(torch.float8_e4m3fn).contiguous(),
-                b.contiguous(),
+                xg.view(S0*S1,xg.shape[2]).to(torch.float8_e4m3fn),
+                b.t(),
                 bias=None,
                 out_dtype=a.dtype,
                 scale_a=torch.tensor(1.0, device='cuda'),
-                scale_b=torch.tensor(1.0, device='cuda')
+                scale_b=torch.tensor(1.0, device='cuda'),
+                use_fast_accum = True
             )
             #x = x.view(S0, S1, -1) #output_weight.shape[-1]
             return x.view(S0, S1, -1)
