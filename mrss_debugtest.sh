@@ -4,14 +4,30 @@ curl http://127.0.0.1:9000/healthcheck
 #curl http://127.0.0.1:9000/loadmodel -X POST -H "Content-Type: application/json" -d '{"model_filename":"/home/client/Projects/RWKV-LM-RLHF/main/myfolder/converted/x060-upgraded.pth","model_viewname":"RWKV x070 7B-JPN Upgrade lr1e-4 e25","model_strategy":"fp16","adapter_filename":"/home/client/Projects/RWKV-LM-RLHF/main/myfolder/Outputs/x070-Convertv7-3/rwkv-3.pth","adapter_mode":"bone","endtoken":"\\n\\n\\x17"}'
 #curl http://127.0.0.1:9000/loadmodel -X POST -H "Content-Type: application/json" -d '{"model_filename":"models/rwkv-23-merged.pth","model_viewname":"RWKV x070 0.4B ORPO","model_strategy":"fp16","endtoken":"\\n\\n"}'
 
-#curl http://127.0.0.1:9000/loadmodel -X POST -H "Content-Type: application/json" -d '{"model_filename":"/home/client/Projects/RWKV-LM-RLHF/main/myfolder/models/rwkv-x070-2b9-world-v3-25%trained-20250103-ctx4k.pth","model_viewname":"RWKV x070 PinkBook","model_strategy":"fp16","adapter_filename":"/home/client/Projects/RWKV-LM-RLHF/rwkv-7.pth","adapter_mode":"bone","endtoken":"\\n\\n"}'
+curl http://127.0.0.1:9000/loadmodel -X POST -H "Content-Type: application/json" -d '{"model_filename":"/home/client/Projects/RWKV-LM-RLHF/main/myfolder/models/rwkv-x070-2b9-world-v3-82%trained-20250203-ctx4k.pth","model_viewname":"RWKV x070 LoRA REINFORCE e2","model_strategy":"fp8","adapter_filename":"/home/client/Projects/RWKV-LM-RLHF/main/myfolder/Outputs/ZeroCoT_qwq/rwkv-72.pth","adapter_mode":"lora","endtoken":"\\n\\n"}'
+
+
+#curl http://127.0.0.1:9000/loadmodel -X POST -H "Content-Type: application/json" -d '{"model_filename":"/home/client/Projects/RWKV-LM-RLHF/main/myfolder/models/RWKV-x070-World-0.4B-v2.9-20250107-ctx4096.pth","model_viewname":"RWKV x070","model_strategy":"fp16","adapter_filename":"/home/client/Projects/RWKV-LM-RLHF/main/myfolder/Outputs/x070-0b4-moe5/rwkv-65.pth","adapter_mode":"bone","endtoken":"\\n\\n\\x17"}'
+
+
+
+
 #curl http://127.0.0.1:9000/loadmodel -X POST -H "Content-Type: application/json" -d '{"model_filename":"/home/client/Projects/RWKV-LM-RLHF/main/myfolder/models/rwkv-x070-1b5-world-v3-60%trained-20250113-ctx4k.pth","model_viewname":"RWKV x070 1B5 Gen2","model_strategy":"fp16","adapter_filename":"/home/client/Projects/RWKV-LM-RLHF/main/myfolder/Outputs/x070-1b5-GeneralJPENCNV3/rwkv-2.pth","adapter_mode":"bone","endtoken":"\\n\\n\\x17"}'
-#curl http://127.0.0.1:9000/loadmodel -X POST -H "Content-Type: application/json" -d '{"model_filename":"/home/client/Projects/RWKV-LM-RLHF/main/myfolder/Outputs/rwkv-x070-2b9-cje-instruct-1.pth","model_viewname":"RWKV x070 2B9 CJE Instruct-1","model_strategy":"bf16","adapter_filename":"adapters/rwkv7-2b9-40p-gen3.pth","adapter_mode":"","endtoken":"\\n\\n\\x17"}'
+#curl http://127.0.0.1:9000/loadmodel -X POST -H "Content-Type: application/json" -d '{"model_filename":"/home/client/Projects/RWKV-LM-RLHF/main/myfolder/models/RWKV-x070-World-0.4B-v2.9-20250107-ctx4096.pth","model_viewname":"RWKV x070 0B4 MoE","model_strategy":"bf16","adapter_filename":"/home/client/Projects/RWKV-LM-RLHF/main/myfolder/Outputs/x070-0b4-moe2/rwkv-20.pth","adapter_mode":"bone","endtoken":"\\n\\n\\x17"}'
+#curl http://127.0.0.1:9000/loadmodel -X POST -H "Content-Type: application/json" -d '{"model_filename":"/home/client/Projects/RWKV-LM-RLHF/main/myfolder/models/x070-1b5-cje-23.pth","model_viewname":"RWKV x070 1B5 SimPO","model_strategy":"fp8","adapter_filename":"/home/client/Projects/RWKV-LM-RLHF/main/myfolder/Outputs/x0701B5SimPO2/rwkv-34.pth","adapter_mode":"bone","endtoken":"\\n\\n\\x17"}'
+
+#
+#curl http://127.0.0.1:9000/loadmodel -X POST -H "Content-Type: application/json" -d '{"model_filename":"m#","model_viewname":"RWKV-x070-1B5-CJE-e12.pth","model_strategy":"bf16","endtoken":"\\n\\n\\x17"}'
+#
+#curl http://127.0.0.1:9000/loadmodel -X POST -H "Content-Type: application/json" -d '{"model_filename":"models/RWKV-x070-1B5-CJE-e12.pth","model_viewname":"RWKV x070 1B5 CJE e12","model_strategy":"fp16","endtoken":"\\n\\n\\x17"}'
+
+
+#curl http://127.0.0.1:9000/loadmodel -X POST -H "Content-Type: application/json" -d '{"model_filename":"/home/client/Projects/RWKV-LM-RLHF/main/myfolder/models/RWKV-x070-World-0.4B-v2.9-20250107-ctx4096.pth","model_viewname":"RWKV x070 0B4 May","model_strategy":"fp8","adapter_filename":"/home/client/Projects/RWKV-LM-RLHF/main/myfolder/Outputs/x070-0b4-infctx/rwkv-0.pth","adapter_mode":"bone","endtoken":"\\n\\n\\x17"}'
 
 
 #curl http://127.0.0.1:9000/loadmodel -X POST -H "Content-Type: application/json" -d '{"model_filename":"/home/client/Projects/RWKV-LM-RLHF/main/myfolder/converted/x060-upgraded.pth","model_viewname":"RWKV x070 7B Inference Test Model","model_strategy":"fp8","adapter_filename":"/home/client/Projects/RWKV-LM-RLHF/main/myfolder/Outputs/x070-7b-cje/rwkv-14.pth","adapter_mode":"bone","endtoken":"\\n\\n\\x17"}'
 
-curl http://127.0.0.1:9000/loadmodel -X POST -H "Content-Type: application/json" -d '{"model_filename":"/home/client/Projects/RWKV-LM-RLHF/main/myfolder/converted/RWKV-x070-Jpn-14B-20240819-ctx4096-pruned.pth","model_viewname":"RWKV x070 12B Inference Test Model","model_strategy":"fp8","adapter_filename":"/home/client/Projects/RWKV-LM-RLHF/main/myfolder/Outputs/rwkv-8.pth","adapter_mode":"bone","endtoken":"\\n\\n\\x17"}'
+#curl http://127.0.0.1:9000/loadmodel -X POST -H "Content-Type: application/json" -d '{"model_filename":"/home/client/Projects/RWKV-LM-RLHF/main/myfolder/converted/RWKV-x070-Jpn-14B-20240819-ctx4096-pruned.pth","model_viewname":"RWKV x070 12B Inference Test Model","model_strategy":"fp8","adapter_filename":"/home/client/Projects/RWKV-LM-RLHF/main/myfolder/Outputs/rwkv-8.pth","adapter_mode":"bone","endtoken":"\\n\\n\\x17"}'
 
 
 
@@ -58,4 +74,5 @@ curl http://127.0.0.1:9000/loadmodel -X POST -H "Content-Type: application/json"
 
 #curl http://127.0.0.1:9000/mrss_set_gatingweight -X POST -H "Content-Type: application/json" -d '{"state_viewname":"MRSS Test","state_gatingweight":["0.01","0.1","0.9","0.01"],"default_temperature":"1.2", "default_top_p":"0.8"}'
 
-#curl http://127.0.0.1:9000/loadstatemodel -X POST -H "Content-Type: application/json" -d '{"state_filename":"/home/client/Projects/RWKV-LM-RLHF/main/myfolder/Outputs/Browser4-CoT/rwkv-22-state.pth","state_viewname":"State","default_temperature":"1.2", "default_top_p":"0.5"}'
+curl http://127.0.0.1:9000/loadstatemodel -X POST -H "Content-Type: application/json" -d '{"state_filename":"/home/client/Projects/RWKV-LM-RLHF/main/myfolder/Outputs/x0702B9SimPO-State-tuning3/rwkv-1-state.pth","state_viewname":"State","default_temperature":"1.0", "default_top_p":"0.3"}'
+#curl http://127.0.0.1:9000/mrss_loadstatemodel -X POST -H "Content-Type: application/json" -d '{"state_viewname":"May", "state_filenames":["/home/client/Projects/RWKV-LM-RLHF/main/myfolder/Outputs/x0702B9SimPO-State-tuning2/rwkv-9-state.pth"], "contain_originalstate":"True", "state_gatingweight":["0.6","0.4"],"default_temperature":"0.7", "default_top_p":"0.7"}'

@@ -115,40 +115,43 @@ class RWKV_x(nn.Module):
         self.ModeMode = 'standard'
         if adapter_model != '' and adapter_mode != '':
             print('Adapter LoadMode')
-            if 'lora' in adapter_mode or 'LoRA' in adapter_mode:
+            if 'lora' in adapter_mode or 'bone' in adapter_mode or 'hybrid' in adapter_mode:
                 print('LoRA Mode Lets Merge!')
-                self.ModeMode = 'lora'
+                self.ModeMode = adapter_mode
                 z_adapter = torch.load(adapter_model,map_location="cpu",mmap=True)
                 z_adapter_keys = list(z_adapter.keys())
                 for zkeys in z_adapter_keys:
                     z[zkeys] = z_adapter[zkeys]
 
-            elif 'bone' in adapter_mode or 'Bone' in adapter_mode:
-                print('Bone(Block Affine Transformation) Mode Lets Merge!')
-                self.ModeMode = 'bone'
-                z_adapter = torch.load(adapter_model,map_location="cpu",mmap=True)
-                z_adapter_keys = list(z_adapter.keys())
-                for zkeys in z_adapter_keys:
-                    z[zkeys] = z_adapter[zkeys]
-                print(f'adapter keys = {z_adapter_keys}')
-                #exit()
+            # elif 'bone' in adapter_mode or 'Bone' in adapter_mode:
+            #     print('Bone(Block Affine Transformation) Mode Lets Merge!')
+            #     self.ModeMode = 'bone'
+            #     z_adapter = torch.load(adapter_model,map_location="cpu",mmap=True)
+            #     z_adapter_keys = list(z_adapter.keys())
+            #     for zkeys in z_adapter_keys:
+            #         z[zkeys] = z_adapter[zkeys]
+            #     print(f'adapter keys = {z_adapter_keys}')
+            #     #exit()
 
         def Attach_Adapter(keyname,weight,adapter,mode,scaling=2.0,device='cuda'): #from JL-er lora merge inspired
             
-            print(f'AttachAdapter = {keyname}')
+            #print(f'AttachAdapter = {keyname}')
             if keyname.endswith('.weight') or keyname.endswith('head'):
                 adapterkeys = list(adapter.keys())
                 #print(adapterkeys)
-#                for k in adapterkeys:
-                if mode == 'lora':
-                    print(f'scaling = {scaling}')
+                #exit()
+
+                if mode != '':
+                    #print(f'scaling = {scaling}')
                     prefix = keyname[:-len('.weight')]
                     lora_A = prefix + '.lora_A'
                     lora_B = prefix + '.lora_B'
+                    gbmm = prefix + '.bone'
                     if lora_A in adapterkeys:
                         w=adapter
                         assert lora_B in adapterkeys
                         print(f'lora merging {lora_A} and {lora_B} into {k}')
+                        #exit()
                         
                         assert w[lora_B].shape[1] == w[lora_A].shape[0]
 
@@ -160,16 +163,8 @@ class RWKV_x(nn.Module):
                         del w[lora_A]
                         del w[lora_B]
                         return weight
-                    for key in adapterkeys:
-                        if key == keyname:
-                            weight = adapter[key].to(dtype=torch.bfloat16,device=device)
-                            print(f'key = {key} is swapped from Adapter')
-                    return weight
-                elif mode == 'bone':
-                    prefix = keyname[:-len('.weight')]
-                    gbmm = prefix + '.bone'
-                    print(f'gbmm target = {gbmm}')
-                    if gbmm in adapterkeys:
+                    #print(f'gbmm target = {gbmm}')
+                    if gbmm in adapterkeys :
                         w=adapter
                         print(f'bone merging {gbmm} into {k}')
                         w[gbmm] = w[gbmm].to(device=device)
@@ -179,12 +174,31 @@ class RWKV_x(nn.Module):
                         print(weight)
                         del w[gbmm]
                         return weight
-
                     for key in adapterkeys:
                         if key == keyname:
                             weight = adapter[key].to(dtype=torch.bfloat16,device=device)
                             print(f'key = {key} is swapped from Adapter')
                     return weight
+                # elif mode == 'bone':
+                #     prefix = keyname[:-len('.weight')]
+                #     gbmm = prefix + '.bone'
+                #     print(f'gbmm target = {gbmm}')
+                #     if gbmm in adapterkeys :
+                #         w=adapter
+                #         print(f'bone merging {gbmm} into {k}')
+                #         w[gbmm] = w[gbmm].to(device=device)
+                #         b,r,_ = w[gbmm].shape
+                #         bone = rearrange(weight, '(a r1) (b r2) -> a b r1 r2', r1 = r, r2 = r)@w[gbmm]+w[gbmm]
+                #         weight += rearrange(bone, 'a b r1 r2 ->(a r1) (b r2) ')
+                #         print(weight)
+                #         del w[gbmm]
+                #         return weight
+
+                #     for key in adapterkeys:
+                #         if key == keyname:
+                #             weight = adapter[key].to(dtype=torch.bfloat16,device=device)
+                #             print(f'key = {key} is swapped from Adapter')
+                #     return weight
                 else:
                     return weight
             else:
@@ -204,19 +218,31 @@ class RWKV_x(nn.Module):
 
 
         RWKVMode = 6 #default RWKV 6
-
+        self.MoE = 0
         for key in keys:
-            if 'blocks.0.att.r_k' in key:
+            if 'blocks.0.att.r_k' in key and RWKVMode != 7:
                 print("RWKV x070 Mode :) with Native Pytorch Implementation")
                 RWKVMode = 7
-                break
+                #break
+            elif 'router' in key and self.MoE != 1:
+                self.MoE = 1
+                print('Shared Mixture of Experts Mode!')
 
+        
         if z_adapter_keys is not None:
-            for key in z_adapter_keys:
-                if 'blocks.0.att.r_k' in key:
+            for key in z_adapter_keys :
+                if 'blocks.0.att.r_k' in key and RWKVMode != 7:
                     print("RWKV x070 Mode :) with Native Pytorch Implementation")
                     RWKVMode = 7
-                    break
+                elif 'router' in key and self.MoE != 1:
+                    self.MoE = 1
+                    print('Shared Mixture of Experts Mode!')
+                    #exit()
+
+
+
+        
+        
 
         if RWKVMode == 6:
             print('RWKV x060 Mode :) with Flash-Linear-Attention')
@@ -265,12 +291,91 @@ class RWKV_x(nn.Module):
 
         
         self.n_layer = n_layer
-        
-        
 
         keys = list(z.keys())
 
         self.requires_grad_(False)
+
+
+        if self.MoE:
+            print('will get MoE Configuration')
+
+            self.MoELayerMode = [] #LoRA:0 Bone:1
+
+            for i in range(self.n_layer):
+                bonetext = f"blocks.{i}.ffn.expert_0.key.bone_expert_0"
+                loratext = f"blocks.{i}.ffn.expert_0.key.lora_A_expert_0"
+                Found = False
+                for key in keys:
+                    if bonetext in key:
+                        self.MoELayerMode.append(1)
+                        Found=True
+                        break
+                    elif loratext in key:
+                        self.MoELayerMode.append(0)
+                        Found=True
+                        break
+                if Found == False:
+                    assert "MoE FFN Layer is incorrect. please check file."
+            print(self.MoELayerMode)
+            print(f'total MoE Layers = {len(self.MoELayerMode)}')
+
+            self.MoEExperts = 0
+
+            #moe_info
+            for i in range(128):
+                Found = False
+                for key in keys:
+                    if f'blocks.0.ffn.expert_{i}' in key:
+                        self.MoEExperts += 1
+                        Found = True
+                        break
+                if Found == False:
+                    break
+
+
+            #Search ActiveMoE
+            self.ActiveMoEs = 0
+            Found = False
+            for key in keys:
+                if f'moe_info' in key:
+                    self.ActiveMoEs = int(z[key][1])
+                    Found = True
+                    break
+            
+            print(f'MoE Experts Count : {self.MoEExperts}')
+            print(f'MoE Active Count : {self.ActiveMoEs}')
+            #exit()
+
+
+
+
+
+
+
+
+            #exit()
+
+
+
+
+
+        
+                    
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
         QuantList = ['.receptance.weight','.key.weight','.value.weight','.gate.weight','.output.weight','head.weight']
         QuantListFP8 = ['att.receptance.weight','att.key.weight','att.value.weight','att.gate.weight','att.output.weight','ffn.key.weight','ffn.receptance.weight','ffn.value.weight','head.weight'] #, ,
@@ -464,7 +569,7 @@ class RWKV_x(nn.Module):
                 elif self.RWKVMode == 7:
                     if 'key.weight' in k or 'value.weight' in k or 'receptance.weight' in k or 'output.weight' in k or 'head.weight' in k:
                         print(f'target = {k} shape = {z[k].shape}')
-                        z[k] = z[k].t()
+                        z[k] = z[k]#.t()
                     if k.endswith('att.r_k'): z[k] = z[k].flatten()
 
                     z[k] = z[k].squeeze().to(dtype=self.base_precision)
@@ -483,7 +588,7 @@ class RWKV_x(nn.Module):
         keys = list(z.keys())
         for key in keys:
             print(f'{key} {z[key].shape}')
-            if '.bone' in key or '.lora' in key:
+            if ('.bone' in key or '.lora' in key) and 'expert' not in key:
                 z[key] = None
                 print(f'{key} deleted')
 
@@ -791,9 +896,13 @@ class RWKV_x(nn.Module):
             model_current_statetuned[i * 3 + 0] = torch.zeros(
                 self.n_embd, dtype=atype, requires_grad=False, device=dev
             ).contiguous()
+
+            self.RWKVMode
+            tempstate = state_raw[f"blocks.{i}.att.time_state"]
+            #if self.RWKVMode == 6:
+            tempstate=tempstate.transpose(1, 2)
             model_current_statetuned[i * 3 + 1] = (
-                state_raw[f"blocks.{i}.att.time_state"]
-                .transpose(1, 2)
+                tempstate
                 .to(dtype=torch.float, device=dev)
                 .requires_grad_(False)
                 .contiguous()
@@ -807,7 +916,7 @@ class RWKV_x(nn.Module):
                                  dtype=torch.bfloat16)
         
         for i in range(self.n_layer):
-            wkv_states[i] = model_current_statetuned[i*3 + 1]
+            wkv_states[i] = model_current_statetuned[i*3 + 1]#.permute(0,2,1)
 
         return wkv_states#.to(dtype=torch.float16)
     
@@ -919,25 +1028,53 @@ class RWKV_x(nn.Module):
 
 
 
-
-
-
-
-
-
-
-                # xx, time_mix_shift, time_mix_state, v_first = RWKV_7.x070_TimeMix_fla_combined(i, self.n_head, self.head_size, xx, time_mix_shift, v_first, time_mix_state,
-                #     z[att+'x_r'], z[att+'x_w'], z[att+'x_k'], z[att+'x_v'], z[att+'x_a'], z[att+'x_g'],
-                #     z[att+'w0'], z[att+'w1'], z[att+'w2'], z[att+'a0'], z[att+'a1'], z[att+'a2'], z[att+'v0'], z[att+'v1'], z[att+'v2'],
-                #     z[att+'g1'], z[att+'g2'], z[att+'k_k'], z[att+'k_a'], z[att+'r_k'],
-                #     z[att+'receptance.weight'], z[att+'key.weight'], z[att+'value.weight'], z[att+'output.weight'],
-                #     z[att+'ln_x.weight'], z[att+'ln_x.bias'])
-
                 x = x + xx
 
                 xx = F.layer_norm(x, (self.n_embd,), weight=z[bbb+'ln2.weight'], bias=z[bbb+'ln2.bias'])
 
-                xx, channel_mix_state = RWKV_7.x070_ChannelMix_seq(xx, channel_mix_state, z[ffn+'x_k'], z[ffn+'key.weight'], z[ffn+'value.weight'])
+
+                if self.MoE == 1:
+                    ExpertsCount = self.MoEExperts
+                    Experts_K = []
+                    Experts_V = []
+                    keys = list(z.keys())
+
+                    bonetext = ffn + "expert_0.key.bone_expert_0"
+                    #loratext = ffn + "expert_0.key.lora_A_expert_0"
+                    expertmode = self.MoELayerMode[i]
+                    # for key in keys:
+                    #     if bonetext in key:
+                    #         #print(f'found bone mode in {key}' )
+                    #         expertmode = 1
+                    #         break
+
+                    #print('MoE TestMode')
+                    for a in range(ExpertsCount):
+                        Parts = []
+                        if expertmode ==1:
+                            Parts.append(z[ffn+f'expert_{a}.key.bone_expert_0'])
+                            Parts.append(torch.tensor(0))
+                        else:
+                            Parts.append(z[ffn+f'expert_{a}.key.lora_A_expert_0'])
+                            Parts.append(z[ffn+f'expert_{a}.key.lora_B_expert_0'])
+                        Experts_K.append(Parts)
+
+                        Parts2 = []
+                        if expertmode == 1:
+                            Parts2.append(z[ffn+f'expert_{a}.value.bone_expert_0'])
+                            Parts2.append(torch.tensor(0))
+                        else:
+                            Parts2.append(z[ffn+f'expert_{a}.value.lora_A_expert_0'])
+                            Parts2.append(z[ffn+f'expert_{a}.value.lora_B_expert_0'])
+                        Experts_V.append(Parts2)
+                        
+
+                    
+                    xx, channel_mix_state = RWKV_7.x070_ChannelMix_MoE(xx,channel_mix_state,z[ffn+'x_k'],z[ffn+'router.linear.weight'],z[ffn+'key.weight'],z[ffn+'value.weight'],
+                                                                           Experts_K,Experts_V,MoETopk=self.ActiveMoEs,MoEMode=expertmode,MoECount=self.MoEExperts                                                                           
+                                                                           )
+                else:
+                    xx, channel_mix_state = RWKV_7.x070_ChannelMix_seq(xx, channel_mix_state, z[ffn+'x_k'], z[ffn+'key.weight'], z[ffn+'value.weight'])
 
                 x = x + xx
 

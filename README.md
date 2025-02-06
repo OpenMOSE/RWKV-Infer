@@ -20,6 +20,11 @@ By combining multiple states, MRSS integrates knowledge from different "experts,
 
    - State reusability: Enables efficient creation of new models through state recombination.
 
+- **Mixture of LoRA Experts**:
+  Combines multiple LoRA (Low-Rank Adaptation) modules as "experts" that specialize in different tasks or domains 
+   - perform inference with the MoLE model trained on RWKV-LM-RLHF.
+   - This is a preliminary verification towards the upcoming MoE.
+
 - **Hot swapping of adapter models**: 
   - Bone(Block Affine Transformation) Adapter
   - LoRA Adapter

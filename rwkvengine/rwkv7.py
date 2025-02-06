@@ -14,7 +14,7 @@ import time
 import bitsandbytes as bnb
 import functools
 from einops import rearrange
-
+from torch.nn import functional as F
 
 #from rwkvengine.misc import PIPELINE
 from rwkvengine.misc import PIPELINE, TimeMixState, ChannelMixState,BlockState,BlockStateList
@@ -35,10 +35,94 @@ torch._C._jit_set_autocast_mode(False)
 
 MyStatic = torch.jit.script
 
+@MyStatic
+def x070_ChannelMix_Experts_LoRA(x,K_ref,V_ref,K_lora_a,K_lora_b,V_lora_a,V_lora_b,scaling:float=2.0):
+    #print('Channel Mix MoE')
+    k = torch.relu(hybrid_matmul(x,K_ref) + scaling * F.linear(F.linear(x, K_lora_a), K_lora_b) ) ** 2
+    v = hybrid_matmul(k,V_ref) + scaling * F.linear(F.linear(k, V_lora_a), V_lora_b)
+    return v
+
+def x070_ChannelMix_Experts_Bone2(x,K_ref,V_ref,K_bone,V_bone):
+    #print('Channel Mix MoE')
+    temporalweight = K_ref.to(dtype=x.dtype)#.t()
+    # print(f'kbone shape = {K_bone.shape}')
+    # print(f'vbone shape = {V_bone.shape}')
+    # print(f'temporalweight shape = {temporalweight.shape}')
+    w = rearrange(temporalweight, '(a r1) (b r2) -> a b r1 r2', r1 = K_bone.shape[1], r2 = K_bone.shape[1]) @ K_bone + K_bone
+    w = rearrange(w, 'a b r1 r2 ->(a r1) (b r2) ')
+    k = torch.relu(x @ (w + temporalweight).t()) ** 2
+
+    #del temporalweight
+    #del w
+
+    temporalweight = V_ref.to(dtype=x.dtype)
+    w = rearrange(temporalweight, '(a r1) (b r2) -> a b r1 r2', r1 = V_bone.shape[1], r2 = V_bone.shape[1]) @ V_bone + V_bone
+    w = rearrange(w, 'a b r1 r2 ->(a r1) (b r2) ')
+
+    v = k @ (w + temporalweight).t()
+
+    return v
+@MyStatic
+def x070_ChannelMix_Experts_Bone(x,K_ref,V_ref,K_bone,V_bone):
+    temporalweight = K_ref.to(dtype=x.dtype)
+    # w = rearrange(temporalweight, '(a r1) (b r2) -> a b r1 r2', r1 = K_bone.shape[1], r2 = K_bone.shape[1]) @ K_bone + K_bone
+    # w = rearrange(w, 'a b r1 r2 ->(a r1) (b r2) ')
+    # k = torch.relu(x @ (w + temporalweight).t()) ** 2
+
+
+
+
+    # weight の形状は (a*r, b*r) を想定
+    r = K_bone.shape[1]
+    a = temporalweight.size(0) // r
+    b = temporalweight.size(1) // r
+
+    # 1. (a*r, b*r) -> (a, r, b, r)
+    # 2. (a, r, b, r) -> (a, b, r, r) に permute で変形（einops でいう 'a b r1 r2' と同等）
+    w_4d = temporalweight.view(a, r, b, r).permute(0, 2, 1, 3)
+    # w_4d の形状: [a, b, r, r]
+
+    # 3. バッチ行列積 @ bone + bone （最後の2次元が (r, r) のためブロードキャスト加算が可能）
+    w_4d = torch.matmul(w_4d, K_bone) + K_bone  # shape: [a, b, r, r]
+
+    # 4. 再び元の形状 (a*r, b*r) に戻す (permuteを元に戻してから view)
+    w_delta = w_4d.permute(0, 2, 1, 3).reshape(a*r, b*r)
+
+    # 5. 最後に (weight + 変形した w_delta) を使って F.linear
+    k = torch.relu(x @ (w_delta + temporalweight).t()) ** 2
+
+
+    # temporalweight = V_ref.to(dtype=x.dtype)
+    # w = rearrange(temporalweight, '(a r1) (b r2) -> a b r1 r2', r1 = V_bone.shape[1], r2 = V_bone.shape[1]) @ V_bone + V_bone
+    # w = rearrange(w, 'a b r1 r2 ->(a r1) (b r2) ')
+
+    # v = k @ (w + temporalweight).t()
+    temporalweight = V_ref.to(dtype=x.dtype)
+    r = V_bone.shape[1]
+    a = temporalweight.size(0) // r
+    b = temporalweight.size(1) // r
+
+    # 1. (a*r, b*r) -> (a, r, b, r)
+    # 2. (a, r, b, r) -> (a, b, r, r) に permute で変形（einops でいう 'a b r1 r2' と同等）
+    w_4d = temporalweight.view(a, r, b, r).permute(0, 2, 1, 3)
+    # w_4d の形状: [a, b, r, r]
+
+    # 3. バッチ行列積 @ bone + bone （最後の2次元が (r, r) のためブロードキャスト加算が可能）
+    w_4d = torch.matmul(w_4d, V_bone) + V_bone  # shape: [a, b, r, r]
+
+    # 4. 再び元の形状 (a*r, b*r) に戻す (permuteを元に戻してから view)
+    w_delta = w_4d.permute(0, 2, 1, 3).reshape(a*r, b*r)
+
+    v = k @ (w_delta + temporalweight).t()
+
+    return v
+
+
 class RWKV_7(nn.Module):
     # x070 Multi batch Implementation
     # modified from RWKV-LM v7 demo_fast code @ BlinkDL
-    # Ongoing cuda custom kernel.(if we can avoid atomicadd(its difficult solve on Rocm lol.))
+    # Now fully supported flash-linear-attention
+    # Unofficial MoE Support 
 
     @MyStatic
     def x070_TimeMix_one(layer_id: int, H:int, N:int, x, x_prev, v_first, state, x_r, x_w, x_k, x_v, x_a, x_g, w0, w1, w2, a0, a1, a2, v0, v1, v2, g1, g2, k_k, k_a, r_k, R_, K_, V_, O_, ln_w, ln_b):
@@ -395,12 +479,7 @@ class RWKV_7(nn.Module):
         return (xx * g) @ O_, x[:,-1], state, v_first
         #return (xx * g) @ O_, x[:,-1], state.float(), v_first
     
-    @MyStatic
-    def x070_ChannelMix_one(x, x_prev, x_k, K_, V_):
-        xx = torch.cat([x_prev.unsqueeze(1), x[:, :-1, :]], dim=1) - x 
-        k = x + xx * x_k
-        k = torch.relu(k @ K_) ** 2
-        return k @ V_, x
+
 
     @MyStatic
     def x070_ChannelMix_seq(x, x_prev, x_k, K_, V_):
@@ -412,3 +491,87 @@ class RWKV_7(nn.Module):
         #hybrid_matmul
         #return k @ V_, x[:,-1,:]
         return hybrid_matmul(k , V_), x[:,-1,:]
+    
+
+
+
+
+    @torch.compile
+    def x070_ChannelMix_MoE(
+        x, x_prev, x_k,
+        Router_ref,
+        K_ref, V_ref,
+        Experts_K: List[List[torch.Tensor]],
+        Experts_V: List[List[torch.Tensor]],
+        MoETopk: int = 2,
+        MoECount: int = 4,
+        MoEMode: int = 0
+    ):
+
+        xx = torch.cat([x_prev.unsqueeze(1), x[:, :-1, :]], dim=1) - x
+        hidden_with_tokenshift = x + xx * x_k
+
+        # (B, S, n_embd) → (B*S, n_embd)
+        flat_hidden = hidden_with_tokenshift.reshape(-1, hidden_with_tokenshift.size(-1))
+        B = flat_hidden.size(0)
+
+
+        flat_value = torch.zeros_like(flat_hidden)
+
+
+        if MoEMode == 0:
+            out_0 = x070_ChannelMix_Experts_LoRA(
+                flat_hidden,
+                K_ref, V_ref,
+                Experts_K[0][0], Experts_K[0][1],
+                Experts_V[0][0], Experts_V[0][1]
+            )
+        else:
+            # 別の MoEMode 実装？
+            raise NotImplementedError()
+
+        flat_value += out_0
+
+        router_scores = F.linear(flat_hidden, Router_ref)  # weight = Router_ref
+
+        # topk
+        AdaptiveActiveExperts = MoETopk - 1  # 例: 2 なら 1
+        topk_values, topk_experts = torch.topk(router_scores, k=AdaptiveActiveExperts, dim=-1)
+        gating = F.softmax(topk_values, dim=-1)  # shape [B, AdaptiveActiveExperts]
+
+
+        topk_experts_flat = topk_experts.reshape(-1)
+        gating_flat = gating.reshape(-1)
+
+        source_indices = torch.arange(B, device=flat_hidden.device).unsqueeze(1)
+        source_indices = source_indices.expand(B, AdaptiveActiveExperts).reshape(-1)
+
+        for e in range(1, MoECount):
+            mask_e = (topk_experts_flat == (e - 0))  # 例: 1番目expertを topk_experts_flat==1
+
+            if not mask_e.any():
+                continue
+
+            indices_e = mask_e.nonzero(as_tuple=True)[0]
+            input_e = flat_hidden[source_indices[indices_e]]
+            # forward
+            if MoEMode == 0:
+                out_e = x070_ChannelMix_Experts_LoRA(
+                    input_e,
+                    K_ref, V_ref,
+                    Experts_K[e][0], Experts_K[e][1],
+                    Experts_V[e][0], Experts_V[e][1]
+                )
+            else:
+                raise NotImplementedError()
+
+            out_e = out_e * gating_flat[indices_e].unsqueeze(-1)
+            flat_value.index_add_(0, source_indices[indices_e], out_e)
+
+        # (B*S, n_embd) → (B, S, n_embd) に戻す
+        kv = flat_value.view(x.size(0), x.size(1), x.size(2))
+        return kv,  x[:,-1,:]
+
+ 
+    
+ 

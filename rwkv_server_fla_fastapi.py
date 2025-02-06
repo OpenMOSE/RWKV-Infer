@@ -30,13 +30,13 @@ parser.add_argument("--debug", default=False, type=bool)
 parser.add_argument("--workers", default=64, type=int)
 parser.add_argument("--mrssmax", default=4, type=int) #If workers 8, mrssmax 4, maximum batch inference = 8 * (4 + 1) = 40
 
-parser.add_argument("--dynamic_state_cache_size", default=512, type=int)  # for 14B need 16GB of PC RAM
-parser.add_argument("--dynamic_state_cache_store", default='cpu', type=str) #if gpu need more vram for storing state 
+parser.add_argument("--dynamic_state_cache_size", default=4, type=int)  # for 14B need 16GB of PC RAM
+parser.add_argument("--dynamic_state_cache_store", default='gpu', type=str) #if gpu need more vram for storing state 
 
 parser.add_argument("--admin_key1", default='123874139713915425423541', type=str) 
 parser.add_argument("--admin_key2", default='d46871245412541544408014', type=str) 
 
-parser.add_argument("--fully_fusedrecurrent", default=0, type=int) 
+parser.add_argument("--fully_fusedrecurrent", default=1, type=int) 
 
 args = parser.parse_args()
 engine1 = LLMWorker(max_batch_size = args.workers)
