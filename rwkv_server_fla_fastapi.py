@@ -26,7 +26,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 parser = ArgumentParser()
 parser.add_argument("--localhost", default="0.0.0.0", type=str) 
 parser.add_argument("--port", default=9000, type=int) 
-parser.add_argument("--debug", default=False, type=bool) 
+parser.add_argument("--debug", default=True, type=bool) 
 parser.add_argument("--workers", default=64, type=int)
 parser.add_argument("--mrssmax", default=4, type=int) #If workers 8, mrssmax 4, maximum batch inference = 8 * (4 + 1) = 40
 
@@ -545,9 +545,9 @@ async def rwkv_completions(request: Request):
     input_prompt_stm = ""
     for element in messages[:-minimum_gen_count]:
         if element['role'] == 'user':
-            input_prompt = input_prompt + f'{user_name}:{element["content"]}'
+            input_prompt = input_prompt + f'{user_name}: {element["content"]}'
             input_prompt = re.sub(r'\n{3,}', Endtoken, input_prompt)
-            input_prompt_stm = input_prompt_stm + f'{user_name}:{element["content"]}'
+            input_prompt_stm = input_prompt_stm + f'{user_name}: {element["content"]}'
             input_prompt_stm = re.sub(r'\n{3,}', Endtoken, input_prompt_stm)
             if not input_prompt_stm.endswith(Endtoken):
                 input_prompt_stm += Endtoken
@@ -563,7 +563,7 @@ async def rwkv_completions(request: Request):
             if not input_prompt.endswith(Endtoken):
                 input_prompt += Endtoken
         elif element['role'] == 'system':
-            input_prompt = input_prompt + f'{system_name}:{element["content"]}'
+            input_prompt = input_prompt + f'{system_name}: {element["content"]}'
             input_prompt = re.sub(r'\n{3,}', Endtoken, input_prompt)
             input_prompt_stm = input_prompt_stm + f'{system_name}:{element["content"]}'
             input_prompt_stm = re.sub(r'\n{3,}', Endtoken, input_prompt_stm)
@@ -572,7 +572,7 @@ async def rwkv_completions(request: Request):
             if not input_prompt.endswith(Endtoken):
                 input_prompt += Endtoken
         elif element['role'] == 'rag':
-            input_prompt = input_prompt + f'{system_name}:{element["content"]}'
+            input_prompt = input_prompt + f'{system_name}: {element["content"]}'
             input_prompt = re.sub(r'\n{3,}', Endtoken, input_prompt)
 
             if delete_ragprompt == False:
@@ -597,11 +597,11 @@ async def rwkv_completions(request: Request):
     last_two_elements = messages[-minimum_gen_count:]
     for element in last_two_elements:
         if element['role'] == 'user':
-            input_prompt = input_prompt + f'{user_name}:{element["content"]}'
+            input_prompt = input_prompt + f'{user_name}: {element["content"]}'
             input_prompt = re.sub(r'\n{3,}', Endtoken, input_prompt)
             if not input_prompt.endswith(Endtoken):
                     input_prompt += Endtoken
-            input_prompt_stm = input_prompt_stm + f'{user_name}:{element["content"]}'
+            input_prompt_stm = input_prompt_stm + f'{user_name}: {element["content"]}'
             input_prompt_stm = re.sub(r'\n{3,}', Endtoken, input_prompt_stm)
             if not input_prompt_stm.endswith(Endtoken):
                 input_prompt_stm += Endtoken
@@ -615,7 +615,7 @@ async def rwkv_completions(request: Request):
             if not input_prompt_stm.endswith(Endtoken):
                 input_prompt_stm += Endtoken
         elif element['role'] == 'system':
-            input_prompt = input_prompt + f'{system_name}:{element["content"]}'
+            input_prompt = input_prompt + f'{system_name}: {element["content"]}'
             input_prompt = re.sub(r'\n{3,}', Endtoken, input_prompt)
             if not input_prompt.endswith(Endtoken):
                     input_prompt += Endtoken
@@ -625,7 +625,7 @@ async def rwkv_completions(request: Request):
                 input_prompt_stm += Endtoken
 
         elif element['role'] == 'rag':
-            input_prompt = input_prompt + f'{system_name}:{element["content"]}'
+            input_prompt = input_prompt + f'{system_name}: {element["content"]}'
             input_prompt = re.sub(r'\n{3,}', Endtoken, input_prompt)
 
             if delete_ragprompt == False:
@@ -771,6 +771,7 @@ async def rwkv_completions(request: Request):
         totaltext = ''
         wkv_state = None
         shift_state = None
+        print(f'QueryDatas = {QueryDatas}')
         try:
             async for response_chunk, d1, d2 in engine1.FLAGenerate(QueryDatas):
                     if d1 is not None:

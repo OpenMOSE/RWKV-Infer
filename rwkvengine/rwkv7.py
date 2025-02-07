@@ -497,7 +497,7 @@ class RWKV_7(nn.Module):
 
 
     @torch.compile
-    def x070_ChannelMix_MoE(
+    def x070_ChannelMix_MoE_2(
         x, x_prev, x_k,
         Router_ref,
         K_ref, V_ref,
@@ -571,6 +571,105 @@ class RWKV_7(nn.Module):
         # (B*S, n_embd) → (B, S, n_embd) に戻す
         kv = flat_value.view(x.size(0), x.size(1), x.size(2))
         return kv,  x[:,-1,:]
+    
+
+    @torch.compile
+    def x070_ChannelMix_MoE(
+        x, x_prev, x_k,
+        Router_ref,
+        K_ref, V_ref,
+        Experts_K: List[List[torch.Tensor]],
+        Experts_V: List[List[torch.Tensor]],
+        MoETopk: int = 2,
+        MoECount: int = 4,
+        MoEMode: int = 0
+    ):
+        """
+        推論用 x070_ChannelMix_MoE 関数（学習時と同じ処理を再現）
+        
+        Args:
+            x: Tensor of shape (B, S, n_embd)
+            x_prev: Tensor of shape (B, S, n_embd)
+            x_k: Tensor of shape (1, 1, n_embd)（token shift 用のパラメータ）
+            Router_ref: ルーター用の重みテンソル（F.linear によるスコア計算に使用）
+            K_ref, V_ref: 各 Expert のベースとなる重み（LoRA での変換に使用）
+            Experts_K: 各 Expert 用の K 関連パラメータのリスト。Experts_K[e] は Expert e 用の [W_A, W_B] など。
+            Experts_V: 各 Expert 用の V 関連パラメータのリスト。
+            MoETopk: トークンごとに選択する Expert の総数（例: 2 なら、expert0 ともう1つを選択）
+            MoECount: Expert の総数（例: 4）
+            MoEMode: モード選択（ここでは 0 のみ実装）
+            
+        Returns:
+            kv: 出力テンソル (B, S, n_embd)
+            x[:, -1, :]: x の最終トークン（下位層への情報伝達などに利用）
+        """
+        # 1. Token Shift 処理
+        # x_prev の先頭に1次元追加し、x のシフト版を作成（x_prev と x のずれ分を計算）
+        xx = torch.cat([x_prev.unsqueeze(1), x[:, :-1, :]], dim=1) - x
+        hidden_with_tokenshift = x + xx * x_k  # (B, S, n_embd)
+        
+        # (B, S, n_embd) -> (B*S, n_embd)
+        flat_hidden = hidden_with_tokenshift.reshape(-1, hidden_with_tokenshift.size(-1))
+        B_tokens = flat_hidden.size(0)  # 総トークン数
+
+        # 2. ルーターによる各 Expert のスコア計算
+        # shared_expert の場合、expert0 は常に計算するので、expert0 のスコアは 0 として付加する
+        if MoEMode == 0:
+            # experts 1～MoECount-1 のルーター出力を計算（shape: [B_tokens, MoECount-1]）
+            router_scores_shared = F.linear(flat_hidden, Router_ref)
+            # expert0 のスコアは 0（shape: [B_tokens, 1]）
+            expert0_score = torch.zeros(B_tokens, 1, device=flat_hidden.device, dtype=router_scores_shared.dtype)
+            # 全 Expert のスコアを連結（shape: [B_tokens, MoECount]）
+            router_scores_all = torch.cat([expert0_score, router_scores_shared], dim=-1)
+        else:
+            raise NotImplementedError("MoEMode==0 のみ実装しています。")
+        
+        # 3. トークンごとに top-k の Expert を選び、正規化した gating 重みを算出
+        if MoETopk < MoECount:
+            # 各トークンについて、上位 MoETopk のスコアとそのインデックスを取得
+            topk_values, topk_indices = torch.topk(router_scores_all, k=MoETopk, dim=-1)  # shape: (B_tokens, MoETopk)
+            gating_active = F.softmax(topk_values, dim=-1)  # 各トークンにおける選択された Expert の重み（和は1）
+            # 全 Expert 用の gating テンソルを作成（初期値0）
+            gating_full = torch.zeros_like(router_scores_all)
+            # topk_indices に対応する位置に gating_active の値を散らばせる
+            gating_full.scatter_(1, topk_indices, gating_active)
+        else:
+            # MoETopk == MoECount の場合、全 Expert に対して softmax を適用
+            gating_full = F.softmax(router_scores_all, dim=-1)
+            topk_indices = torch.arange(MoECount, device=flat_hidden.device).unsqueeze(0).expand(B_tokens, MoECount)
+        
+        # 4. 各 Expert の出力を、対応する gating 重みで加重平均する
+        flat_value = torch.zeros_like(flat_hidden)
+        for e in range(MoECount):
+            # 各トークンについて、top-k 選択された Expert インデックスが e である箇所を抽出
+            mask = (topk_indices == e)  # shape: (B_tokens, MoETopk)
+            if mask.sum() == 0:
+                continue
+            # mask==True となる各要素について、flat_hidden 内のトークン番号と topk 内の位置を取得
+            token_info = torch.nonzero(mask, as_tuple=False)  # shape: (N, 2)；各行 [token_index, topk_position]
+            tokens = token_info[:, 0]  # flat_hidden のインデックス
+            # gating 重みは gating_full から取得（各トークンについて該当 Expert の重み）
+            gating_weights = gating_full[tokens, e]  # shape: (N,)
+            
+            # 対象トークンに対し、Expert e の forward を実行
+            if MoEMode == 0:
+                out_e = x070_ChannelMix_Experts_LoRA(
+                    flat_hidden[tokens],
+                    K_ref, V_ref,
+                    Experts_K[e][0], Experts_K[e][1],
+                    Experts_V[e][0], Experts_V[e][1]
+                )
+            else:
+                raise NotImplementedError("MoEMode==0 のみ実装しています。")
+            # 各出力に gating 重みを乗算
+            out_e = out_e * gating_weights.unsqueeze(-1)
+            # 結果を flat_value に index_add_ で加算
+            flat_value.index_add_(0, tokens, out_e)
+        
+        # 5. (B*S, n_embd) を (B, S, n_embd) に変形して出力
+        kv = flat_value.view(x.size(0), x.size(1), x.size(2))
+        
+        return kv, x[:, -1, :]
 
  
     

@@ -4,9 +4,12 @@ curl http://127.0.0.1:9000/healthcheck
 #curl http://127.0.0.1:9000/loadmodel -X POST -H "Content-Type: application/json" -d '{"model_filename":"/home/client/Projects/RWKV-LM-RLHF/main/myfolder/converted/x060-upgraded.pth","model_viewname":"RWKV x070 7B-JPN Upgrade lr1e-4 e25","model_strategy":"fp16","adapter_filename":"/home/client/Projects/RWKV-LM-RLHF/main/myfolder/Outputs/x070-Convertv7-3/rwkv-3.pth","adapter_mode":"bone","endtoken":"\\n\\n\\x17"}'
 #curl http://127.0.0.1:9000/loadmodel -X POST -H "Content-Type: application/json" -d '{"model_filename":"models/rwkv-23-merged.pth","model_viewname":"RWKV x070 0.4B ORPO","model_strategy":"fp16","endtoken":"\\n\\n"}'
 
-curl http://127.0.0.1:9000/loadmodel -X POST -H "Content-Type: application/json" -d '{"model_filename":"/home/client/Projects/RWKV-LM-RLHF/main/myfolder/models/rwkv-x070-2b9-world-v3-82%trained-20250203-ctx4k.pth","model_viewname":"RWKV x070 LoRA REINFORCE e2","model_strategy":"fp8","adapter_filename":"/home/client/Projects/RWKV-LM-RLHF/main/myfolder/Outputs/ZeroCoT_qwq/rwkv-72.pth","adapter_mode":"lora","endtoken":"\\n\\n"}'
+curl http://127.0.0.1:9000/loadmodel -X POST -H "Content-Type: application/json" -d '{"model_filename":"/home/client/Projects/RWKV-LM-RLHF/main/myfolder/models/RWKV-x070-World-0.4B-v2.9-20250107-ctx4096.pth","model_viewname":"RWKV x070 0B4 MoLE","model_strategy":"fp8","adapter_filename":"/home/client/Projects/RWKV-LM-RLHF/main/myfolder/Outputs/x070-0B4-moe-cjev4/rwkv-16.pth","adapter_mode":"lora","endtoken":"\\n\\n\\x17"}'
 
 
+#curl http://127.0.0.1:9000/loadmodel -X POST -H "Content-Type: application/json" -d '{"model_filename":"/home/client/Projects/RWKV-LM-RLHF/main/myfolder/models/rwkv-x070-2b9-world-v3-82%trained-20250203-ctx4k.pth","model_viewname":"RWKV x070 2B9 CJE4","model_strategy":"fp8","adapter_filename":"/home/client/Projects/RWKV-LM-RLHF/rwkv-3.pth","adapter_mode":"bone","endtoken":"\\n\\n\\x17"}'
+
+#
 #curl http://127.0.0.1:9000/loadmodel -X POST -H "Content-Type: application/json" -d '{"model_filename":"/home/client/Projects/RWKV-LM-RLHF/main/myfolder/models/RWKV-x070-World-0.4B-v2.9-20250107-ctx4096.pth","model_viewname":"RWKV x070","model_strategy":"fp16","adapter_filename":"/home/client/Projects/RWKV-LM-RLHF/main/myfolder/Outputs/x070-0b4-moe5/rwkv-65.pth","adapter_mode":"bone","endtoken":"\\n\\n\\x17"}'
 
 

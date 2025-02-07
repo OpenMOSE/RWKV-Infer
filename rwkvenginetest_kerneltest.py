@@ -14,7 +14,7 @@ if __name__ == '__main__':
     print('RWKV x070Core with FLA Test')
 
     pipeline = PIPELINE()
-    model = RWKV_x('/home/client/Projects/RWKV-LM-RLHF/main/myfolder/models/RWKV-x070-World-0.4B-v2.9-20250107-ctx4096.pth','fp16',adapter_mode='lora',adapter_model='/home/client/Projects/RWKV-LM-RLHF/main/myfolder/Outputs/x070-0b4-moe-may/rwkv-15.pth',fully_fusedrecurrent=args.fully_fused)
+    model = RWKV_x('/home/client/Projects/RWKV-LM-RLHF/main/myfolder/models/RWKV-x070-World-0.4B-v2.9-20250107-ctx4096.pth','fp8',adapter_mode='lora',adapter_model='/home/client/Projects/RWKV-LM-RLHF/main/myfolder/Outputs/x070-0B4-moe-cjev4/rwkv-4.pth',fully_fusedrecurrent=args.fully_fused)
     #model = RWKV_x('/home/client/Projects/RWKV-LM-RLHF/main/myfolder/Outputs/rwkv-x070-2b9-cje-instruct-1.pth','fp8')
     Target_batch = args.tb
 
@@ -22,7 +22,7 @@ if __name__ == '__main__':
 
     States2 = model.new_state(Target_batch)#state_empty(32, 1, 2560, 2560 // 32)
 
-    context =  'User: お疲れ様。元気してる？ \n\n\x17Assistant:'
+    context =  'User: 君の心は何色？\n\n\x17Assistant:'
     
 
     shift_states = States.shift_states
