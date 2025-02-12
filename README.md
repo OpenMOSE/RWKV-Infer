@@ -28,6 +28,7 @@ By combining multiple states, MRSS integrates knowledge from different "experts,
 
 - **Hot swapping of adapter models**: 
   - Bone(Block Affine Transformation) Adapter
+  - DoRA: Weight-Decomposed Low-Rank Adaptation
   - LoRA Adapter
 
 - **Quantization Support**:

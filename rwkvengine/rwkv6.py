@@ -709,3 +709,248 @@ class RWKV_6(nn.Module):
             x = x @ head_weight.t()
 
         return x
+    
+
+    #@torch.compile
+    def x060_forward(self, idx: torch.Tensor, last_shift_states: List[torch.Tensor],
+                last_wkv_states: List[torch.Tensor]):
+        StrategyMode = 0 # 0 is Fully BF16 or FP16 or FP8
+        # if self.bit8quant == True:
+        #     StrategyMode = 1
+        if self.bit4quant == True:
+            StrategyMode = 2
+        elif self.bitfp6quant == True:
+            StrategyMode = 3
+            
+        with torch.no_grad():
+            #
+            z = self.z
+            H = self.n_head
+
+            x = RWKV_6.x060_First(z['emb.weight'],idx,self.n_embd,z['blocks.0.ln0.weight'],z['blocks.0.ln0.bias'])
+            x=x.to(dtype=self.base_precision)
+            B, T, C = x.size()
+
+            for i in range(self.n_layer):
+                bbb = f'blocks.{i}.'
+                att = f'blocks.{i}.att.'
+                ffn = f'blocks.{i}.ffn.'
+
+
+
+                time_mix_shift = last_shift_states[i*2]
+                channel_mix_state = last_shift_states[i*2+1]
+                time_mix_state = last_wkv_states[i]
+
+                if StrategyMode == 0:
+                    r,k,v,g,w,xx = RWKV_6.x060_TimeMix_FC_Step1(B,T,C,H,self.n_embd,x,time_mix_shift,
+                                                    z[att+'time_maa_x'], z[att+'time_maa_wkvrg'], z[att+'time_maa_w1'], z[att+'time_maa_w2'],
+                                                    z[att+'time_decay_w1'], z[att+'time_decay_w2'],z[att+'time_decay'],
+                                                    z[att+'receptance.weight'], z[att+'key.weight'], z[att+'value.weight'],z[att+'gate.weight'],
+                                                    z[bbb+'ln1.weight'],z[bbb+'ln1.bias']
+                                                    )
+                    if T>1:
+                        att1, time_mix_state = RWKV_6.x060_TimeMix_FC_Step2_Seq(B,T,C,H,self.ctx,
+                                                                      xx,time_mix_state,
+                                                                      r,w,k,v,g,
+                                                                      z[att+'time_faaaa']
+                                                                      )
+                    else:
+                        if B < 16:
+                            att1, time_mix_state = RWKV_6.x060_TimeMix_FC_Step2_One(B,T,C,H,self.ctx,
+                                                                        xx,time_mix_state,
+                                                                        r,w,k,v,g,
+                                                                        z[att+'time_faaaa']
+                                                                        )
+                        else:
+                            att1, time_mix_state = RWKV_6.x060_TimeMix_FC_Step2_One_HighBatch(B,T,C,H,self.ctx,
+                                                                        xx,time_mix_state,
+                                                                        r,w,k,v,g,
+                                                                        z[att+'time_faaaa']
+                                                                        )
+
+                    att1 = RWKV_6.x060_TimeMix_FC_Step3(B,T,C,att1,g,self.n_head,
+                                               z[att+'ln_x.weight'],z[att+'ln_x.bias'],
+                                               z[att+'output.weight']
+                                               )
+                    
+
+                    x = x + att1
+
+                    ffn1, channel_mix_state = RWKV_6.x060_ChannelMix_FC_Step1(x,channel_mix_state,
+                                                                     z[bbb+'ln2.weight'],
+                                                                     z[bbb+'ln2.bias'],
+                                                                     int(self.n_embd),
+                                                                     z[ffn+'time_maa_k'],
+                                                                     z[ffn+'time_maa_r'],
+                                                                     z[ffn+'receptance.weight'],
+                                                                     z[ffn+'key.weight'],
+                                                                     z[ffn+'value.weight']
+                                                                     )
+                    
+                    x = x + ffn1
+
+
+
+                elif StrategyMode == 2: #NF4 Mode
+
+                    r,k,v,g,w,xx = RWKV_6.x060_TimeMix_FC_Step1(B,T,C,H,self.n_embd,x,time_mix_shift,
+                                                    z[att+'time_maa_x'], z[att+'time_maa_wkvrg'], z[att+'time_maa_w1'], z[att+'time_maa_w2'],
+                                                    z[att+'time_decay_w1'], z[att+'time_decay_w2'],z[att+'time_decay'],
+
+                                                    bnb.functional.dequantize_4bit(z[att+'receptance.weight'],
+                                                                                   quant_state=z[att+'receptance.weight.qstate']) ,
+                                                    bnb.functional.dequantize_4bit(z[att+'key.weight'],
+                                                                                   quant_state=z[att+'key.weight.qstate']) ,
+                                                    bnb.functional.dequantize_4bit(z[att+'value.weight'],
+                                                                                   quant_state=z[att+'value.weight.qstate']) ,
+                                                    bnb.functional.dequantize_4bit(z[att+'gate.weight'],
+                                                                                   quant_state=z[att+'gate.weight.qstate']) ,
+
+
+
+                                                    z[bbb+'ln1.weight'],z[bbb+'ln1.bias']
+                                                    )
+                    if T>1:
+
+                        att1, time_mix_state = RWKV_6.x060_TimeMix_FC_Step2_Seq(B,T,C,H,self.ctx,
+                                                                      xx,time_mix_state,
+                                                                      r,w,k,v,g,
+                                                                      z[att+'time_faaaa']
+                                                                      )
+                    else:
+
+                        if B < 16:
+                            att1, time_mix_state = RWKV_6.x060_TimeMix_FC_Step2_One(B,T,C,H,self.ctx,
+                                                                        xx,time_mix_state,
+                                                                        r,w,k,v,g,
+                                                                        z[att+'time_faaaa']
+                                                                        )
+                        else:
+                            att1, time_mix_state = RWKV_6.x060_TimeMix_FC_Step2_One_HighBatch(B,T,C,H,self.ctx,
+                                                                        xx,time_mix_state,
+                                                                        r,w,k,v,g,
+                                                                        z[att+'time_faaaa']
+                                                                        )
+
+                    att1 = RWKV_6.x060_TimeMix_FC_Step3(B,T,C,att1,g,self.n_head,
+                                               z[att+'ln_x.weight'],z[att+'ln_x.bias'],
+                                               bnb.functional.dequantize_4bit(z[att+'output.weight'],
+                                                                                   quant_state=z[att+'output.weight.qstate'])
+                                               )
+                    
+                    x = x + att1
+
+                    ffn1, channel_mix_state = RWKV_6.x060_ChannelMix_FC_Step1(x,channel_mix_state,
+                                                                     z[bbb+'ln2.weight'],
+                                                                     z[bbb+'ln2.bias'],
+                                                                     int(self.n_embd),
+                                                                     z[ffn+'time_maa_k'],
+                                                                     z[ffn+'time_maa_r'],
+                                                                     bnb.functional.dequantize_4bit(z[ffn+'receptance.weight'],
+                                                                                   quant_state=z[ffn+'receptance.weight.qstate']),
+                                                                     bnb.functional.dequantize_4bit(z[ffn+'key.weight'],
+                                                                                   quant_state=z[ffn+'key.weight.qstate']),
+                                                                     bnb.functional.dequantize_4bit(z[ffn+'value.weight'],
+                                                                                   quant_state=z[ffn+'value.weight.qstate']),
+                                                                     )
+                    
+                    x = x + ffn1
+
+
+                elif StrategyMode == 3: #FP6
+                    r,k,v,g,w,xx = RWKV_6.x060_TimeMix_FC_FP6_Step1(B,T,C,H,self.n_embd,x,time_mix_shift,
+                                                    z[att+'time_maa_x'], z[att+'time_maa_wkvrg'], z[att+'time_maa_w1'], z[att+'time_maa_w2'],
+                                                    z[att+'time_decay_w1'], z[att+'time_decay_w2'],z[att+'time_decay'],
+                                                    z[att+'receptance.weight'].to(device='cuda'),
+                                                    z[att+'receptance.weight.qstate'].to(device='cuda'),
+                                                    z[att+'key.weight'].to(device='cuda'),
+                                                    z[att+'key.weight.qstate'].to(device='cuda'),
+                                                    z[att+'value.weight'].to(device='cuda'),
+                                                    z[att+'value.weight.qstate'].to(device='cuda'),
+                                                    z[att+'gate.weight'].to(device='cuda'),
+                                                    z[att+'gate.weight.qstate'].to(device='cuda'),
+                                                    z[bbb+'ln1.weight'],z[bbb+'ln1.bias'],
+                                                    self.ebits, self.mbits
+                                                    )
+                    if T>1:
+                        att1, time_mix_state = RWKV_6.x060_TimeMix_FC_Step2_Seq(B,T,C,H,self.ctx,
+                                                                      xx,time_mix_state,
+                                                                      r,w,k,v,g,
+                                                                      z[att+'time_faaaa']
+                                                                      )
+                    else:
+                        if B < 16:
+                            att1, time_mix_state = RWKV_6.x060_TimeMix_FC_Step2_One(B,T,C,H,self.ctx,
+                                                                        xx,time_mix_state,
+                                                                        r,w,k,v,g,
+                                                                        z[att+'time_faaaa']
+                                                                        )
+                        else:
+                            att1, time_mix_state = RWKV_6.x060_TimeMix_FC_Step2_One_HighBatch(B,T,C,H,self.ctx,
+                                                                        xx,time_mix_state,
+                                                                        r,w,k,v,g,
+                                                                        z[att+'time_faaaa']
+                                                                        )
+
+                    att1 = RWKV_6.x060_TimeMix_FC_FP6_Step3(B,T,C,att1,g,self.n_head,
+                                               z[att+'ln_x.weight'],z[att+'ln_x.bias'],
+                                               z[att+'output.weight'].to(device='cuda'),
+                                               z[att+'output.weight.qstate'].to(device='cuda'),
+                                               self.ebits, self.mbits
+                                               )
+                    # att1 = self.TimeMix_FC_Step3(B,T,C,att1,g,self.n_head,
+                    #                            z[att+'ln_x.weight'],z[att+'ln_x.bias'],
+                    #                            z[att+'output.weight']
+                    #                            )
+                    
+
+                    x = x + att1
+
+                    ffn1, channel_mix_state = RWKV_6.x060_ChannelMix_FC_FP6_Step1(x,channel_mix_state,
+                                                                     z[bbb+'ln2.weight'],
+                                                                     z[bbb+'ln2.bias'],
+                                                                     int(self.n_embd),
+                                                                     z[ffn+'time_maa_k'],
+                                                                     z[ffn+'time_maa_r'],
+                                                                     z[ffn+'receptance.weight'].to(device='cuda'),
+                                                                     z[ffn+'receptance.weight.qstate'].to(device='cuda'),
+                                                                     z[ffn+'key.weight'].to(device='cuda'),
+                                                                     z[ffn+'key.weight.qstate'].to(device='cuda'),
+                                                                     z[ffn+'value.weight'].to(device='cuda'),
+                                                                     z[ffn+'value.weight.qstate'].to(device='cuda'),
+                                                                     self.ebits, self.mbits
+                                                                     )
+                    # ffn1, channel_mix_state = self.ChannelMix_FC_Step1(x,channel_mix_state,
+                    #                                                  z[bbb+'ln2.weight'],
+                    #                                                  z[bbb+'ln2.bias'],
+                    #                                                  int(self.n_embd),
+                    #                                                  z[ffn+'time_maa_k'],
+                    #                                                  z[ffn+'time_maa_r'],
+                    #                                                  z[ffn+'receptance.weight'],
+                    #                                                  z[ffn+'key.weight'],
+                    #                                                  z[ffn+'value.weight']
+                    #                                                  )
+                    
+                    x = x + ffn1
+                
+                last_shift_states[i*2] = time_mix_shift
+                last_shift_states[i*2+1] = channel_mix_state
+                last_wkv_states[i] = time_mix_state
+
+
+            if self.bit4quant:
+                x = RWKV_6.x060_Final(x,bnb.functional.dequantize_4bit(z['head.weight'],quant_state=z['head.weight.qstate']),
+                               self.n_embd,z['ln_out.weight'],z['ln_out.bias'])
+                # x = self.Final_NF4(x,z['head.weight'],z['head.weight.qstate'],
+                #                self.n_embd,z['ln_out.weight'],z['ln_out.bias'])
+            elif self.bitfp6quant:
+                x = RWKV_6.x060_Final_FP6(x,z['head.weight'].to(device='cuda'),
+                                   z['head.weight.qstate'].to(device='cuda'),
+                            self.n_embd,z['ln_out.weight'],z['ln_out.bias'],
+                            self.ebits, self.mbits
+                            )
+            else:
+                x = RWKV_6.x060_Final(x,z['head.weight'],self.n_embd,z['ln_out.weight'],z['ln_out.bias'])            
+
+            return x, last_shift_states, last_wkv_states

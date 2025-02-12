@@ -126,6 +126,10 @@ class PIPELINE():
         elif mode == 'pile':
             print(f'Pile Tokenizer')
             self.tokenizer = Tokenizer.from_file(os.path.dirname(os.path.abspath(__file__)) + "/20B_tokenizer.json")
+        elif mode == 'qwen':
+            print(f'Qwen Tokenizer')
+            from transformers import AutoTokenizer
+            self.tokenizer = AutoTokenizer.from_pretrained(os.path.dirname(os.path.abspath(__file__)) + "/qwen")
 
 
     def refine_context(self, context):
@@ -142,6 +146,8 @@ class PIPELINE():
         if self.mode == 'pile':
             print('pile')
             return self.tokenizer.encode(x).ids
+        if self.mode == 'qwen':
+            return self.tokenizer.encode(x)
         else:
             return self.tokenizer.encode(x)
     

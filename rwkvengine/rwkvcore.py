@@ -43,6 +43,7 @@ MyStatic = torch.jit.script
 
 from rwkvengine.rwkv6 import RWKV_6, fused_recurrent_rwkv6_torch
 from rwkvengine.rwkv7 import RWKV_7
+from rwkvengine.arwkv7 import ARWKV_7
 
 
 
@@ -123,19 +124,9 @@ class RWKV_x(nn.Module):
                 for zkeys in z_adapter_keys:
                     z[zkeys] = z_adapter[zkeys]
 
-            # elif 'bone' in adapter_mode or 'Bone' in adapter_mode:
-            #     print('Bone(Block Affine Transformation) Mode Lets Merge!')
-            #     self.ModeMode = 'bone'
-            #     z_adapter = torch.load(adapter_model,map_location="cpu",mmap=True)
-            #     z_adapter_keys = list(z_adapter.keys())
-            #     for zkeys in z_adapter_keys:
-            #         z[zkeys] = z_adapter[zkeys]
-            #     print(f'adapter keys = {z_adapter_keys}')
-            #     #exit()
-
         def Attach_Adapter(keyname,weight,adapter,mode,scaling=2.0,device='cuda'): #from JL-er lora merge inspired
             
-            #print(f'AttachAdapter = {keyname}')
+            print(f'AttachAdapter = {keyname}')
             if keyname.endswith('.weight') or keyname.endswith('head'):
                 adapterkeys = list(adapter.keys())
                 #print(adapterkeys)
@@ -146,24 +137,40 @@ class RWKV_x(nn.Module):
                     prefix = keyname[:-len('.weight')]
                     lora_A = prefix + '.lora_A'
                     lora_B = prefix + '.lora_B'
+                    lora_M = prefix + '.lora_M'
                     gbmm = prefix + '.bone'
                     if lora_A in adapterkeys:
                         w=adapter
                         assert lora_B in adapterkeys
-                        print(f'lora merging {lora_A} and {lora_B} into {k}')
-                        #exit()
-                        
-                        assert w[lora_B].shape[1] == w[lora_A].shape[0]
 
-                        w[lora_A] = w[lora_A].to(device=device)
+                        if lora_M in adapterkeys:
+                            print('dora merging {lora_A} and {lora_B} and {lora_M} into {k}')
+                            assert w[lora_B].shape[1] == w[lora_A].shape[0]
+
+                            w[lora_A] = w[lora_A].to(device=device)
+                            w[lora_B] = w[lora_B].to(device=device)
+                            w[lora_M] = w[lora_M].to(device=device)
+                            weight = weight + w[lora_B] @ w[lora_A] * scaling
+                            norm = weight.norm(dim=0, keepdim=True) + 1e-6
+                            weight = (w[lora_M] * weight) / norm  
+
+                            del w[lora_A]
+                            del w[lora_B]
+                            del w[lora_M]
+                            return weight
                         
-                        w[lora_B] = w[lora_B].to(device=device)
-                        
-                        weight = weight + w[lora_B] @ w[lora_A] * scaling
-                        del w[lora_A]
-                        del w[lora_B]
-                        return weight
-                    #print(f'gbmm target = {gbmm}')
+                        else:
+                            print(f'lora merging {lora_A} and {lora_B} into {k}')
+                            
+                            assert w[lora_B].shape[1] == w[lora_A].shape[0]
+
+                            w[lora_A] = w[lora_A].to(device=device)
+                            w[lora_B] = w[lora_B].to(device=device)
+                            weight = weight + w[lora_B] @ w[lora_A] * scaling
+                            del w[lora_A]
+                            del w[lora_B]
+                            return weight
+
                     if gbmm in adapterkeys :
                         w=adapter
                         print(f'bone merging {gbmm} into {k}')
@@ -179,26 +186,6 @@ class RWKV_x(nn.Module):
                             weight = adapter[key].to(dtype=torch.bfloat16,device=device)
                             print(f'key = {key} is swapped from Adapter')
                     return weight
-                # elif mode == 'bone':
-                #     prefix = keyname[:-len('.weight')]
-                #     gbmm = prefix + '.bone'
-                #     print(f'gbmm target = {gbmm}')
-                #     if gbmm in adapterkeys :
-                #         w=adapter
-                #         print(f'bone merging {gbmm} into {k}')
-                #         w[gbmm] = w[gbmm].to(device=device)
-                #         b,r,_ = w[gbmm].shape
-                #         bone = rearrange(weight, '(a r1) (b r2) -> a b r1 r2', r1 = r, r2 = r)@w[gbmm]+w[gbmm]
-                #         weight += rearrange(bone, 'a b r1 r2 ->(a r1) (b r2) ')
-                #         print(weight)
-                #         del w[gbmm]
-                #         return weight
-
-                #     for key in adapterkeys:
-                #         if key == keyname:
-                #             weight = adapter[key].to(dtype=torch.bfloat16,device=device)
-                #             print(f'key = {key} is swapped from Adapter')
-                #     return weight
                 else:
                     return weight
             else:
@@ -218,6 +205,7 @@ class RWKV_x(nn.Module):
 
 
         RWKVMode = 6 #default RWKV 6
+
         self.MoE = 0
         for key in keys:
             if 'blocks.0.att.r_k' in key and RWKVMode != 7:
@@ -238,6 +226,22 @@ class RWKV_x(nn.Module):
                     self.MoE = 1
                     print('Shared Mixture of Experts Mode!')
                     #exit()
+
+
+        ARWKVMode = 0
+
+
+        for key in keys:
+            if '.down.weight' in key and ARWKVMode != 1:
+                print("ARWKV-7 Mode :) Powered by RWKV-Red-Team.")
+                ARWKVMode = 1
+        if z_adapter_keys is not None:
+            for key in z_adapter_keys:
+                if '.down.weight' in key and ARWKVMode != 1:
+                    print("ARWKV-7 Mode. Powered by RWKV-Red-Team.")
+                    ARWKVMode = 1
+
+        self.ARWKVMode = ARWKVMode
 
 
 
@@ -275,7 +279,11 @@ class RWKV_x(nn.Module):
         if self.RWKVMode == 7:
             self.n_head, self.head_size = z['blocks.0.att.r_k'].shape
             print(self.head_size)
-            z['emb.weight'] = F.layer_norm(z['emb.weight'], (self.n_embd,), weight=z['blocks.0.ln0.weight'], bias=z['blocks.0.ln0.bias'])
+            if self.ARWKVMode == 1:
+                z['emb.weight'] = z['emb.weight']
+            else:
+                z['emb.weight'] = F.layer_norm(z['emb.weight'], (self.n_embd,), weight=z['blocks.0.ln0.weight'], bias=z['blocks.0.ln0.bias'])
+
             z['blocks.0.att.v0'] = z['blocks.0.att.a0'] # actually ignored
             z['blocks.0.att.v1'] = z['blocks.0.att.a1'] # actually ignored
             z['blocks.0.att.v2'] = z['blocks.0.att.a2'] # actually ignored
@@ -352,34 +360,9 @@ class RWKV_x(nn.Module):
 
 
 
-
-
-            #exit()
-
-
-
-
-
-        
-                    
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-        QuantList = ['.receptance.weight','.key.weight','.value.weight','.gate.weight','.output.weight','head.weight']
-        QuantListFP8 = ['att.receptance.weight','att.key.weight','att.value.weight','att.gate.weight','att.output.weight','ffn.key.weight','ffn.receptance.weight','ffn.value.weight','head.weight'] #, ,
-        QuantListFP6 = ['att.receptance.weight','att.key.weight','att.value.weight','att.gate.weight','att.output.weight','ffn.key.weight','ffn.receptance.weight','ffn.value.weight'] #, ,
+        QuantList = ['.receptance.weight','.key.weight','.value.weight','.gate.weight','.output.weight','head.weight','.down.weight','up.weight']
+        QuantListFP8 = ['att.receptance.weight','att.key.weight','att.value.weight','att.gate.weight','att.output.weight','ffn.key.weight','ffn.receptance.weight','ffn.value.weight','head.weight','ffn.down.weight','ffn.up.weight','ffn.gate.weight'] #, ,
+        QuantListFP6 = ['att.receptance.weight','att.key.weight','att.value.weight','att.gate.weight','att.output.weight','ffn.key.weight','ffn.receptance.weight','ffn.value.weight','ffn.down.weight','ffn.up.weight,','ffn.gate.weight'] #, ,
  
         # 4bit Quantize Mode via Bitsandbytes NF4
         if self.bit4quant == True:
@@ -601,8 +584,10 @@ class RWKV_x(nn.Module):
     def new_state(self, B):
          if self.RWKVMode == 6:
             return BlockStateList.create(
-                    self.n_layer, B, self.n_embd, 
-                    self.n_head,# self.head_size,
+                    self.n_layer,
+                    B,
+                    self.n_embd, 
+                    self.n_head,
                     self.device, self.dtype
                 )
          elif self.RWKVMode == 7:
@@ -612,255 +597,8 @@ class RWKV_x(nn.Module):
                                               self.head_size,
                                               self.device,
                                               self.dtype)
-             
-    
-    
-    
-    
-        
-    #@torch.compile
-    def x060_forward(self, idx: torch.Tensor, last_shift_states: List[torch.Tensor],
-                last_wkv_states: List[torch.Tensor]):
-        StrategyMode = 0 # 0 is Fully BF16 or FP16 or FP8
-        # if self.bit8quant == True:
-        #     StrategyMode = 1
-        if self.bit4quant == True:
-            StrategyMode = 2
-        elif self.bitfp6quant == True:
-            StrategyMode = 3
             
-        with torch.no_grad():
-            #
-            z = self.z
-            H = self.n_head
-
-            x = RWKV_6.x060_First(z['emb.weight'],idx,self.n_embd,z['blocks.0.ln0.weight'],z['blocks.0.ln0.bias'])
-            x=x.to(dtype=self.base_precision)
-            B, T, C = x.size()
-
-            for i in range(self.n_layer):
-                bbb = f'blocks.{i}.'
-                att = f'blocks.{i}.att.'
-                ffn = f'blocks.{i}.ffn.'
-
-
-
-                time_mix_shift = last_shift_states[i*2]
-                channel_mix_state = last_shift_states[i*2+1]
-                time_mix_state = last_wkv_states[i]
-
-                if StrategyMode == 0:
-                    r,k,v,g,w,xx = RWKV_6.x060_TimeMix_FC_Step1(B,T,C,H,self.n_embd,x,time_mix_shift,
-                                                    z[att+'time_maa_x'], z[att+'time_maa_wkvrg'], z[att+'time_maa_w1'], z[att+'time_maa_w2'],
-                                                    z[att+'time_decay_w1'], z[att+'time_decay_w2'],z[att+'time_decay'],
-                                                    z[att+'receptance.weight'], z[att+'key.weight'], z[att+'value.weight'],z[att+'gate.weight'],
-                                                    z[bbb+'ln1.weight'],z[bbb+'ln1.bias']
-                                                    )
-                    if T>1:
-                        att1, time_mix_state = RWKV_6.x060_TimeMix_FC_Step2_Seq(B,T,C,H,self.ctx,
-                                                                      xx,time_mix_state,
-                                                                      r,w,k,v,g,
-                                                                      z[att+'time_faaaa']
-                                                                      )
-                    else:
-                        if B < 16:
-                            att1, time_mix_state = RWKV_6.x060_TimeMix_FC_Step2_One(B,T,C,H,self.ctx,
-                                                                        xx,time_mix_state,
-                                                                        r,w,k,v,g,
-                                                                        z[att+'time_faaaa']
-                                                                        )
-                        else:
-                            att1, time_mix_state = RWKV_6.x060_TimeMix_FC_Step2_One_HighBatch(B,T,C,H,self.ctx,
-                                                                        xx,time_mix_state,
-                                                                        r,w,k,v,g,
-                                                                        z[att+'time_faaaa']
-                                                                        )
-
-                    att1 = RWKV_6.x060_TimeMix_FC_Step3(B,T,C,att1,g,self.n_head,
-                                               z[att+'ln_x.weight'],z[att+'ln_x.bias'],
-                                               z[att+'output.weight']
-                                               )
-                    
-
-                    x = x + att1
-
-                    ffn1, channel_mix_state = RWKV_6.x060_ChannelMix_FC_Step1(x,channel_mix_state,
-                                                                     z[bbb+'ln2.weight'],
-                                                                     z[bbb+'ln2.bias'],
-                                                                     int(self.n_embd),
-                                                                     z[ffn+'time_maa_k'],
-                                                                     z[ffn+'time_maa_r'],
-                                                                     z[ffn+'receptance.weight'],
-                                                                     z[ffn+'key.weight'],
-                                                                     z[ffn+'value.weight']
-                                                                     )
-                    
-                    x = x + ffn1
-
-
-
-                elif StrategyMode == 2: #NF4 Mode
-
-                    r,k,v,g,w,xx = RWKV_6.x060_TimeMix_FC_Step1(B,T,C,H,self.n_embd,x,time_mix_shift,
-                                                    z[att+'time_maa_x'], z[att+'time_maa_wkvrg'], z[att+'time_maa_w1'], z[att+'time_maa_w2'],
-                                                    z[att+'time_decay_w1'], z[att+'time_decay_w2'],z[att+'time_decay'],
-
-                                                    bnb.functional.dequantize_4bit(z[att+'receptance.weight'],
-                                                                                   quant_state=z[att+'receptance.weight.qstate']) ,
-                                                    bnb.functional.dequantize_4bit(z[att+'key.weight'],
-                                                                                   quant_state=z[att+'key.weight.qstate']) ,
-                                                    bnb.functional.dequantize_4bit(z[att+'value.weight'],
-                                                                                   quant_state=z[att+'value.weight.qstate']) ,
-                                                    bnb.functional.dequantize_4bit(z[att+'gate.weight'],
-                                                                                   quant_state=z[att+'gate.weight.qstate']) ,
-
-
-
-                                                    z[bbb+'ln1.weight'],z[bbb+'ln1.bias']
-                                                    )
-                    if T>1:
-
-                        att1, time_mix_state = RWKV_6.x060_TimeMix_FC_Step2_Seq(B,T,C,H,self.ctx,
-                                                                      xx,time_mix_state,
-                                                                      r,w,k,v,g,
-                                                                      z[att+'time_faaaa']
-                                                                      )
-                    else:
-
-                        if B < 16:
-                            att1, time_mix_state = RWKV_6.x060_TimeMix_FC_Step2_One(B,T,C,H,self.ctx,
-                                                                        xx,time_mix_state,
-                                                                        r,w,k,v,g,
-                                                                        z[att+'time_faaaa']
-                                                                        )
-                        else:
-                            att1, time_mix_state = RWKV_6.x060_TimeMix_FC_Step2_One_HighBatch(B,T,C,H,self.ctx,
-                                                                        xx,time_mix_state,
-                                                                        r,w,k,v,g,
-                                                                        z[att+'time_faaaa']
-                                                                        )
-
-                    att1 = RWKV_6.x060_TimeMix_FC_Step3(B,T,C,att1,g,self.n_head,
-                                               z[att+'ln_x.weight'],z[att+'ln_x.bias'],
-                                               bnb.functional.dequantize_4bit(z[att+'output.weight'],
-                                                                                   quant_state=z[att+'output.weight.qstate'])
-                                               )
-                    
-                    x = x + att1
-
-                    ffn1, channel_mix_state = RWKV_6.x060_ChannelMix_FC_Step1(x,channel_mix_state,
-                                                                     z[bbb+'ln2.weight'],
-                                                                     z[bbb+'ln2.bias'],
-                                                                     int(self.n_embd),
-                                                                     z[ffn+'time_maa_k'],
-                                                                     z[ffn+'time_maa_r'],
-                                                                     bnb.functional.dequantize_4bit(z[ffn+'receptance.weight'],
-                                                                                   quant_state=z[ffn+'receptance.weight.qstate']),
-                                                                     bnb.functional.dequantize_4bit(z[ffn+'key.weight'],
-                                                                                   quant_state=z[ffn+'key.weight.qstate']),
-                                                                     bnb.functional.dequantize_4bit(z[ffn+'value.weight'],
-                                                                                   quant_state=z[ffn+'value.weight.qstate']),
-                                                                     )
-                    
-                    x = x + ffn1
-
-
-                elif StrategyMode == 3: #FP6
-                    r,k,v,g,w,xx = RWKV_6.x060_TimeMix_FC_FP6_Step1(B,T,C,H,self.n_embd,x,time_mix_shift,
-                                                    z[att+'time_maa_x'], z[att+'time_maa_wkvrg'], z[att+'time_maa_w1'], z[att+'time_maa_w2'],
-                                                    z[att+'time_decay_w1'], z[att+'time_decay_w2'],z[att+'time_decay'],
-                                                    z[att+'receptance.weight'].to(device='cuda'),
-                                                    z[att+'receptance.weight.qstate'].to(device='cuda'),
-                                                    z[att+'key.weight'].to(device='cuda'),
-                                                    z[att+'key.weight.qstate'].to(device='cuda'),
-                                                    z[att+'value.weight'].to(device='cuda'),
-                                                    z[att+'value.weight.qstate'].to(device='cuda'),
-                                                    z[att+'gate.weight'].to(device='cuda'),
-                                                    z[att+'gate.weight.qstate'].to(device='cuda'),
-                                                    z[bbb+'ln1.weight'],z[bbb+'ln1.bias'],
-                                                    self.ebits, self.mbits
-                                                    )
-                    if T>1:
-                        att1, time_mix_state = RWKV_6.x060_TimeMix_FC_Step2_Seq(B,T,C,H,self.ctx,
-                                                                      xx,time_mix_state,
-                                                                      r,w,k,v,g,
-                                                                      z[att+'time_faaaa']
-                                                                      )
-                    else:
-                        if B < 16:
-                            att1, time_mix_state = RWKV_6.x060_TimeMix_FC_Step2_One(B,T,C,H,self.ctx,
-                                                                        xx,time_mix_state,
-                                                                        r,w,k,v,g,
-                                                                        z[att+'time_faaaa']
-                                                                        )
-                        else:
-                            att1, time_mix_state = RWKV_6.x060_TimeMix_FC_Step2_One_HighBatch(B,T,C,H,self.ctx,
-                                                                        xx,time_mix_state,
-                                                                        r,w,k,v,g,
-                                                                        z[att+'time_faaaa']
-                                                                        )
-
-                    att1 = RWKV_6.x060_TimeMix_FC_FP6_Step3(B,T,C,att1,g,self.n_head,
-                                               z[att+'ln_x.weight'],z[att+'ln_x.bias'],
-                                               z[att+'output.weight'].to(device='cuda'),
-                                               z[att+'output.weight.qstate'].to(device='cuda'),
-                                               self.ebits, self.mbits
-                                               )
-                    # att1 = self.TimeMix_FC_Step3(B,T,C,att1,g,self.n_head,
-                    #                            z[att+'ln_x.weight'],z[att+'ln_x.bias'],
-                    #                            z[att+'output.weight']
-                    #                            )
-                    
-
-                    x = x + att1
-
-                    ffn1, channel_mix_state = RWKV_6.x060_ChannelMix_FC_FP6_Step1(x,channel_mix_state,
-                                                                     z[bbb+'ln2.weight'],
-                                                                     z[bbb+'ln2.bias'],
-                                                                     int(self.n_embd),
-                                                                     z[ffn+'time_maa_k'],
-                                                                     z[ffn+'time_maa_r'],
-                                                                     z[ffn+'receptance.weight'].to(device='cuda'),
-                                                                     z[ffn+'receptance.weight.qstate'].to(device='cuda'),
-                                                                     z[ffn+'key.weight'].to(device='cuda'),
-                                                                     z[ffn+'key.weight.qstate'].to(device='cuda'),
-                                                                     z[ffn+'value.weight'].to(device='cuda'),
-                                                                     z[ffn+'value.weight.qstate'].to(device='cuda'),
-                                                                     self.ebits, self.mbits
-                                                                     )
-                    # ffn1, channel_mix_state = self.ChannelMix_FC_Step1(x,channel_mix_state,
-                    #                                                  z[bbb+'ln2.weight'],
-                    #                                                  z[bbb+'ln2.bias'],
-                    #                                                  int(self.n_embd),
-                    #                                                  z[ffn+'time_maa_k'],
-                    #                                                  z[ffn+'time_maa_r'],
-                    #                                                  z[ffn+'receptance.weight'],
-                    #                                                  z[ffn+'key.weight'],
-                    #                                                  z[ffn+'value.weight']
-                    #                                                  )
-                    
-                    x = x + ffn1
-                
-                last_shift_states[i*2] = time_mix_shift
-                last_shift_states[i*2+1] = channel_mix_state
-                last_wkv_states[i] = time_mix_state
-
-
-            if self.bit4quant:
-                x = RWKV_6.x060_Final(x,bnb.functional.dequantize_4bit(z['head.weight'],quant_state=z['head.weight.qstate']),
-                               self.n_embd,z['ln_out.weight'],z['ln_out.bias'])
-                # x = self.Final_NF4(x,z['head.weight'],z['head.weight.qstate'],
-                #                self.n_embd,z['ln_out.weight'],z['ln_out.bias'])
-            elif self.bitfp6quant:
-                x = RWKV_6.x060_Final_FP6(x,z['head.weight'].to(device='cuda'),
-                                   z['head.weight.qstate'].to(device='cuda'),
-                            self.n_embd,z['ln_out.weight'],z['ln_out.bias'],
-                            self.ebits, self.mbits
-                            )
-            else:
-                x = RWKV_6.x060_Final(x,z['head.weight'],self.n_embd,z['ln_out.weight'],z['ln_out.bias'])            
-
-            return x, last_shift_states, last_wkv_states
+    
         
     def load_state(self,state_filename):
         try:
@@ -924,184 +662,16 @@ class RWKV_x(nn.Module):
 
     
     
-    def x070_forward_one(self, idx, last_shift_states: List[torch.Tensor],
-                last_wkv_states: List[torch.Tensor] ):
-        with torch.no_grad(): 
-            z = self.z
-            x = z['emb.weight'][idx]
-
-            v_first = torch.empty_like(x)
-            for i in range(self.n_layer):
-                bbb = f'blocks.{i}.'
-                att = f'blocks.{i}.att.'
-                ffn = f'blocks.{i}.ffn.'
-
-                time_mix_shift = last_shift_states[i*2]
-                channel_mix_state = last_shift_states[i*2+1]
-                time_mix_state = last_wkv_states[i]
-
-                xx = F.layer_norm(x, (self.n_embd,), weight=z[bbb+'ln1.weight'], bias=z[bbb+'ln1.bias'])
-
-                xx, time_mix_shift, time_mix_state, v_first = self.x070_TimeMix_one(i, self.n_head, self.head_size, xx, time_mix_shift, v_first, time_mix_state,
-                    z[att+'x_r'], z[att+'x_w'], z[att+'x_k'], z[att+'x_v'], z[att+'x_a'], z[att+'x_g'],
-                    z[att+'w0'], z[att+'w1'], z[att+'w2'], z[att+'a0'], z[att+'a1'], z[att+'a2'], z[att+'v0'], z[att+'v1'], z[att+'v2'],
-                    z[att+'g1'], z[att+'g2'], z[att+'k_k'], z[att+'k_a'], z[att+'r_k'],
-                    z[att+'receptance.weight'], z[att+'key.weight'], z[att+'value.weight'], z[att+'output.weight'],
-                    z[att+'ln_x.weight'], z[att+'ln_x.bias'])
-                x = x + xx
-
-                #print(f'Before ChannelMix LayerNorm x.shape = {x.shape}')
-
-                xx = F.layer_norm(x, (self.n_embd,), weight=z[bbb+'ln2.weight'], bias=z[bbb+'ln2.bias'])
-
-                xx, channel_mix_state = self.x070_ChannelMix_one(xx, channel_mix_state, z[ffn+'x_k'], z[ffn+'key.weight'], z[ffn+'value.weight'])
-                x = x + xx
-
-                last_shift_states[i*2] = time_mix_shift.view(time_mix_shift.shape[0],-1)
-                last_shift_states[i*2+1] = channel_mix_state.view(channel_mix_state.shape[0],-1)
-                
-                last_wkv_states[i] = time_mix_state
-            
-            x = F.layer_norm(x, (self.n_embd,), weight=z['ln_out.weight'], bias=z['ln_out.bias'])
-            x = x @ z['head.weight']
-            #exit()
-            return x, last_shift_states, last_wkv_states
-        
-    def x070_forward_seq(self, idx, last_shift_states: List[torch.Tensor],
-                last_wkv_states: List[torch.Tensor],  full_output:bool=False, KernelMode:int=0):
-        with torch.no_grad(): 
-            z = self.z
-            x = z['emb.weight'][idx]
-
-            v_first = torch.empty_like(x)
-
-            StrategyMode = 0 # 0 is Fully BF16 or FP16 or FP8
-            if self.bit4quant == True:
-                StrategyMode = 2
-            elif self.bitfp6quant == True:
-                StrategyMode = 3
-
-
-
-
-
-            for i in range(self.n_layer):
-                bbb = f'blocks.{i}.'
-                att = f'blocks.{i}.att.'
-                ffn = f'blocks.{i}.ffn.'
-
-                time_mix_shift = last_shift_states[i*2]
-                channel_mix_state = last_shift_states[i*2+1]
-                time_mix_state = last_wkv_states[i]
-
-                xx = F.layer_norm(x, (self.n_embd,), weight=z[bbb+'ln1.weight'], bias=z[bbb+'ln1.bias'])
-
-                B, T, X = xx.shape
-
-                if StrategyMode == 0:
-                    # r1,w1,k1,v1,g1,aa1,bb1,xx_step11 = RWKV_7.x070_TimeMix_fla_Step1(i, self.n_head, self.head_size, xx, time_mix_shift, v_first, time_mix_state,
-                    #                                                     z[att+'x_r'], z[att+'x_w'], z[att+'x_k'], z[att+'x_v'], z[att+'x_a'], z[att+'x_g'],
-                    #                                                     z[att+'w0'], z[att+'w1'], z[att+'w2'], z[att+'a0'], z[att+'a1'], z[att+'a2'], z[att+'v0'], z[att+'v1'], z[att+'v2'],
-                    #                                                     z[att+'g1'], z[att+'g2'], z[att+'k_k'], z[att+'k_a'], z[att+'r_k'],
-                    #                                                     z[att+'receptance.weight'], z[att+'key.weight'], z[att+'value.weight'], z[att+'output.weight'],
-                    #                                                     z[att+'ln_x.weight'], z[att+'ln_x.bias'])
-                    if B<4 and T == 1:
-                        #x070_TimeMix_one_hybrid
-                        xx, time_mix_shift, time_mix_state, v_first = RWKV_7.x070_TimeMix_one_hybrid(i, self.n_head, self.head_size, xx, time_mix_shift, v_first, time_mix_state,
-                                                                                                        z[att+'x_r'], z[att+'x_w'], z[att+'x_k'], z[att+'x_v'], z[att+'x_a'], z[att+'x_g'],
-                                                                                                        z[att+'w0'], z[att+'w1'], z[att+'w2'], z[att+'a0'], z[att+'a1'], z[att+'a2'], z[att+'v0'], z[att+'v1'], z[att+'v2'],
-                                                                                                        z[att+'g1'], z[att+'g2'], z[att+'k_k'], z[att+'k_a'], z[att+'r_k'],
-                                                                                                        z[att+'receptance.weight'], z[att+'key.weight'], z[att+'value.weight'], z[att+'output.weight'],
-                                                                                                        z[att+'ln_x.weight'], z[att+'ln_x.bias'])
-                    else:
-                        r,w,k,v,g,aa,bb,xx_step1,v_first = RWKV_7.x070_TimeMix_fla_Step1(i, self.n_head, self.head_size, xx, time_mix_shift, v_first, time_mix_state,
-                                                                            z[att+'x_r'], z[att+'x_w'], z[att+'x_k'], z[att+'x_v'], z[att+'x_a'], z[att+'x_g'],
-                                                                            z[att+'w0'], z[att+'w1'], z[att+'w2'], z[att+'a0'], z[att+'a1'], z[att+'a2'], z[att+'v0'], z[att+'v1'], z[att+'v2'],
-                                                                            z[att+'g1'], z[att+'g2'], z[att+'k_k'], z[att+'k_a'], z[att+'r_k'],
-                                                                            z[att+'receptance.weight'], z[att+'key.weight'], z[att+'value.weight'], z[att+'output.weight'],
-                                                                            z[att+'ln_x.weight'], z[att+'ln_x.bias'])
-                
-                        xx_step2, time_mix_state = RWKV_7.x070_TimeMix_fla_Step2(r,w,k,v,aa,bb,time_mix_state,self.fully_fusedrecurrent)
-
-                        xx, time_mix_shift, time_mix_state, v_first = RWKV_7.x070_TimeMix_fla_Step3(B,T,self.n_head,self.head_size,r,k,z[att+'r_k'],v,g,z[att+'output.weight'],
-                                                                                                    xx,xx_step2,time_mix_state,v_first,z[att+'ln_x.weight'], z[att+'ln_x.bias'])
-
-
-
-                x = x + xx
-
-                xx = F.layer_norm(x, (self.n_embd,), weight=z[bbb+'ln2.weight'], bias=z[bbb+'ln2.bias'])
-
-
-                if self.MoE == 1:
-                    ExpertsCount = self.MoEExperts
-                    Experts_K = []
-                    Experts_V = []
-                    keys = list(z.keys())
-
-                    bonetext = ffn + "expert_0.key.bone_expert_0"
-                    #loratext = ffn + "expert_0.key.lora_A_expert_0"
-                    expertmode = self.MoELayerMode[i]
-                    # for key in keys:
-                    #     if bonetext in key:
-                    #         #print(f'found bone mode in {key}' )
-                    #         expertmode = 1
-                    #         break
-
-                    #print('MoE TestMode')
-                    for a in range(ExpertsCount):
-                        Parts = []
-                        if expertmode ==1:
-                            Parts.append(z[ffn+f'expert_{a}.key.bone_expert_0'])
-                            Parts.append(torch.tensor(0))
-                        else:
-                            Parts.append(z[ffn+f'expert_{a}.key.lora_A_expert_0'])
-                            Parts.append(z[ffn+f'expert_{a}.key.lora_B_expert_0'])
-                        Experts_K.append(Parts)
-
-                        Parts2 = []
-                        if expertmode == 1:
-                            Parts2.append(z[ffn+f'expert_{a}.value.bone_expert_0'])
-                            Parts2.append(torch.tensor(0))
-                        else:
-                            Parts2.append(z[ffn+f'expert_{a}.value.lora_A_expert_0'])
-                            Parts2.append(z[ffn+f'expert_{a}.value.lora_B_expert_0'])
-                        Experts_V.append(Parts2)
-                        
-
-                    
-                    xx, channel_mix_state = RWKV_7.x070_ChannelMix_MoE(xx,channel_mix_state,z[ffn+'x_k'],z[ffn+'router.linear.weight'],z[ffn+'key.weight'],z[ffn+'value.weight'],
-                                                                           Experts_K,Experts_V,MoETopk=self.ActiveMoEs,MoEMode=expertmode,MoECount=self.MoEExperts                                                                           
-                                                                           )
-                else:
-                    xx, channel_mix_state = RWKV_7.x070_ChannelMix_seq(xx, channel_mix_state, z[ffn+'x_k'], z[ffn+'key.weight'], z[ffn+'value.weight'])
-
-                x = x + xx
-
-                last_shift_states[i*2] = time_mix_shift
-                last_shift_states[i*2+1] = channel_mix_state
-                last_wkv_states[i] = time_mix_state
-
-            
-            
-            x = F.layer_norm(x, (self.n_embd,), weight=z['ln_out.weight'], bias=z['ln_out.bias'])
-            x = hybrid_matmul(x , z['head.weight'])
-            if not full_output: x = x[:, -1, :]  # 最後のタイムステップだけを選択し、バッチ次元を保持
-
-            return x, last_shift_states, last_wkv_states
-        
-    def x070_forward(self, idx, last_shift_states: List[torch.Tensor],
-                last_wkv_states: List[torch.Tensor], full_output=False,one_mode=False,KernelMode = 0):
-        #if one_mode:
-        #    return self.x070_forward_one(idx, last_shift_states, last_wkv_states)
-        return self.x070_forward_seq(idx, last_shift_states,last_wkv_states, full_output,KernelMode)
+    
     
 
     def forward(self, idx, last_shift_states , last_wkv_states, one_mode = False, KernelMode = 0):
         if self.RWKVMode == 6:
-            return self.x060_forward(idx,last_shift_states,last_wkv_states)
-        elif self.RWKVMode == 7:
-            return self.x070_forward(idx,last_shift_states,last_wkv_states,one_mode=one_mode,KernelMode=KernelMode,full_output=False)
+            return RWKV_6.x060_forward(self,idx,last_shift_states,last_wkv_states)
+        elif self.RWKVMode == 7 and self.ARWKVMode == 0:
+            return RWKV_7.x070_forward(self,idx,last_shift_states,last_wkv_states,one_mode=one_mode,KernelMode=KernelMode,full_output=False)
+        elif self.RWKVMode == 7 and self.ARWKVMode == 1:
+            return ARWKV_7.ax070_forward(self,idx,last_shift_states,last_wkv_states,one_mode=one_mode,KernelMode=KernelMode,full_output=False)
     
 
 

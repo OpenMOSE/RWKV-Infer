@@ -271,7 +271,7 @@ class RWKV_7(nn.Module):
         bb=kk*a
 
         return r,w,k,v,g,aa,bb,xx,v_first
-    
+    @torch.compile
     def x070_TimeMix_fla_Step2(r, w, k, v, aa, bb,state,FullyFusedMode = True):
 
         B,T,HC = w.shape
@@ -307,6 +307,7 @@ class RWKV_7(nn.Module):
 
 
     #@MyStatic
+    @torch.compile
     def x070_TimeMix_fla_combined(layer_id: int, H: int, N: int,
                         x, x_prev, v_first, state,
                         x_r, x_w, x_k, x_v, x_a, x_g,
@@ -670,6 +671,180 @@ class RWKV_7(nn.Module):
         kv = flat_value.view(x.size(0), x.size(1), x.size(2))
         
         return kv, x[:, -1, :]
+    
+
+
+    def x070_forward_one(self, idx, last_shift_states: List[torch.Tensor],
+                last_wkv_states: List[torch.Tensor] ):
+        with torch.no_grad(): 
+            z = self.z
+            x = z['emb.weight'][idx]
+
+            v_first = torch.empty_like(x)
+            for i in range(self.n_layer):
+                bbb = f'blocks.{i}.'
+                att = f'blocks.{i}.att.'
+                ffn = f'blocks.{i}.ffn.'
+
+                time_mix_shift = last_shift_states[i*2]
+                channel_mix_state = last_shift_states[i*2+1]
+                time_mix_state = last_wkv_states[i]
+
+                xx = F.layer_norm(x, (self.n_embd,), weight=z[bbb+'ln1.weight'], bias=z[bbb+'ln1.bias'])
+
+                xx, time_mix_shift, time_mix_state, v_first = self.x070_TimeMix_one(i, self.n_head, self.head_size, xx, time_mix_shift, v_first, time_mix_state,
+                    z[att+'x_r'], z[att+'x_w'], z[att+'x_k'], z[att+'x_v'], z[att+'x_a'], z[att+'x_g'],
+                    z[att+'w0'], z[att+'w1'], z[att+'w2'], z[att+'a0'], z[att+'a1'], z[att+'a2'], z[att+'v0'], z[att+'v1'], z[att+'v2'],
+                    z[att+'g1'], z[att+'g2'], z[att+'k_k'], z[att+'k_a'], z[att+'r_k'],
+                    z[att+'receptance.weight'], z[att+'key.weight'], z[att+'value.weight'], z[att+'output.weight'],
+                    z[att+'ln_x.weight'], z[att+'ln_x.bias'])
+                x = x + xx
+
+                #print(f'Before ChannelMix LayerNorm x.shape = {x.shape}')
+
+                xx = F.layer_norm(x, (self.n_embd,), weight=z[bbb+'ln2.weight'], bias=z[bbb+'ln2.bias'])
+
+                xx, channel_mix_state = self.x070_ChannelMix_one(xx, channel_mix_state, z[ffn+'x_k'], z[ffn+'key.weight'], z[ffn+'value.weight'])
+                x = x + xx
+
+                last_shift_states[i*2] = time_mix_shift.view(time_mix_shift.shape[0],-1)
+                last_shift_states[i*2+1] = channel_mix_state.view(channel_mix_state.shape[0],-1)
+                
+                last_wkv_states[i] = time_mix_state
+            
+            x = F.layer_norm(x, (self.n_embd,), weight=z['ln_out.weight'], bias=z['ln_out.bias'])
+            x = x @ z['head.weight']
+            #exit()
+            return x, last_shift_states, last_wkv_states
+        
+    def x070_forward_seq(self, idx, last_shift_states: List[torch.Tensor],
+                last_wkv_states: List[torch.Tensor],  full_output:bool=False, KernelMode:int=0):
+        with torch.no_grad(): 
+            z = self.z
+            x = z['emb.weight'][idx]
+
+            v_first = torch.empty_like(x)
+
+            StrategyMode = 0 # 0 is Fully BF16 or FP16 or FP8
+            if self.bit4quant == True:
+                StrategyMode = 2
+            elif self.bitfp6quant == True:
+                StrategyMode = 3
+
+
+
+
+
+            for i in range(self.n_layer):
+                bbb = f'blocks.{i}.'
+                att = f'blocks.{i}.att.'
+                ffn = f'blocks.{i}.ffn.'
+
+                time_mix_shift = last_shift_states[i*2]
+                channel_mix_state = last_shift_states[i*2+1]
+                time_mix_state = last_wkv_states[i]
+
+                xx = F.layer_norm(x, (self.n_embd,), weight=z[bbb+'ln1.weight'], bias=z[bbb+'ln1.bias'])
+
+                B, T, X = xx.shape
+
+                if StrategyMode == 0:
+                    # r1,w1,k1,v1,g1,aa1,bb1,xx_step11 = RWKV_7.x070_TimeMix_fla_Step1(i, self.n_head, self.head_size, xx, time_mix_shift, v_first, time_mix_state,
+                    #                                                     z[att+'x_r'], z[att+'x_w'], z[att+'x_k'], z[att+'x_v'], z[att+'x_a'], z[att+'x_g'],
+                    #                                                     z[att+'w0'], z[att+'w1'], z[att+'w2'], z[att+'a0'], z[att+'a1'], z[att+'a2'], z[att+'v0'], z[att+'v1'], z[att+'v2'],
+                    #                                                     z[att+'g1'], z[att+'g2'], z[att+'k_k'], z[att+'k_a'], z[att+'r_k'],
+                    #                                                     z[att+'receptance.weight'], z[att+'key.weight'], z[att+'value.weight'], z[att+'output.weight'],
+                    #                                                     z[att+'ln_x.weight'], z[att+'ln_x.bias'])
+                    if B<4 and T == 1:
+                        #x070_TimeMix_one_hybrid
+                        xx, time_mix_shift, time_mix_state, v_first = RWKV_7.x070_TimeMix_one_hybrid(i, self.n_head, self.head_size, xx, time_mix_shift, v_first, time_mix_state,
+                                                                                                        z[att+'x_r'], z[att+'x_w'], z[att+'x_k'], z[att+'x_v'], z[att+'x_a'], z[att+'x_g'],
+                                                                                                        z[att+'w0'], z[att+'w1'], z[att+'w2'], z[att+'a0'], z[att+'a1'], z[att+'a2'], z[att+'v0'], z[att+'v1'], z[att+'v2'],
+                                                                                                        z[att+'g1'], z[att+'g2'], z[att+'k_k'], z[att+'k_a'], z[att+'r_k'],
+                                                                                                        z[att+'receptance.weight'], z[att+'key.weight'], z[att+'value.weight'], z[att+'output.weight'],
+                                                                                                        z[att+'ln_x.weight'], z[att+'ln_x.bias'])
+                    else:
+                        r,w,k,v,g,aa,bb,xx_step1,v_first = RWKV_7.x070_TimeMix_fla_Step1(i, self.n_head, self.head_size, xx, time_mix_shift, v_first, time_mix_state,
+                                                                            z[att+'x_r'], z[att+'x_w'], z[att+'x_k'], z[att+'x_v'], z[att+'x_a'], z[att+'x_g'],
+                                                                            z[att+'w0'], z[att+'w1'], z[att+'w2'], z[att+'a0'], z[att+'a1'], z[att+'a2'], z[att+'v0'], z[att+'v1'], z[att+'v2'],
+                                                                            z[att+'g1'], z[att+'g2'], z[att+'k_k'], z[att+'k_a'], z[att+'r_k'],
+                                                                            z[att+'receptance.weight'], z[att+'key.weight'], z[att+'value.weight'], z[att+'output.weight'],
+                                                                            z[att+'ln_x.weight'], z[att+'ln_x.bias'])
+                
+                        xx_step2, time_mix_state = RWKV_7.x070_TimeMix_fla_Step2(r,w,k,v,aa,bb,time_mix_state,self.fully_fusedrecurrent)
+
+                        xx, time_mix_shift, time_mix_state, v_first = RWKV_7.x070_TimeMix_fla_Step3(B,T,self.n_head,self.head_size,r,k,z[att+'r_k'],v,g,z[att+'output.weight'],
+                                                                                                    xx,xx_step2,time_mix_state,v_first,z[att+'ln_x.weight'], z[att+'ln_x.bias'])
+
+
+
+                x = x + xx
+
+                xx = F.layer_norm(x, (self.n_embd,), weight=z[bbb+'ln2.weight'], bias=z[bbb+'ln2.bias'])
+
+
+                if self.MoE == 1:
+                    ExpertsCount = self.MoEExperts
+                    Experts_K = []
+                    Experts_V = []
+                    keys = list(z.keys())
+
+                    bonetext = ffn + "expert_0.key.bone_expert_0"
+                    #loratext = ffn + "expert_0.key.lora_A_expert_0"
+                    expertmode = self.MoELayerMode[i]
+                    # for key in keys:
+                    #     if bonetext in key:
+                    #         #print(f'found bone mode in {key}' )
+                    #         expertmode = 1
+                    #         break
+
+                    #print('MoE TestMode')
+                    for a in range(ExpertsCount):
+                        Parts = []
+                        if expertmode ==1:
+                            Parts.append(z[ffn+f'expert_{a}.key.bone_expert_0'])
+                            Parts.append(torch.tensor(0))
+                        else:
+                            Parts.append(z[ffn+f'expert_{a}.key.lora_A_expert_0'])
+                            Parts.append(z[ffn+f'expert_{a}.key.lora_B_expert_0'])
+                        Experts_K.append(Parts)
+
+                        Parts2 = []
+                        if expertmode == 1:
+                            Parts2.append(z[ffn+f'expert_{a}.value.bone_expert_0'])
+                            Parts2.append(torch.tensor(0))
+                        else:
+                            Parts2.append(z[ffn+f'expert_{a}.value.lora_A_expert_0'])
+                            Parts2.append(z[ffn+f'expert_{a}.value.lora_B_expert_0'])
+                        Experts_V.append(Parts2)
+                        
+
+                    
+                    xx, channel_mix_state = RWKV_7.x070_ChannelMix_MoE(xx,channel_mix_state,z[ffn+'x_k'],z[ffn+'router.linear.weight'],z[ffn+'key.weight'],z[ffn+'value.weight'],
+                                                                           Experts_K,Experts_V,MoETopk=self.ActiveMoEs,MoEMode=expertmode,MoECount=self.MoEExperts                                                                           
+                                                                           )
+                else:
+                    xx, channel_mix_state = RWKV_7.x070_ChannelMix_seq(xx, channel_mix_state, z[ffn+'x_k'], z[ffn+'key.weight'], z[ffn+'value.weight'])
+
+                x = x + xx
+
+                last_shift_states[i*2] = time_mix_shift
+                last_shift_states[i*2+1] = channel_mix_state
+                last_wkv_states[i] = time_mix_state
+
+            
+            
+            x = F.layer_norm(x, (self.n_embd,), weight=z['ln_out.weight'], bias=z['ln_out.bias'])
+            x = hybrid_matmul(x , z['head.weight'])
+            if not full_output: x = x[:, -1, :]  # 最後のタイムステップだけを選択し、バッチ次元を保持
+
+            return x, last_shift_states, last_wkv_states
+        
+    def x070_forward(self, idx, last_shift_states: List[torch.Tensor],
+                last_wkv_states: List[torch.Tensor], full_output=False,one_mode=False,KernelMode = 0):
+        #if one_mode:
+        #    return self.x070_forward_one(idx, last_shift_states, last_wkv_states)
+        return RWKV_7.x070_forward_seq(self,idx, last_shift_states,last_wkv_states, full_output,KernelMode)
 
  
     

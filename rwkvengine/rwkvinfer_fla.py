@@ -232,6 +232,13 @@ class LLMWorker:
         gc.collect()
         torch.cuda.empty_cache()
         self.model = RWKV_x(modelpath,base_precision=precision,adapter_model=adapter_model,adapter_mode=adapter_mode,adapter_scale=adapter_scale,fully_fusedrecurrent=fully_fusedrecurrent)
+        
+        if self.model.ARWKVMode:
+            self.pipeline = PIPELINE('qwen')
+        else:
+            self.pipeline = PIPELINE('world')
+        
+        
         gc.collect()
         torch.cuda.empty_cache()
         print('model loaded')
@@ -387,6 +394,7 @@ class LLMWorker:
                     mrss_info = []
                     input_logits = []
                     input_logits_record = []
+                    occurrence = []
                     token_max = self.llm_batch_chunk
                     #for work in self.llM_current_batch_info:
                     #    if work['proceedtokens'] < len(work['prompt']):
@@ -414,6 +422,8 @@ class LLMWorker:
                                 b_shift_states.append(work['shift_states'])
                                 input_logits.append(work['input_logits'])
                                 input_logits_record.append(work['input_logits_record'])
+                                occurrence.append(work['occurrence'])
+
                                 mrss_info.append({'use_contain_originalstate':work['use_contain_originalstate'], # True or False
                                                   'use_mrss':work['use_mrss'], # True or False
                                                   'mrss_gating_param':work['mrss_gating_param'], # gating params list
@@ -454,6 +464,15 @@ class LLMWorker:
                         idx = torch.cat(prompts_tensor, dim=0) # same realbatchcount
         
                         self.States = self.model.new_state(realbatchcount)
+
+                        print(f'{len(prompts)}')
+                        print(prompts)
+                        for j in range(len(prompts)):
+                            for k in range(len(prompts[0])):
+                                tk = prompts[j][k]
+                                occurrence[j][tk] = 0.1 + (occurrence[j][tk] if tk in occurrence[j] else 0)
+
+
 
                         if self.model.RWKVMode == 6:
                             shift_states = self.States.shift_states.permute(1, 0, 2, 3)
@@ -554,6 +573,7 @@ class LLMWorker:
                                         self.llM_current_batch_info[i]['shift_states'] = shift_states[NowTensorPosition]
                                         self.llM_current_batch_info[i]['current_prob'] = x[NowTensorPosition]
                                         self.llM_current_batch_info[i]['proceedtokens'] = self.llM_current_batch_info[i]['proceedtokens'] + token_max
+                                        self.llM_current_batch_info[i]['occurrence'] = occurrence[NowTensorPosition]
                                         NowTensorPosition = NowTensorPosition + 1
 
                 else:
