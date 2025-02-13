@@ -179,7 +179,7 @@ class LLMWorker:
     def __init__(self,max_batch_size = 16):
         print('Initializing LLM Worker')
         
-        self.llm_batch_chunk = 4096 #FLA Preprocess Prompt chunks
+        self.llm_batch_chunk = 1024 #FLA Preprocess Prompt chunks
         self.llm_minimum_chunk = 128
         self.llm_batch_cycle = 10 #Preprocess cycle if 4, Pre,single,single,single,Pre,....
         self.llm_work_cycle = 0
