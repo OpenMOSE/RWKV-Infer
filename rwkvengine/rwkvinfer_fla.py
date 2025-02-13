@@ -235,8 +235,10 @@ class LLMWorker:
         
         if self.model.ARWKVMode:
             self.pipeline = PIPELINE('qwen')
+            self.templatemode = 'qwen'
         else:
             self.pipeline = PIPELINE('world')
+            self.templatemode = 'world'
         
         
         gc.collect()

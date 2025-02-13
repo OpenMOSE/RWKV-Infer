@@ -5,6 +5,7 @@
 #Multi Recurrent State Sampling Ver
 import os
 from rwkvengine.rwkvinfer_fla import prompt_queue,LLMWorker,Prompt,PromptStatus
+from rwkvengine.chat_template import GetTemplate
 import pandas as pd
 import asyncio
 import json
@@ -147,6 +148,7 @@ params_base = {
             "stop": ['\n\n'] #\n\n \x17
         }
 DefaultEndtoken = '\n\n'
+DefaultEndtoken_qwen = '<|im_end|>'
 Endtoken = '\n\n'
 
 @app.post("/removemodel")
@@ -187,10 +189,7 @@ async def loadmodel(request: Request):
 
 
 
-        model_endtoken = data.get('endtoken',DefaultEndtoken)
-        Endtoken = model_endtoken.encode().decode('unicode_escape')
-
-        print(f'endtoken = {Endtoken}')
+        
 
         adapter_filename = data.get('adapter_filename','')
         adapter_mode = data.get('adapter_mode','')
@@ -254,6 +253,16 @@ async def loadmodel(request: Request):
         DynamicStateList = []
         
         engine1.LoadModel(model_filename,Quant,precision,adapter_model=adapter_filename,adapter_mode=adapter_mode,adapter_scale=adapter_scaling,fully_fusedrecurrent=args.fully_fusedrecurrent)
+        if engine1.templatemode == 'world':
+            model_endtoken = data.get('endtoken',DefaultEndtoken)
+        else:
+            model_endtoken = data.get('endtoken',DefaultEndtoken_qwen)
+
+        Endtoken = model_endtoken.encode().decode('unicode_escape')
+
+        print(f'endtoken = {Endtoken}')
+        
+        
         ModelList = [{"object":"models","id":f"{model_viewname}"}]
         #return jsonify({"status": "success"}), 200
         return {"status": "success"}
@@ -544,45 +553,47 @@ async def rwkv_completions(request: Request):
     input_prompt = ""
     input_prompt_stm = ""
     for element in messages[:-minimum_gen_count]:
-        if element['role'] == 'user':
-            input_prompt = input_prompt + f'{user_name}: {element["content"]}'
-            input_prompt = re.sub(r'\n{3,}', Endtoken, input_prompt)
-            input_prompt_stm = input_prompt_stm + f'{user_name}: {element["content"]}'
-            input_prompt_stm = re.sub(r'\n{3,}', Endtoken, input_prompt_stm)
-            if not input_prompt_stm.endswith(Endtoken):
-                input_prompt_stm += Endtoken
-            if not input_prompt.endswith(Endtoken):
-                input_prompt += Endtoken
-        elif element['role'] == 'assistant':
-            input_prompt = input_prompt + f'{assistant_name}:{element["content"]}'
-            input_prompt = re.sub(r'\n{3,}', Endtoken, input_prompt)
-            input_prompt_stm = input_prompt_stm + f'{assistant_name}:{element["content"]}'
-            input_prompt_stm = re.sub(r'\n{3,}', Endtoken, input_prompt_stm)
-            if not input_prompt_stm.endswith(Endtoken):
-                input_prompt_stm += Endtoken
-            if not input_prompt.endswith(Endtoken):
-                input_prompt += Endtoken
-        elif element['role'] == 'system':
-            input_prompt = input_prompt + f'{system_name}: {element["content"]}'
-            input_prompt = re.sub(r'\n{3,}', Endtoken, input_prompt)
-            input_prompt_stm = input_prompt_stm + f'{system_name}:{element["content"]}'
-            input_prompt_stm = re.sub(r'\n{3,}', Endtoken, input_prompt_stm)
-            if not input_prompt_stm.endswith(Endtoken):
-                input_prompt_stm += Endtoken
-            if not input_prompt.endswith(Endtoken):
-                input_prompt += Endtoken
-        elif element['role'] == 'rag':
-            input_prompt = input_prompt + f'{system_name}: {element["content"]}'
-            input_prompt = re.sub(r'\n{3,}', Endtoken, input_prompt)
+        input_prompt += GetTemplate(element["role"],element["content"],Endtoken,engine1.templatemode)
+        input_prompt_stm += GetTemplate(element["role"],element["content"],Endtoken,engine1.templatemode)
+        # if element['role'] == 'user':
+        #     input_prompt = input_prompt + f'{user_name}: {element["content"]}'
+        #     input_prompt = re.sub(r'\n{3,}', Endtoken, input_prompt)
+        #     input_prompt_stm = input_prompt_stm + f'{user_name}: {element["content"]}'
+        #     input_prompt_stm = re.sub(r'\n{3,}', Endtoken, input_prompt_stm)
+        #     if not input_prompt_stm.endswith(Endtoken):
+        #         input_prompt_stm += Endtoken
+        #     if not input_prompt.endswith(Endtoken):
+        #         input_prompt += Endtoken
+        # elif element['role'] == 'assistant':
+        #     input_prompt = input_prompt + f'{assistant_name}:{element["content"]}'
+        #     input_prompt = re.sub(r'\n{3,}', Endtoken, input_prompt)
+        #     input_prompt_stm = input_prompt_stm + f'{assistant_name}:{element["content"]}'
+        #     input_prompt_stm = re.sub(r'\n{3,}', Endtoken, input_prompt_stm)
+        #     if not input_prompt_stm.endswith(Endtoken):
+        #         input_prompt_stm += Endtoken
+        #     if not input_prompt.endswith(Endtoken):
+        #         input_prompt += Endtoken
+        # elif element['role'] == 'system':
+        #     input_prompt = input_prompt + f'{system_name}: {element["content"]}'
+        #     input_prompt = re.sub(r'\n{3,}', Endtoken, input_prompt)
+        #     input_prompt_stm = input_prompt_stm + f'{system_name}:{element["content"]}'
+        #     input_prompt_stm = re.sub(r'\n{3,}', Endtoken, input_prompt_stm)
+        #     if not input_prompt_stm.endswith(Endtoken):
+        #         input_prompt_stm += Endtoken
+        #     if not input_prompt.endswith(Endtoken):
+        #         input_prompt += Endtoken
+        # elif element['role'] == 'rag':
+        #     input_prompt = input_prompt + f'{system_name}: {element["content"]}'
+        #     input_prompt = re.sub(r'\n{3,}', Endtoken, input_prompt)
 
-            if delete_ragprompt == False:
-                input_prompt_stm = input_prompt_stm + f'{system_name}:{element["content"]}'
-                input_prompt_stm = re.sub(r'\n{3,}', Endtoken, input_prompt_stm)
-                if not input_prompt_stm.endswith(Endtoken):
-                    input_prompt_stm += Endtoken
+        #     if delete_ragprompt == False:
+        #         input_prompt_stm = input_prompt_stm + f'{system_name}:{element["content"]}'
+        #         input_prompt_stm = re.sub(r'\n{3,}', Endtoken, input_prompt_stm)
+        #         if not input_prompt_stm.endswith(Endtoken):
+        #             input_prompt_stm += Endtoken
 
-            if not input_prompt.endswith(Endtoken):
-                input_prompt += Endtoken
+        #     if not input_prompt.endswith(Endtoken):
+        #         input_prompt += Endtoken
 
     input_prompt_b = input_prompt
     input_prompt_stm_b = input_prompt_stm
@@ -596,49 +607,51 @@ async def rwkv_completions(request: Request):
 
     last_two_elements = messages[-minimum_gen_count:]
     for element in last_two_elements:
-        if element['role'] == 'user':
-            input_prompt = input_prompt + f'{user_name}: {element["content"]}'
-            input_prompt = re.sub(r'\n{3,}', Endtoken, input_prompt)
-            if not input_prompt.endswith(Endtoken):
-                    input_prompt += Endtoken
-            input_prompt_stm = input_prompt_stm + f'{user_name}: {element["content"]}'
-            input_prompt_stm = re.sub(r'\n{3,}', Endtoken, input_prompt_stm)
-            if not input_prompt_stm.endswith(Endtoken):
-                input_prompt_stm += Endtoken
-        elif element['role'] == 'assistant':
-            input_prompt = input_prompt + f'{assistant_name}:{element["content"]}'
-            input_prompt = re.sub(r'\n{3,}', Endtoken, input_prompt)
-            if not input_prompt.endswith(Endtoken):
-                    input_prompt += Endtoken
-            input_prompt_stm = input_prompt_stm + f'{assistant_name}:{element["content"]}'
-            input_prompt_stm = re.sub(r'\n{3,}', Endtoken, input_prompt_stm)
-            if not input_prompt_stm.endswith(Endtoken):
-                input_prompt_stm += Endtoken
-        elif element['role'] == 'system':
-            input_prompt = input_prompt + f'{system_name}: {element["content"]}'
-            input_prompt = re.sub(r'\n{3,}', Endtoken, input_prompt)
-            if not input_prompt.endswith(Endtoken):
-                    input_prompt += Endtoken
-            input_prompt_stm = input_prompt_stm + f'{system_name}:{element["content"]}'
-            input_prompt_stm = re.sub(r'\n{3,}', Endtoken, input_prompt_stm)
-            if not input_prompt_stm.endswith(Endtoken):
-                input_prompt_stm += Endtoken
+        input_prompt += GetTemplate(element["role"],element["content"],Endtoken,engine1.templatemode)
+        input_prompt_stm += GetTemplate(element["role"],element["content"],Endtoken,engine1.templatemode)
+    #     if element['role'] == 'user':
+    #         input_prompt = input_prompt + f'{user_name}: {element["content"]}'
+    #         input_prompt = re.sub(r'\n{3,}', Endtoken, input_prompt)
+    #         if not input_prompt.endswith(Endtoken):
+    #                 input_prompt += Endtoken
+    #         input_prompt_stm = input_prompt_stm + f'{user_name}: {element["content"]}'
+    #         input_prompt_stm = re.sub(r'\n{3,}', Endtoken, input_prompt_stm)
+    #         if not input_prompt_stm.endswith(Endtoken):
+    #             input_prompt_stm += Endtoken
+    #     elif element['role'] == 'assistant':
+    #         input_prompt = input_prompt + f'{assistant_name}:{element["content"]}'
+    #         input_prompt = re.sub(r'\n{3,}', Endtoken, input_prompt)
+    #         if not input_prompt.endswith(Endtoken):
+    #                 input_prompt += Endtoken
+    #         input_prompt_stm = input_prompt_stm + f'{assistant_name}:{element["content"]}'
+    #         input_prompt_stm = re.sub(r'\n{3,}', Endtoken, input_prompt_stm)
+    #         if not input_prompt_stm.endswith(Endtoken):
+    #             input_prompt_stm += Endtoken
+    #     elif element['role'] == 'system':
+    #         input_prompt = input_prompt + f'{system_name}: {element["content"]}'
+    #         input_prompt = re.sub(r'\n{3,}', Endtoken, input_prompt)
+    #         if not input_prompt.endswith(Endtoken):
+    #                 input_prompt += Endtoken
+    #         input_prompt_stm = input_prompt_stm + f'{system_name}:{element["content"]}'
+    #         input_prompt_stm = re.sub(r'\n{3,}', Endtoken, input_prompt_stm)
+    #         if not input_prompt_stm.endswith(Endtoken):
+    #             input_prompt_stm += Endtoken
 
-        elif element['role'] == 'rag':
-            input_prompt = input_prompt + f'{system_name}: {element["content"]}'
-            input_prompt = re.sub(r'\n{3,}', Endtoken, input_prompt)
+    #     elif element['role'] == 'rag':
+    #         input_prompt = input_prompt + f'{system_name}: {element["content"]}'
+    #         input_prompt = re.sub(r'\n{3,}', Endtoken, input_prompt)
 
-            if delete_ragprompt == False:
-                input_prompt_stm = input_prompt_stm + f'{system_name}:{element["content"]}'
-                input_prompt_stm = re.sub(r'\n{3,}', Endtoken, input_prompt_stm)
-                if not input_prompt_stm.endswith(Endtoken):
-                    input_prompt_stm += Endtoken
+    #         if delete_ragprompt == False:
+    #             input_prompt_stm = input_prompt_stm + f'{system_name}:{element["content"]}'
+    #             input_prompt_stm = re.sub(r'\n{3,}', Endtoken, input_prompt_stm)
+    #             if not input_prompt_stm.endswith(Endtoken):
+    #                 input_prompt_stm += Endtoken
 
-            if not input_prompt.endswith(Endtoken):
-                input_prompt += Endtoken
+    #         if not input_prompt.endswith(Endtoken):
+    #             input_prompt += Endtoken
 
-    input_prompt = input_prompt + f'{assistant_name}:'
-    input_prompt_stm = input_prompt_stm + f'{assistant_name}:'
+    input_prompt += GetTemplate('assistant',None,Endtoken,engine1.templatemode)
+    input_prompt_stm += GetTemplate('assistant',None,Endtoken,engine1.templatemode)
 
     models2 = [ModelList[0]]
     models2[0]['filename'] = ""

@@ -31,7 +31,7 @@ curl http://127.0.0.1:9000/healthcheck
 
 #curl http://127.0.0.1:9000/loadmodel -X POST -H "Content-Type: application/json" -d '{"model_filename":"/home/client/Projects/RWKV-LM-RLHF/main/myfolder/converted/x060-upgraded.pth","model_viewname":"RWKV x070 7B Inference Test Model","model_strategy":"fp8","adapter_filename":"/home/client/Projects/RWKV-LM-RLHF/main/myfolder/Outputs/x070-7b-cje/rwkv-14.pth","adapter_mode":"bone","endtoken":"\\n\\n\\x17"}'
 
-curl http://127.0.0.1:9000/loadmodel -X POST -H "Content-Type: application/json" -d '{"model_filename":"models/ARWKV-7B-Preview-0.1.pth","model_viewname":"ARWKV-7B-Preview 0.1","model_strategy":"fp8","endtoken":"\\n\\n\\x17"}'
+curl http://127.0.0.1:9000/loadmodel -X POST -H "Content-Type: application/json" -d '{"model_filename":"models/ARWKV-7B-Preview-0.1.pth","model_viewname":"ARWKV-7B-Preview 0.1","model_strategy":"fp8"}'
 
 
 
