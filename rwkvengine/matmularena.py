@@ -106,6 +106,7 @@ def hybrid_matmul(a:torch.Tensor,b:torch.Tensor):
                     
                 S0=xg.shape[0]
                 if xg.dtype != torch.float8_e4m3fn:
+                    xg=xg / 2
                     xg = torch.clamp(xg, min=-448.0, max=448.0) # for avoid NaN
                 #in torch2.5+ deleted absmax 
                 x = torch._scaled_mm(
@@ -113,8 +114,8 @@ def hybrid_matmul(a:torch.Tensor,b:torch.Tensor):
                     b.t(),
                     bias=None,
                     out_dtype=a.dtype,
-                    scale_a=torch.tensor(1.0, device='cuda'),
-                    scale_b=torch.tensor(1.0, device='cuda')
+                    scale_a=torch.tensor(2.0, device='cuda'),
+                    scale_b=torch.tensor(2.0, device='cuda')
                 )
                 #x.requires_grad = False
                 return x.view(S0, -1)

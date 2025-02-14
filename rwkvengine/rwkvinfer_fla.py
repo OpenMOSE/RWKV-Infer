@@ -37,7 +37,7 @@ class Prompt:
     id: int = -1
     prompts: str = ''
     status: PromptStatus = 3
-    result: Optional[str] = None
+    result: List[str] = field(default_factory=list) #Optional[str] = None
     maxtokens: int = 256
     temperature: float = 1.0
     top_p: float = 0.3
@@ -74,7 +74,8 @@ class PromptQueue:
 
     def update_prompt(self, prompt_id: int,
                       status: PromptStatus,
-                      result: Optional[str] = None, 
+                      result: Optional[List[str]] = None,
+                      #result: Optional[str] = None, 
                       wkv_state : Optional[torch.Tensor]=None,
                       shift_state : Optional[torch.Tensor]=None, 
                        
@@ -214,7 +215,7 @@ class LLMWorker:
                     'use_state_tuned':'None',
                     'wkv_states' : None,
                     'shift_states' : None,
-                    'output':'',
+                    'output':[],#'',
                     'currenttoken':None,
                     'currenttokencount': 0,
                     }
@@ -261,9 +262,11 @@ class LLMWorker:
         Artifact2 = TextProcessor(target='</RWKVArtifact')
         while True:
             output = prompt_queue.prompts[queue_id].result
-           # print(output)
+      
 
             if output is not None:
+                output = ''.join(output)
+                output = output.lstrip(' ')
                 if len(output) > 0:
                     if len(currenttoken) < len(output):
                         splittext = output[len(currenttoken):]
@@ -278,7 +281,11 @@ class LLMWorker:
                         if tag2 is not None:
                             splittext = f'\n```' + splittext
                         currenttoken = output
-                        yield splittext, None, None
+                        if len(output.strip()) == 0:
+                            print('space skipped.')
+                            yield "", None, None
+                        else:
+                            yield splittext, None, None
 
 
             if prompt_queue.prompts[queue_id].status == PromptStatus.COMPLETED or prompt_queue.prompts[queue_id].status == PromptStatus.FAILED:
@@ -336,7 +343,7 @@ class LLMWorker:
                                 'current_prob' : None,
                                 'input_logits' : [],
                                 'input_logits_record' : prompt.input_logits_record,
-                                'output':'',
+                                'output':[],
                                 'out_tokens':[],
                                 'out_last':0,
                                 'currenttoken':self.pipeline.encode(''),
@@ -365,7 +372,7 @@ class LLMWorker:
 
                     
             
-            await asyncio.sleep(0.1) # Everyone 10ms loop
+            await asyncio.sleep(0.01) # Everyone 10ms loop
 
 
     async def RunLLM(self):
@@ -736,7 +743,14 @@ class LLMWorker:
                                         #if j == 0:
                                         #    print(tmp,end="", flush=True)
                                         #print(tmp,end="", flush=True)
-                                        outputs[j] = outputs[j] + tmp
+
+
+                                        #outputs[j] = outputs[j] + tmp
+
+                                        outputs[j].append(tmp)
+
+
+
                                         out_last[j] = counts[j] + 1
                                 #print(f'outtokens = {len(out_tokens[j])}')
                                 #print(f'{int(counts[j])} {max_tokens[j]}')
@@ -762,7 +776,13 @@ class LLMWorker:
                                         exit_flag = True
                                 if exit_flag:
                                     statuss[j] = 'idle'
-                                    outputs[j] = outputs[j] + tmp
+
+
+                                    #outputs[j] = outputs[j] + tmp
+                                    outputs[j].append(tmp)
+
+
+
                                     print(f'batch {j} is finished cause got endtoken')
                                     #print(outputs[j])
 
@@ -773,7 +793,7 @@ class LLMWorker:
                                 #print(f'tried tokenize {out_tokens[j][out_last[j]:]}')
                                 #print(f'tried tokenize {out_tokens[j]}')
                                 #tmp = ''
-                                outputs[j] = outputs[j] #+ tmp
+                                #outputs[j] = outputs[j] #+ tmp
                                 #out_last[j] = counts[j] + 1
                                 pass
 

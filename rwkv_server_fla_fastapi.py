@@ -31,8 +31,8 @@ parser.add_argument("--debug", default=True, type=bool)
 parser.add_argument("--workers", default=64, type=int)
 parser.add_argument("--mrssmax", default=4, type=int) #If workers 8, mrssmax 4, maximum batch inference = 8 * (4 + 1) = 40
 
-parser.add_argument("--dynamic_state_cache_size", default=4, type=int)  # for 14B need 16GB of PC RAM
-parser.add_argument("--dynamic_state_cache_store", default='gpu', type=str) #if gpu need more vram for storing state 
+parser.add_argument("--dynamic_state_cache_size", default=512, type=int)  # for 14B need 16GB of PC RAM
+parser.add_argument("--dynamic_state_cache_store", default='cpu', type=str) #if gpu need more vram for storing state 
 
 parser.add_argument("--admin_key1", default='123874139713915425423541', type=str) 
 parser.add_argument("--admin_key2", default='d46871245412541544408014', type=str) 
@@ -67,10 +67,11 @@ def move_tensors_to_gpu(state):
 def add_to_dynamic_state_list(text_prompt,target_state_filename,raw_state,raw_state2):
     global DynamicStateList
     global DynamicStateList_lock
+    print([text_prompt])
     with DynamicStateList_lock:
         if len(DynamicStateList) >= args.dynamic_state_cache_size:
             DynamicStateList.pop(0)  # 先頭の要素を削除
-        text_prompt = re.sub(r'\n{3,}', '\n\n', text_prompt)
+        #text_prompt = re.sub(r'\n{3,}', '\n\n', text_prompt)
         if args.debug == True:
             print(f'Added DynamicStateList a = {len(text_prompt)} ')
         if args.dynamic_state_cache_store == 'cpu': #copy.deepcopy
@@ -88,33 +89,28 @@ def search_dynamic_state_list(inputprompt,state_filename):
     if args.debug == True:
         print('Search Dynamic State List')
         print(f'statefile={state_filename}')
-    inputprompt = re.sub(r'\n{3,}', '\n\n', inputprompt)
+    #inputprompt = re.sub(r'\n{3,}', '\n\n', inputprompt)
     raw_state = None
     raw_state2 = None
     target_state_filename = None
     text_prompt = None
     global DynamicStateList
     global DynamicStateList_lock
-    with DynamicStateList_lock:
-        for DynamicState in DynamicStateList:
-            text_prompt = DynamicState['text_prompt']
-            target_state_filename = DynamicState['target_state_filename']
-            if args.debug:
-                print('--------------------------------------------------------------')
-                print(f'text_prompt {text_prompt[-100:]}')
-                print('--------------------------------------------------------------')
-                print(f'inputprompt {inputprompt[-100:]}')
-                print('--------------------------------------------------------------')
-                print(f'a = {len(text_prompt)} b = {len(inputprompt)} state_filename = {state_filename} target = {target_state_filename}')
-            if text_prompt == inputprompt and state_filename == target_state_filename:
-                raw_state = DynamicState['raw_state']
-                raw_state2 = DynamicState['raw_state2']
-                if args.dynamic_state_cache_store == 'cpu':
-                    raw_state = move_tensors_to_gpu(raw_state)
-                    raw_state2 = move_tensors_to_gpu(raw_state2)
-                if args.debug == True:
-                    print(f'Dynamic State Cache Found!')
-                break
+    if len(inputprompt) > 0:
+        with DynamicStateList_lock:
+            for DynamicState in DynamicStateList:
+                text_prompt = DynamicState['text_prompt']
+                target_state_filename = DynamicState['target_state_filename']
+                #print(f'a = {len(text_prompt)} b = {len(inputprompt)} state_filename = {state_filename} target = {target_state_filename}')
+                if text_prompt == inputprompt and state_filename == target_state_filename:
+                    raw_state = DynamicState['raw_state']
+                    raw_state2 = DynamicState['raw_state2']
+                    if args.dynamic_state_cache_store == 'cpu':
+                        raw_state = move_tensors_to_gpu(raw_state)
+                        raw_state2 = move_tensors_to_gpu(raw_state2)
+                    if args.debug == True:
+                        print(f'Dynamic State Cache Found!')
+                    break
     if raw_state is not None:
         #print(raw_state)
         return copy.deepcopy(raw_state), copy.deepcopy(raw_state2)
@@ -532,137 +528,34 @@ async def rwkv_completions(request: Request):
 
 
     max_tokens = params.get('max_tokens', 1000)  
-    #top_p = params.get('top_p', 0.3)
-    #temperature = params.get('temperature', 1.0)
+
     presence_penalty = params.get('presence_penalty', 0.3)
     frequency_penalty = params.get('frequency_penalty', 0.3)
     penalty_decay = params.get('penalty_decay', 0.996)
-    #stop = [Endtoken] #params.get('stop', [Endtoken])
 
     max_tokens = data.get('max_tokens',max_tokens)
     if max_tokens > 8192:
         max_tokens = 8192
-    #top_p = data.get('top_p',top_p)
-    #temperature = data.get('temperature',temperature)
+
     presence_penalty = data.get('presence_penalty',presence_penalty)
     frequency_penalty = data.get('frequency_penalty',frequency_penalty)
     penalty_decay = data.get('penalty_decay',penalty_decay)
     stop = data.get('stop',Endtoken)
     stop = [stop]
 
-    input_prompt = ""
+    input_prompt = []
     input_prompt_stm = ""
-    for element in messages[:-minimum_gen_count]:
-        input_prompt += GetTemplate(element["role"],element["content"],Endtoken,engine1.templatemode)
-        input_prompt_stm += GetTemplate(element["role"],element["content"],Endtoken,engine1.templatemode)
-        # if element['role'] == 'user':
-        #     input_prompt = input_prompt + f'{user_name}: {element["content"]}'
-        #     input_prompt = re.sub(r'\n{3,}', Endtoken, input_prompt)
-        #     input_prompt_stm = input_prompt_stm + f'{user_name}: {element["content"]}'
-        #     input_prompt_stm = re.sub(r'\n{3,}', Endtoken, input_prompt_stm)
-        #     if not input_prompt_stm.endswith(Endtoken):
-        #         input_prompt_stm += Endtoken
-        #     if not input_prompt.endswith(Endtoken):
-        #         input_prompt += Endtoken
-        # elif element['role'] == 'assistant':
-        #     input_prompt = input_prompt + f'{assistant_name}:{element["content"]}'
-        #     input_prompt = re.sub(r'\n{3,}', Endtoken, input_prompt)
-        #     input_prompt_stm = input_prompt_stm + f'{assistant_name}:{element["content"]}'
-        #     input_prompt_stm = re.sub(r'\n{3,}', Endtoken, input_prompt_stm)
-        #     if not input_prompt_stm.endswith(Endtoken):
-        #         input_prompt_stm += Endtoken
-        #     if not input_prompt.endswith(Endtoken):
-        #         input_prompt += Endtoken
-        # elif element['role'] == 'system':
-        #     input_prompt = input_prompt + f'{system_name}: {element["content"]}'
-        #     input_prompt = re.sub(r'\n{3,}', Endtoken, input_prompt)
-        #     input_prompt_stm = input_prompt_stm + f'{system_name}:{element["content"]}'
-        #     input_prompt_stm = re.sub(r'\n{3,}', Endtoken, input_prompt_stm)
-        #     if not input_prompt_stm.endswith(Endtoken):
-        #         input_prompt_stm += Endtoken
-        #     if not input_prompt.endswith(Endtoken):
-        #         input_prompt += Endtoken
-        # elif element['role'] == 'rag':
-        #     input_prompt = input_prompt + f'{system_name}: {element["content"]}'
-        #     input_prompt = re.sub(r'\n{3,}', Endtoken, input_prompt)
+    for element in messages:
+        input_prompt.append(GetTemplate(element["role"],element["content"],Endtoken,engine1.templatemode))
+    input_prompt.append(GetTemplate('assistant',None,Endtoken,engine1.templatemode))
 
-        #     if delete_ragprompt == False:
-        #         input_prompt_stm = input_prompt_stm + f'{system_name}:{element["content"]}'
-        #         input_prompt_stm = re.sub(r'\n{3,}', Endtoken, input_prompt_stm)
-        #         if not input_prompt_stm.endswith(Endtoken):
-        #             input_prompt_stm += Endtoken
-
-        #     if not input_prompt.endswith(Endtoken):
-        #         input_prompt += Endtoken
-
-    input_prompt_b = input_prompt
-    input_prompt_stm_b = input_prompt_stm
-
-    if args.debug:
-        print(f'minimum_gen_count = {minimum_gen_count} delete_ragprompt = {delete_ragprompt}')
-
-    last_element = messages[-minimum_gen_count]
-    input_prompt = ""
-    input_prompt_stm = ""
-
-    last_two_elements = messages[-minimum_gen_count:]
-    for element in last_two_elements:
-        input_prompt += GetTemplate(element["role"],element["content"],Endtoken,engine1.templatemode)
-        input_prompt_stm += GetTemplate(element["role"],element["content"],Endtoken,engine1.templatemode)
-    #     if element['role'] == 'user':
-    #         input_prompt = input_prompt + f'{user_name}: {element["content"]}'
-    #         input_prompt = re.sub(r'\n{3,}', Endtoken, input_prompt)
-    #         if not input_prompt.endswith(Endtoken):
-    #                 input_prompt += Endtoken
-    #         input_prompt_stm = input_prompt_stm + f'{user_name}: {element["content"]}'
-    #         input_prompt_stm = re.sub(r'\n{3,}', Endtoken, input_prompt_stm)
-    #         if not input_prompt_stm.endswith(Endtoken):
-    #             input_prompt_stm += Endtoken
-    #     elif element['role'] == 'assistant':
-    #         input_prompt = input_prompt + f'{assistant_name}:{element["content"]}'
-    #         input_prompt = re.sub(r'\n{3,}', Endtoken, input_prompt)
-    #         if not input_prompt.endswith(Endtoken):
-    #                 input_prompt += Endtoken
-    #         input_prompt_stm = input_prompt_stm + f'{assistant_name}:{element["content"]}'
-    #         input_prompt_stm = re.sub(r'\n{3,}', Endtoken, input_prompt_stm)
-    #         if not input_prompt_stm.endswith(Endtoken):
-    #             input_prompt_stm += Endtoken
-    #     elif element['role'] == 'system':
-    #         input_prompt = input_prompt + f'{system_name}: {element["content"]}'
-    #         input_prompt = re.sub(r'\n{3,}', Endtoken, input_prompt)
-    #         if not input_prompt.endswith(Endtoken):
-    #                 input_prompt += Endtoken
-    #         input_prompt_stm = input_prompt_stm + f'{system_name}:{element["content"]}'
-    #         input_prompt_stm = re.sub(r'\n{3,}', Endtoken, input_prompt_stm)
-    #         if not input_prompt_stm.endswith(Endtoken):
-    #             input_prompt_stm += Endtoken
-
-    #     elif element['role'] == 'rag':
-    #         input_prompt = input_prompt + f'{system_name}: {element["content"]}'
-    #         input_prompt = re.sub(r'\n{3,}', Endtoken, input_prompt)
-
-    #         if delete_ragprompt == False:
-    #             input_prompt_stm = input_prompt_stm + f'{system_name}:{element["content"]}'
-    #             input_prompt_stm = re.sub(r'\n{3,}', Endtoken, input_prompt_stm)
-    #             if not input_prompt_stm.endswith(Endtoken):
-    #                 input_prompt_stm += Endtoken
-
-    #         if not input_prompt.endswith(Endtoken):
-    #             input_prompt += Endtoken
-
-    input_prompt += GetTemplate('assistant',None,Endtoken,engine1.templatemode)
-    input_prompt_stm += GetTemplate('assistant',None,Endtoken,engine1.templatemode)
+    print(input_prompt)
+  
 
     models2 = [ModelList[0]]
     models2[0]['filename'] = ""
     models2[0]['state_tensor'] = None
-    # StateList.append({"state_filename":state_filenames,
-    #                        "state_viewname":state_viewname,
-    #                        'state_tensor':state_tensor_wkvs,
-    #                        'contain_originalstate':contain_originalstate,
-    #                        'state_gatingweight':state_gatingweight,
-    #                        'mrssmode':True,
-    #                        })
+
     for State in StateList:
         models2.append({"object":"models",
                         "id":f"{ModelList[0]['id']} {State['state_viewname']}",
@@ -723,16 +616,24 @@ async def rwkv_completions(request: Request):
 
 
     QueryDatas = Prompt()
+    searchtext = ''
+    for tx in input_prompt[:-2]:
+        searchtext += tx
 
-    wkv_state,shift_state = search_dynamic_state_list(input_prompt_stm_b,target_state_filename)
-    StateCacheMode = False
+
+    wkv_state,shift_state = search_dynamic_state_list(searchtext,target_state_filename)
+
+
+    
+
+ 
     if wkv_state is not None and shift_state is not None:
         if args.debug:
             print('resume state detected.')
         QueryDatas.base_state_tuned = target_state_filename
         QueryDatas.use_exist_state_wkv = wkv_state#copy.deepcopy(wkv_state)
         QueryDatas.use_exist_state_shift = shift_state#copy.deepcopy(shift_state)
-        StateCacheMode = True
+ 
         if mrssmode:
             QueryDatas.use_mrss = True
             QueryDatas.use_contain_originalstate = contain_originalstate
@@ -752,10 +653,12 @@ async def rwkv_completions(request: Request):
                 QueryDatas.fixed_state_count = len(target_state_tensor_wkv)
                 print(f'MRSS GatingParam = {QueryDatas.mrss_gating_param}')
 
-        input_prompt = input_prompt_b + input_prompt
-        input_prompt_stm = input_prompt_stm_b + input_prompt_stm 
 
-    QueryDatas.prompts = input_prompt
+    prompttext = ''
+    for tx in input_prompt:
+        prompttext += tx
+
+    QueryDatas.prompts = prompttext
     QueryDatas.maxtokens = max_tokens
     QueryDatas.temperature = temperature
     QueryDatas.top_p = top_p
@@ -784,7 +687,7 @@ async def rwkv_completions(request: Request):
         totaltext = ''
         wkv_state = None
         shift_state = None
-        print(f'QueryDatas = {QueryDatas}')
+        
         try:
             async for response_chunk, d1, d2 in engine1.FLAGenerate(QueryDatas):
                     if d1 is not None:
@@ -811,10 +714,12 @@ async def rwkv_completions(request: Request):
         except StopAsyncIteration:
             if args.debug:
                 print('Stop Async Iteration detected.')
-            if StateCacheMode:
-                output_prompt = input_prompt_stm_b + input_prompt_stm + totaltext
-            else:
-                output_prompt = input_prompt_stm + totaltext
+          
+            output_prompt = ''
+            for tx in input_prompt[:-1]:
+                output_prompt += tx
+            output_prompt += GetTemplate('assistant',totaltext,Endtoken,engine1.templatemode)
+
             add_to_dynamic_state_list(output_prompt,target_state_filename,wkv_state,shift_state)
             response_data = [
                 "[DONE]"
@@ -827,10 +732,12 @@ async def rwkv_completions(request: Request):
         finally:
             if args.debug:
                 print('Stop Async Iteration detected.')
-            if StateCacheMode:
-                output_prompt = input_prompt_stm_b + input_prompt_stm + totaltext
-            else:
-                output_prompt = input_prompt_stm + totaltext
+   
+            output_prompt = ''
+            for tx in input_prompt[:-1]:
+                output_prompt += tx
+            output_prompt += GetTemplate('assistant',totaltext,Endtoken,engine1.templatemode)
+
             if wkv_state is not None and shift_state is not None:
                 add_to_dynamic_state_list(output_prompt,target_state_filename,wkv_state,shift_state)
             response_data = [
@@ -863,10 +770,14 @@ async def rwkv_completions(request: Request):
         if args.debug:
             print(f'Non Stream: {OutputText}')
 
-        if StateCacheMode:
-            output_prompt = input_prompt_stm_b + input_prompt_stm + OutputText
-        else:
-            output_prompt = input_prompt_stm + OutputText
+        # if StateCacheMode:
+        #     output_prompt = input_prompt_stm_b + input_prompt_stm + OutputText
+        # else:
+        #     output_prompt = input_prompt_stm + OutputText
+        output_prompt = ''
+        for tx in input_prompt[:-1]:
+            output_prompt += tx
+        output_prompt += GetTemplate('assistant',OutputText,Endtoken,engine1.templatemode)
 
         if wkv_state is not None and shift_state is not None:
                 add_to_dynamic_state_list(output_prompt,target_state_filename,wkv_state,shift_state)

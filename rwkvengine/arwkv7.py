@@ -70,8 +70,9 @@ class Qwen2RMSNorm(nn.Module):
         variance = hidden_states.pow(2).mean(-1, keepdim=True)
         hidden_states = hidden_states * torch.rsqrt(variance + self.variance_epsilon)
         return self.weight * hidden_states.to(input_dtype)
-    @torch.compile
-    def independent_forward(hidden_states,weight,variance_epsilon=1e-6):
+    #@torch.compile
+    @MyStatic
+    def independent_forward(hidden_states,weight,variance_epsilon:float=1e-6):
         input_dtype = hidden_states.dtype
         hidden_states = hidden_states.to(torch.float32)
         variance = hidden_states.pow(2).mean(-1, keepdim=True)
@@ -254,7 +255,6 @@ class ARWKV_7(nn.Module):
         step1 = F.silu(hybrid_matmul(x,gate_)) * hybrid_matmul(x,up_)
         return hybrid_matmul(step1,down_)
     
-    #@torch.compile
     def ax070_forward_seq(self, idx, last_shift_states: List[torch.Tensor],
                 last_wkv_states: List[torch.Tensor],  full_output:bool=False, KernelMode:int=0):
         with torch.no_grad(): 
