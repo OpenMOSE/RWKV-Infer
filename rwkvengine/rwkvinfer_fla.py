@@ -254,38 +254,45 @@ class LLMWorker:
         gc.collect()
         torch.cuda.empty_cache()
 
+
+
     async def FLAGenerate(self,Queues:Prompt):
         global prompt_queue
         queue_id = await prompt_queue.add_prompt(Queues)
         currenttoken = ''
         Artifact = TextProcessor('<RWKVArtifact')
         Artifact2 = TextProcessor(target='</RWKVArtifact')
+        currentoutputcount = 0
+
         while True:
             output = prompt_queue.prompts[queue_id].result
       
 
             if output is not None:
-                output = ''.join(output)
-                output = output.lstrip(' ')
-                if len(output) > 0:
-                    if len(currenttoken) < len(output):
-                        splittext = output[len(currenttoken):]
-                        splittext, tag = Artifact.process_text(splittext)
-                        splittext, tag2 = Artifact2.process_text(splittext)
-                        #print(f'tag = {tag}')
-                        if tag is not None:
-                            print('Artifact Detected. Analyzing')
-                            typestyle = Artifact.get_type_from_artifact(tag)
-                            print(f'gettype = {typestyle}')
-                            splittext = f'```{typestyle}' + splittext
-                        if tag2 is not None:
-                            splittext = f'\n```' + splittext
-                        currenttoken = output
-                        if len(output.strip()) == 0:
-                            print('space skipped.')
-                            yield "", None, None
-                        else:
-                            yield splittext, None, None
+
+                if currentoutputcount < len(output):
+                    currentoutputcount = len(output)
+                    output = ''.join(output)
+                    output = output.lstrip(' ')
+                    if len(output) > 0:
+                        if len(currenttoken) < len(output):
+                            splittext = output[len(currenttoken):]
+                            splittext, tag = Artifact.process_text(splittext)
+                            splittext, tag2 = Artifact2.process_text(splittext)
+                            #print(f'tag = {tag}')
+                            if tag is not None:
+                                print('Artifact Detected. Analyzing')
+                                typestyle = Artifact.get_type_from_artifact(tag)
+                                print(f'gettype = {typestyle}')
+                                splittext = f'```{typestyle}' + splittext
+                            if tag2 is not None:
+                                splittext = f'\n```' + splittext
+                            currenttoken = output
+                            if len(output.strip()) == 0:
+                                print('space skipped.')
+                                yield "", None, None
+                            else:
+                                yield splittext, None, None
 
 
             if prompt_queue.prompts[queue_id].status == PromptStatus.COMPLETED or prompt_queue.prompts[queue_id].status == PromptStatus.FAILED:
@@ -294,11 +301,11 @@ class LLMWorker:
                 break
             if output is not None:
                 if len(output) > 0:
-                    await asyncio.sleep(0.001)
+                    await asyncio.sleep(0.01)
                 else:
-                    await asyncio.sleep(0.1)
+                    await asyncio.sleep(0.01)
             else:
-                await asyncio.sleep(0.1)
+                await asyncio.sleep(0.01)
 
             
 
@@ -475,7 +482,7 @@ class LLMWorker:
                         self.States = self.model.new_state(realbatchcount)
 
                         print(f'{len(prompts)}')
-                        print(prompts)
+                        #print(prompts)
                         for j in range(len(prompts)):
                             for k in range(len(prompts[0])):
                                 tk = prompts[j][k]

@@ -27,7 +27,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 parser = ArgumentParser()
 parser.add_argument("--localhost", default="0.0.0.0", type=str) 
 parser.add_argument("--port", default=9000, type=int) 
-parser.add_argument("--debug", default=True, type=bool) 
+parser.add_argument("--debug", default=False, type=bool) 
 parser.add_argument("--workers", default=64, type=int)
 parser.add_argument("--mrssmax", default=4, type=int) #If workers 8, mrssmax 4, maximum batch inference = 8 * (4 + 1) = 40
 
