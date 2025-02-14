@@ -35,7 +35,6 @@ By combining multiple states, MRSS integrates knowledge from different "experts,
   - FP8 (Experiment. need NVIDIA H100 or Ada series gpu)
   - FP6 (Early Experiment. slightly degradation. toachao fpx e3m2)
   - FP5 (Early Experiment. ppl 10% degradation. toachao fpx e2m2)
-  - Bitsandbytes NF4 (currently slow)
 - **Multi Batch Generation**:
   - True multi batch generation with Flash-Linear-Attention(x060, x070)
   - multi batch sampling
