@@ -203,7 +203,7 @@ class RWKV_x(nn.Module):
         print("keys", keys)
 
 
-
+        self.emboncpu = False
         RWKVMode = 6 #default RWKV 6
 
         self.MoE = 0
@@ -280,7 +280,7 @@ class RWKV_x(nn.Module):
             self.n_head, self.head_size = z['blocks.0.att.r_k'].shape
             print(self.head_size)
             if self.ARWKVMode == 1:
-                z['emb.weight'] = z['emb.weight']
+                z['emb.weight'] = z['emb.weight']#.float() 
             else:
                 z['emb.weight'] = F.layer_norm(z['emb.weight'], (self.n_embd,), weight=z['blocks.0.ln0.weight'], bias=z['blocks.0.ln0.bias'])
 
@@ -362,63 +362,31 @@ class RWKV_x(nn.Module):
 
         QuantList = ['.receptance.weight','.key.weight','.value.weight','.gate.weight','.output.weight','head.weight','.down.weight','up.weight']
         QuantListFP8 = ['att.receptance.weight','att.key.weight','att.value.weight','att.gate.weight','att.output.weight','ffn.key.weight','ffn.receptance.weight','ffn.value.weight','head.weight','ffn.down.weight','ffn.up.weight','ffn.gate.weight'] #, ,
-        QuantListFP6 = ['att.receptance.weight','att.key.weight','att.value.weight','att.gate.weight','att.output.weight','ffn.key.weight','ffn.receptance.weight','ffn.value.weight','ffn.down.weight','ffn.up.weight,','ffn.gate.weight'] #, ,
+        QuantListFP6 = ['att.receptance.weight','att.key.weight','att.value.weight','att.gate.weight','att.output.weight','ffn.key.weight','ffn.receptance.weight','ffn.value.weight','ffn.down.weight','ffn.up.weight','ffn.gate.weight','head.weight'] #, ,
  
-        # 4bit Quantize Mode via Bitsandbytes NF4
-        if self.bit4quant == True:
-            for k in keys:
-
-                if self.ModeMode != 'standard':
-                    z[k] = z[k].to(device='cuda', dtype=torch.bfloat16)
-                    z[k] = Attach_Adapter(keyname=k,weight=z[k],adapter=z_adapter,mode=self.ModeMode,scaling=adapter_scale,device='cuda')
-
-                QuantKeyFound = False
-                for QuantKey in QuantList:
-                    if k.endswith(QuantKey):
-                        print(f'Quant {k} to NF4')
-                        QuantKeyFound = True
-                        z[k] = z[k].to(device='cuda',dtype=torch.bfloat16) 
-                        z[k], z[k+'.qstate']= bnb.functional.quantize_nf4(z[k])
-                        
-
-                if QuantKeyFound == False:
-                    z[k] = z[k].to(device='cuda')
-                    if self.RWKVMode == 6:
-                        if k.endswith('.time_decay'): z[k] = z[k].float()
-                        elif k.endswith('.time_faaaa'): z[k] = z[k].float()
-                        elif k.endswith('.ln1.weight'): z[k] = z[k].to(dtype=torch.bfloat16)
-                        elif k.endswith('.ln1.bias'): z[k] = z[k].to(dtype=torch.bfloat16)
-                        elif k.endswith('.ln2.weight'): z[k] = z[k].to(dtype=torch.bfloat16)
-                        elif k.endswith('.ln2.bias'): z[k] = z[k].to(dtype=torch.bfloat16)
-                        elif k.endswith('.ln_x.weight'): z[k] = z[k].to(dtype=torch.bfloat16)
-                        elif k.endswith('.ln_x.bias'): z[k] = z[k].to(dtype=torch.bfloat16)
-                        elif k.endswith('blocks.0.ln0.weight'): z[k] = z[k].to(dtype=torch.bfloat16)
-                        elif k.endswith('blocks.0.ln0.bias'): z[k] = z[k].to(dtype=torch.bfloat16)
-                        elif k.endswith('ln_out.weight'): z[k] = z[k].to(dtype=torch.bfloat16)
-                        elif k.endswith('ln_out.bias'): z[k] = z[k].to(dtype=torch.bfloat16)
-                        elif k.endswith('emb.weight'): z[k] = z[k].to(dtype=torch.bfloat16)
-                        else:
-                            z[k] = z[k].to(dtype = self.base_precision)
-                    elif self.RWKVMode == 7:
-                        if 'key.weight' in k or 'value.weight' in k or 'receptance.weight' in k or 'output.weight' in k or 'head.weight' in k:
-                            print(f'target = {k} shape = {z[k].shape}')
-                            z[k] = z[k].t()
-                        if k.endswith('att.r_k'): z[k] = z[k].flatten()
-                        z[k] = z[k].squeeze().to(dtype=self.base_precision)
+        
 
         # FP8 Transformer Engine Quantize Mode 
-        elif self.bitfp8quant == True:
+        if self.bitfp8quant == True:
+            emboncpu = True
             for k in keys:
                 print(f' k = {k} shape = {z[k].shape}' )
                 if self.ModeMode != 'standard':
                     z[k] = z[k].to(device='cuda', dtype=torch.bfloat16)
                     z[k] = Attach_Adapter(keyname=k,weight=z[k],adapter=z_adapter,mode=self.ModeMode,scaling=adapter_scale,device='cuda')
 
-                if self.ModeMode != 'standard':
-                    z[k] = z[k].to(device='cuda', dtype=torch.bfloat16)
-                    z[k] = Attach_Adapter(keyname=k,weight=z[k],adapter=z_adapter,mode=self.ModeMode,scaling=adapter_scale,device='cuda')
-
                 QuantKeyFound = False
+
+                if 'emb' in k and emboncpu:
+                    z['emb.weight'] = z['emb.weight'].cpu()
+                    QuantKeyFound = True 
+                    gc.collect()
+                    torch.cuda.empty_cache() 
+                    self.emboncpu = True
+
+
+
+
                 for QuantKey in QuantListFP8:
                     if k.endswith(QuantKey):
                         print(f'Quant {k} to torch.float8_e4m3fn')
@@ -460,15 +428,25 @@ class RWKV_x(nn.Module):
 
         # FP6 Quantize Mode via Torch.AO
         elif self.bitfp6quant == True:
+            emboncpu = True
             if self.bitfp5quant:
                 self.ebits, self.mbits = 2, 2
             else:
                 self.ebits, self.mbits = 3, 2
             for k in keys:
                 if self.ModeMode != 'standard':
-                    z[k] = z[k].to(device='cuda', dtype=torch.bfloat16)
+                    z[k] = z[k].to(device='cuda', dtype=(self.base_precision))
                     z[k] = Attach_Adapter(keyname=k,weight=z[k],adapter=z_adapter,mode=self.ModeMode,scaling=adapter_scale,device='cuda')
                 QuantKeyFound = False
+
+                if 'emb' in k and emboncpu:
+                    z['emb.weight'] = z['emb.weight'].to(self.base_precision).cpu()
+                    QuantKeyFound = True 
+                    gc.collect()
+                    torch.cuda.empty_cache() 
+                    self.emboncpu = True
+
+
                 for QuantKey in QuantListFP6:
                     if k.endswith(QuantKey):
                         if self.bitfp5quant:
@@ -480,13 +458,19 @@ class RWKV_x(nn.Module):
 
                         # pre-process the weight. this will quantize the weight to FP6 and pack it in a special
                         # layout for tensor cores. refer to paper for more details.
-                        z[k], z[k+'.qstate'] = to_scaled_tc_floatx(z[k], self.ebits, self.mbits)
+                        if 'head' in k:
+                            z[k], z[k+'.qstate'] = to_scaled_tc_floatx(z[k].cpu(), self.ebits, self.mbits)
+                            z[k]=z[k].to(device='cuda')
+                            z[k+'.qstate']=z[k+'.qstate'].to(device='cuda')
+                            gc.collect()
+                            torch.cuda.empty_cache() 
+                        else:
+                            z[k], z[k+'.qstate'] = to_scaled_tc_floatx(z[k], self.ebits, self.mbits)
 
                         if self.ExtremeCPUOffload:
                             z[k] = z[k].to(device='cpu')
                             z[k+'.qstate'] = z[k+'.qstate'].to(device='cpu')
 
-                        #z[k], z[k+'.qstate']= bnb.functional.quantize_nf4(z[k])
 
                 if QuantKeyFound == False:
                     for QuantKey in QuantList:
@@ -560,9 +544,17 @@ class RWKV_x(nn.Module):
         if self.RWKVMode == 6:
             for i in range(n_layer):
                 z[f'blocks.{i}.att.time_maa_wkvrg'] = torch.stack([z[f'blocks.{i}.att.time_maa_w'], z[f'blocks.{i}.att.time_maa_k'], z[f'blocks.{i}.att.time_maa_v'], z[f'blocks.{i}.att.time_maa_r'], z[f'blocks.{i}.att.time_maa_g']], dim=0).contiguous()
-
+        # if self.RWKVMode == 7:
+        #     for i in range(n_layer):
+        #         z[f'blocks.{i}.att.time_maa_wkvrg'] = torch.stack([z[f'blocks.{i}.att.x_r'], z[f'blocks.{i}.att.x_w'], z[f'blocks.{i}.att.x_k'], z[f'blocks.{i}.att.x_v'], z[f'blocks.{i}.att.x_a'], z[f'blocks.{i}.att.x_g']], dim=0).contiguous()
+        #         z[f'blocks.{i}.att.x_r'] = None
+        #         z[f'blocks.{i}.att.x_w'] = None
+        #         z[f'blocks.{i}.att.x_k'] = None
+        #         z[f'blocks.{i}.att.x_v'] = None
+        #         z[f'blocks.{i}.att.x_a'] = None
+        #         z[f'blocks.{i}.att.x_g'] = None
         self.z = z
-        self.device = z['emb.weight'].device
+        self.device = z['head.weight'].device
         self.dtype = z['emb.weight'].dtype
 
         if self.ModeMode != 'standard':
@@ -570,10 +562,11 @@ class RWKV_x(nn.Module):
 
         keys = list(z.keys())
         for key in keys:
-            print(f'{key} {z[key].shape}')
-            if ('.bone' in key or '.lora' in key) and 'expert' not in key:
-                z[key] = None
-                print(f'{key} deleted')
+            if z[key] is not None:
+                print(f'{key} {z[key].shape} {z[key].dtype}')
+                if ('.bone' in key or '.lora' in key) and 'expert' not in key:
+                    z[key] = None
+                    print(f'{key} deleted')
 
         
     

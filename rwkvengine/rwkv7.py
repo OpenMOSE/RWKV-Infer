@@ -721,7 +721,13 @@ class RWKV_7(nn.Module):
                 last_wkv_states: List[torch.Tensor],  full_output:bool=False, KernelMode:int=0):
         with torch.no_grad(): 
             z = self.z
-            x = z['emb.weight'][idx]
+
+
+            #x = z['emb.weight'][idx]
+            if self.emboncpu:
+                x = z['emb.weight'][idx.cpu()].to(device=self.device,dtype=self.dtype)
+            else:
+                x = z['emb.weight'][idx]
 
             v_first = torch.empty_like(x)
 

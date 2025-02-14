@@ -997,4 +997,4 @@ class LLMWorker:
 
 
 
-            await asyncio.sleep(0.00001) # Every 1ms
+            await asyncio.sleep(0.0001) # Every 1ms
