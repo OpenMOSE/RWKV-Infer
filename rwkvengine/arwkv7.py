@@ -103,23 +103,22 @@ class ARWKV_7(nn.Module):
     @MyStatic
     def ax070_TimeMix_fla_Step1(layer_id: int, H: int, N: int,
                         x, x_prev, v_first, state,
-
-
                        x_r, x_w, x_k, x_v, x_a, x_g,
-
-
-
                         w0, w1, w2, a0, a1, a2,
                         v0, v1, v2, g1, g2,
                         k_k, k_a, r_k, R_, K_, V_, O_,
+                        gate_enable: bool = True
                         ):
         dtype = x.dtype
         B, T, _ = x.shape  # B, T, H*N
         
         xx = torch.cat([x_prev.unsqueeze(1), x[:, :-1]], dim=1) - x  # (B,T,H*N) 
 
-        xr, xw, xk, xv, xa, xg = x+xx*x_r, x+xx*x_w, x+xx*x_k, x+xx*x_v, x+xx*x_a, x+xx*x_g
 
+        if gate_enable:
+            xr, xw, xk, xv, xa, xg = x+xx*x_r, x+xx*x_w, x+xx*x_k, x+xx*x_v, x+xx*x_a, x+xx*x_g
+        else:
+            xr, xw, xk, xv, xa,xg = x+xx*x_r, x+xx*x_w, x+xx*x_k, x+xx*x_v, x+xx*x_a, torch.tensor(0)
 
 
         r = hybrid_matmul(xr,R_)
@@ -130,7 +129,10 @@ class ARWKV_7(nn.Module):
         v = hybrid_matmul(xv,V_)
 
         a = torch.sigmoid(a0 + (xa @ a1) @ a2)
-        g = torch.sigmoid(xg @ g1) @ g2
+        if gate_enable:
+            g = torch.sigmoid(xg @ g1) @ g2
+        else:
+            g = torch.tensor(1.0) #gabagaba mode
         kk = torch.nn.functional.normalize((k * k_k).view(B,T,H,N), dim=-1, p=2.0).view(B,T,H*N)
         k = k * (1 + (a-1) * k_a)
         if layer_id == 0: v_first = v
@@ -291,6 +293,7 @@ class ARWKV_7(nn.Module):
                                                                             z[att+'w0'], z[att+'w1'], z[att+'w2'], z[att+'a0'], z[att+'a1'], z[att+'a2'], z[att+'v0'], z[att+'v1'], z[att+'v2'],
                                                                             z[att+'g1'], z[att+'g2'], z[att+'k_k'], z[att+'k_a'], z[att+'r_k'],
                                                                             z[att+'receptance.weight'], z[att+'key.weight'], z[att+'value.weight'], z[att+'output.weight'],
+                                                                            self.gate_enable
                                                                             )
                 
                         xx_step2, time_mix_state = ARWKV_7.ax070_TimeMix_fla_Step2(r,w,k,v,aa,bb,time_mix_state,self.fully_fusedrecurrent)

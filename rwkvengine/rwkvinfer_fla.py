@@ -263,6 +263,7 @@ class LLMWorker:
         Artifact = TextProcessor('<RWKVArtifact')
         Artifact2 = TextProcessor(target='</RWKVArtifact')
         currentoutputcount = 0
+        beforecount = 0
 
         while True:
             output = prompt_queue.prompts[queue_id].result
@@ -271,12 +272,16 @@ class LLMWorker:
             if output is not None:
 
                 if currentoutputcount < len(output):
-                    currentoutputcount = len(output)
-                    output = ''.join(output)
-                    output = output.lstrip(' ')
+                    nextcount = len(output)
+                    output = ''.join(output[currentoutputcount:])
+                    currentoutputcount = nextcount
+                    #
+                    if beforecount == 0:
+                        output = output.lstrip(' ')
                     if len(output) > 0:
-                        if len(currenttoken) < len(output):
-                            splittext = output[len(currenttoken):]
+                        #if len(currenttoken) < len(output):
+                            #splittext = output[len(currenttoken):]
+                            splittext = output
                             splittext, tag = Artifact.process_text(splittext)
                             splittext, tag2 = Artifact2.process_text(splittext)
                             #print(f'tag = {tag}')
@@ -287,12 +292,14 @@ class LLMWorker:
                                 splittext = f'```{typestyle}' + splittext
                             if tag2 is not None:
                                 splittext = f'\n```' + splittext
-                            currenttoken = output
-                            if len(output.strip()) == 0:
+                            #currenttoken = output
+                            if len(output.strip()) == 0 and beforecount == 0:
                                 print('space skipped.')
                                 yield "", None, None
                             else:
                                 yield splittext, None, None
+
+                    beforecount = nextcount
 
 
             if prompt_queue.prompts[queue_id].status == PromptStatus.COMPLETED or prompt_queue.prompts[queue_id].status == PromptStatus.FAILED:

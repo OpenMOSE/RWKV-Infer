@@ -206,6 +206,8 @@ class RWKV_x(nn.Module):
         self.emboncpu = False
         RWKVMode = 6 #default RWKV 6
 
+        self.gate_enable = False
+
         self.MoE = 0
         for key in keys:
             if 'blocks.0.att.r_k' in key and RWKVMode != 7:
@@ -215,6 +217,9 @@ class RWKV_x(nn.Module):
             elif 'router' in key and self.MoE != 1:
                 self.MoE = 1
                 print('Shared Mixture of Experts Mode!')
+            elif 'x_g' in key and self.gate_enable != True:
+                self.gate_enable = True
+                print('Gate Enabled')
 
         
         if z_adapter_keys is not None:
@@ -226,6 +231,9 @@ class RWKV_x(nn.Module):
                     self.MoE = 1
                     print('Shared Mixture of Experts Mode!')
                     #exit()
+                elif 'x_g' in key and self.gate_enable != True:
+                    self.gate_enable = True
+                    print('Gate Enabled')
 
 
         ARWKVMode = 0
@@ -287,6 +295,12 @@ class RWKV_x(nn.Module):
             z['blocks.0.att.v0'] = z['blocks.0.att.a0'] # actually ignored
             z['blocks.0.att.v1'] = z['blocks.0.att.a1'] # actually ignored
             z['blocks.0.att.v2'] = z['blocks.0.att.a2'] # actually ignored
+
+            if self.gate_enable == False:
+                for i in range(n_layer):
+                    z[f'blocks.{i}.att.x_g'] = torch.tensor(0)
+                    z[f'blocks.{i}.att.g1'] = torch.tensor(0)
+                    z[f'blocks.{i}.att.g2'] = torch.tensor(0)
         else:
             dim_ffn = z[f"blocks.0.ffn.value.weight"].shape[1]
             print(f'dim_ffn = {dim_ffn}')
@@ -391,6 +405,8 @@ class RWKV_x(nn.Module):
                     if k.endswith(QuantKey):
                         print(f'Quant {k} to torch.float8_e4m3fn')
                         QuantKeyFound = True
+                        amax = z[k].abs().max()
+                        print(f'amax = {float(amax)}')
                         z[k] = z[k].to(device='cuda',dtype=torch.float8_e4m3fn).contiguous() 
                        
                 if QuantKeyFound == False:

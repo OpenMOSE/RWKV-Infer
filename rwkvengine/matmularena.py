@@ -98,24 +98,37 @@ MyCompile = torch.compile()
     
 @MyStatic
 def hybrid_matmul(a:torch.Tensor,b:torch.Tensor):
+    #MatmulScale = 0.5
+    xg = a
+    # 動的スケールの計算（FP8 の最大範囲を使い切る）
+    #max_val = xg.abs().max()
+    #MatmulScale = (448 / max_val).clamp(min=1e-6)  # ゼロ割防止
+    #MatmulScale = (448 / xg.abs().amax(dim=1).mean()).clamp(min=1e-6)
+   # print(float(MatmulScale))
+    MatmulScale = 0.5
+    
     if b.dtype == torch.float8_e4m3fn:
             
-            xg = a
+            
             
             if len(xg.shape) == 2:
                     
                 S0=xg.shape[0]
                 if xg.dtype != torch.float8_e4m3fn:
-                    xg=xg / 2
+                    xg=xg * MatmulScale
                     xg = torch.clamp(xg, min=-448.0, max=448.0) # for avoid NaN
+
+                    maxs = xg.abs().max()
+                    print(f'maxs = {float(maxs)}') 
                 #in torch2.5+ deleted absmax 
                 x = torch._scaled_mm(
                     xg.view(S0,xg.shape[1]).to(torch.float8_e4m3fn).contiguous(),
                     b.t(),
                     bias=None,
                     out_dtype=a.dtype,
-                    scale_a=torch.tensor(2.0, device='cuda'),
-                    scale_b=torch.tensor(2.0, device='cuda')
+                    scale_a=torch.tensor(1/MatmulScale, device='cuda'),
+                    scale_b=torch.tensor(1.0, device='cuda'),
+                    use_fast_accum = True
                 )
                 #x.requires_grad = False
                 return x.view(S0, -1)
@@ -123,9 +136,13 @@ def hybrid_matmul(a:torch.Tensor,b:torch.Tensor):
 
                 S0=xg.shape[0]
                 S1=xg.shape[1]
+                xg=xg * MatmulScale
 
                 #xg = torch.clamp(xg, min=-448.0, max=448.0)#
                 xg = xg.clamp_(min=-448.0, max=448.0)#
+
+                #maxs = xg.abs().max()
+                #print(f'maxs = {float(maxs)}') 
 
                 if not xg.is_contiguous():
                     xg=xg.contiguous()
@@ -137,7 +154,7 @@ def hybrid_matmul(a:torch.Tensor,b:torch.Tensor):
                     b.t(),
                     bias=None,
                     out_dtype=a.dtype,
-                    scale_a=torch.tensor(1.0, device='cuda'),
+                    scale_a=torch.tensor(1/MatmulScale, device='cuda'),
                     scale_b=torch.tensor(1.0, device='cuda'),
                     use_fast_accum = True
                 )

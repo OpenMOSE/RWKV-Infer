@@ -85,8 +85,8 @@ def merge_safetensors(input_dir):
     return merged_weights
 
 def main():
-    input_dir = "/home/client/Projects/ARWKV/ARWKV-7B-Preview-0.1"
-    output_file = "ARWKV-7B-Preview-0.1.pth"
+    input_dir = "/home/client/Projects/ARWKV/ARWKV_7B_R1_16K"
+    output_file = "ARWKV_7B_R1_16K.pth"
     
     try:
         print("safetensorファイルのマージを開始します...")
