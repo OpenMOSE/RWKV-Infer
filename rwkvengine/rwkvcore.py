@@ -464,6 +464,12 @@ class RWKV_x(nn.Module):
                             z[k+'.qstate']=z[k+'.qstate'].to(device='cuda')
                             gc.collect()
                             torch.cuda.empty_cache() 
+                        # elif 'gate.weight' in k or  'up.weight' in k:
+                        #     z[k], z[k+'.qstate'] = to_scaled_tc_floatx(z[k].cpu(), self.ebits, self.mbits)
+                        #     z[k]=z[k].to(device='cuda')
+                        #     z[k+'.qstate']=z[k+'.qstate'].to(device='cuda')
+                        #     gc.collect()
+                        #     torch.cuda.empty_cache() 
                         else:
                             z[k], z[k+'.qstate'] = to_scaled_tc_floatx(z[k], self.ebits, self.mbits)
 

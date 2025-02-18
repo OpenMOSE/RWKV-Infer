@@ -82,7 +82,7 @@ class Qwen2RMSNorm(nn.Module):
     def extra_repr(self):
         return f"{tuple(self.weight.shape)}, eps={self.variance_epsilon}"
     
-#@torch.compile
+@torch.compile
 def fpx_matmul(x,weight,weight_state,ebits:int,mbits:int):
     S0=x.shape[0]
     S1=x.shape[1]
