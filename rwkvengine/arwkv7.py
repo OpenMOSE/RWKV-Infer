@@ -82,6 +82,8 @@ class Qwen2RMSNorm(nn.Module):
     def extra_repr(self):
         return f"{tuple(self.weight.shape)}, eps={self.variance_epsilon}"
     
+
+    
 @torch.compile
 def fpx_matmul(x,weight,weight_state,ebits:int,mbits:int):
     S0=x.shape[0]
@@ -154,7 +156,8 @@ class ARWKV_7(nn.Module):
         B,T,HC = w.shape
         C = state.shape[3]#64
         H = int(HC//C)
-        w=-torch.exp(w)
+        #w=-torch.exp(w)
+        w = -w.float().exp()
         r_,w_,k_,v_,aa_,bb_ = [i.view(B,T,H,C) for i in [r,w,k,v,aa,bb]]
         B,T,_,_ = r_.shape
         if T>128 and FullyFusedMode == False:

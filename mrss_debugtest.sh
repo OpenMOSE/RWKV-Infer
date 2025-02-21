@@ -6,7 +6,7 @@ curl http://127.0.0.1:9000/healthcheck
 
 #curl http://127.0.0.1:9000/loadmodel -X POST -H "Content-Type: application/json" -d '{"model_filename":"/home/client/Projects/RWKV-LM-RLHF/main/myfolder/models/RWKV-x070-World-0.4B-v2.9-20250107-ctx4096.pth","model_viewname":"RWKV x070 0B4 MoLE","model_strategy":"fp8","adapter_filename":"/home/client/Projects/RWKV-LM-RLHF/main/myfolder/Outputs/x070-0B4-moe-cjev4/rwkv-23.pth","adapter_mode":"","endtoken":"\\n\\n"}'
 
-#curl http://127.0.0.1:9000/loadmodel -X POST -H "Content-Type: application/json" -d '{"model_filename":"/home/client/Projects/RWKV-LM-RLHF/main/myfolder/models/RWKV-x070-Potato-0.6B-MoLE-20250208-ctx4096.pth","model_viewname":"RWKV x070 0B4 MoLE","model_strategy":"fp8","adapter_filename":"/home/client/Projects/RWKV-LM-RLHF/main/myfolder/Outputs/x070-0B4-moe-cjev4/rwkv-23.pth","adapter_mode":"","endtoken":"\\n\\n\\x17"}'
+#curl http://127.0.0.1:9000/loadmodel -X POST -H "Content-Type: application/json" -d '{"model_filename":"/home/client/Projects/RWKV-LM-RLHF/main/myfolder/models/RWKV-x070-1.5B-R1-SFT-20250219-ctx32768.pth","model_viewname":"RWKV x070 1B5 R1 Magpie","model_strategy":"fp16","adapter_filename":"/home/client/Projects/RWKV-LM-RLHF/main/myfolder/Outputs/x070-r1-infctx2/rwkv-5.pth","adapter_mode":"","endtoken":"\\n\\n\\x17"}'
 
 #curl http://127.0.0.1:9000/loadmodel -X POST -H "Content-Type: application/json" -d '{"model_filename":"/home/client/Projects/RWKV-LM-RLHF/main/myfolder/models/rwkv-x070-2b9-world-v3-preview-20250210-ctx4k.pth","model_viewname":"RWKV x070 2B9 World v3","model_strategy":"fp8","adapter_filename":"adapters/v7-2b9-cje5.pth","adapter_mode":"","endtoken":"\\n\\n"}'
 

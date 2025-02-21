@@ -228,15 +228,20 @@ class LLMWorker:
 
         
 
-    def LoadModel(self,modelpath,quantize=False,precision='bf16',adapter_model = '',adapter_mode = '',adapter_scale=2.0, fully_fusedrecurrent = True):
+    def LoadModel(self,modelpath,quantize=False,precision='bf16',adapter_model = '',adapter_mode = '',adapter_scale=2.0, fully_fusedrecurrent = True,template_mode=''):
         self.model = None
         gc.collect()
         torch.cuda.empty_cache()
         self.model = RWKV_x(modelpath,base_precision=precision,adapter_model=adapter_model,adapter_mode=adapter_mode,adapter_scale=adapter_scale,fully_fusedrecurrent=fully_fusedrecurrent)
         
         if self.model.ARWKVMode:
-            self.pipeline = PIPELINE('qwen')
-            self.templatemode = 'qwen'
+            if template_mode == 'llmjp':
+                self.pipeline = PIPELINE('qwen')
+                self.templatemode = 'llama'
+            
+            else:
+                self.pipeline = PIPELINE('qwen')
+                self.templatemode = 'qwen'
         else:
             self.pipeline = PIPELINE('world')
             self.templatemode = 'world'

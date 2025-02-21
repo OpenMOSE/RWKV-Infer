@@ -145,6 +145,7 @@ params_base = {
         }
 DefaultEndtoken = '\n\n'
 DefaultEndtoken_qwen = '<|im_end|>'
+DefaultEndtoken_llama = '<|eot_id|>'
 Endtoken = '\n\n'
 
 @app.post("/removemodel")
@@ -200,6 +201,9 @@ async def loadmodel(request: Request):
             params_base['top_p'] = float(default_top_p)
 
 
+        template_mode = data.get('template','world')
+
+
 
         #wrappers[0].load_model(model_filename,model_strategy)
         Quant = False
@@ -248,11 +252,14 @@ async def loadmodel(request: Request):
         StateList = []
         DynamicStateList = []
         
-        engine1.LoadModel(model_filename,Quant,precision,adapter_model=adapter_filename,adapter_mode=adapter_mode,adapter_scale=adapter_scaling,fully_fusedrecurrent=args.fully_fusedrecurrent)
+        engine1.LoadModel(model_filename,Quant,precision,adapter_model=adapter_filename,adapter_mode=adapter_mode,adapter_scale=adapter_scaling,fully_fusedrecurrent=args.fully_fusedrecurrent,template_mode=template_mode)
         if engine1.templatemode == 'world':
             model_endtoken = data.get('endtoken',DefaultEndtoken)
         else:
-            model_endtoken = data.get('endtoken',DefaultEndtoken_qwen)
+            if engine1.templatemode == 'llama':
+                model_endtoken = data.get('endtoken',DefaultEndtoken_llama)
+            else:
+                model_endtoken = data.get('endtoken',DefaultEndtoken_qwen)
 
         Endtoken = model_endtoken.encode().decode('unicode_escape')
 
@@ -546,8 +553,8 @@ async def rwkv_completions(request: Request):
     input_prompt = []
     input_prompt_stm = ""
     for element in messages:
-        input_prompt.append(GetTemplate(element["role"],element["content"],Endtoken,engine1.templatemode))
-    input_prompt.append(GetTemplate('assistant',None,Endtoken,engine1.templatemode))
+        input_prompt.append(GetTemplate(len(input_prompt),element["role"],element["content"],Endtoken,engine1.templatemode))
+    input_prompt.append(GetTemplate(len(input_prompt),'assistant',None,Endtoken,engine1.templatemode))
 
     print(input_prompt)
   
@@ -718,7 +725,7 @@ async def rwkv_completions(request: Request):
             output_prompt = ''
             for tx in input_prompt[:-1]:
                 output_prompt += tx
-            output_prompt += GetTemplate('assistant',totaltext,Endtoken,engine1.templatemode)
+            output_prompt += GetTemplate(999,'assistant',totaltext,Endtoken,engine1.templatemode)
 
             add_to_dynamic_state_list(output_prompt,target_state_filename,wkv_state,shift_state)
             response_data = [
@@ -736,7 +743,7 @@ async def rwkv_completions(request: Request):
             output_prompt = ''
             for tx in input_prompt[:-1]:
                 output_prompt += tx
-            output_prompt += GetTemplate('assistant',totaltext,Endtoken,engine1.templatemode)
+            output_prompt += GetTemplate(999,'assistant',totaltext,Endtoken,engine1.templatemode)
 
             if wkv_state is not None and shift_state is not None:
                 add_to_dynamic_state_list(output_prompt,target_state_filename,wkv_state,shift_state)
@@ -777,7 +784,7 @@ async def rwkv_completions(request: Request):
         output_prompt = ''
         for tx in input_prompt[:-1]:
             output_prompt += tx
-        output_prompt += GetTemplate('assistant',OutputText,Endtoken,engine1.templatemode)
+        output_prompt += GetTemplate(999,'assistant',OutputText,Endtoken,engine1.templatemode)
 
         if wkv_state is not None and shift_state is not None:
                 add_to_dynamic_state_list(output_prompt,target_state_filename,wkv_state,shift_state)
