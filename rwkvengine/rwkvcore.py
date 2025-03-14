@@ -240,6 +240,8 @@ class RWKV_x(nn.Module):
 
             ARWKVMode = 0
 
+            self.ARWKVMLPMode = 0
+
 
             for key in keys:
                 if '.down.weight' in key and ARWKVMode != 1:
@@ -252,6 +254,19 @@ class RWKV_x(nn.Module):
                         ARWKVMode = 1
 
             self.ARWKVMode = ARWKVMode
+
+
+            for key in keys:
+                if '.gate_up.weight' in key and ARWKVMode == 1:
+                    print("ARWKV Phi3.5 MLP Mode")
+                    self.ARWKVMLPMode = 1
+                    break
+            if z_adapter_keys is not None:
+                for key in z_adapter_keys:
+                    if '.gate_up.weight' in key and ARWKVMode == 1:
+                        print("ARWKV Phi3.5 MLP Mode")
+                        self.ARWKVMLPMode = 1
+                        break
 
 
 
@@ -376,9 +391,9 @@ class RWKV_x(nn.Module):
 
 
 
-            QuantList = ['.receptance.weight','.key.weight','.value.weight','.gate.weight','.output.weight','head.weight','.down.weight','up.weight']
-            QuantListFP8 = ['att.receptance.weight','att.key.weight','att.value.weight','att.gate.weight','att.output.weight','ffn.key.weight','ffn.receptance.weight','ffn.value.weight','head.weight','ffn.down.weight','ffn.up.weight','ffn.gate.weight'] #, ,
-            QuantListFP6 = ['att.receptance.weight','att.key.weight','att.value.weight','att.gate.weight','att.output.weight','ffn.key.weight','ffn.receptance.weight','ffn.value.weight','ffn.down.weight','ffn.up.weight','ffn.gate.weight','head.weight'] #, ,
+            QuantList = ['.receptance.weight','.key.weight','.value.weight','.gate.weight','.output.weight','head.weight','.down.weight','up.weight','gate_up.weight']
+            QuantListFP8 = ['att.receptance.weight','att.key.weight','att.value.weight','att.gate.weight','att.output.weight','ffn.key.weight','ffn.receptance.weight','ffn.value.weight','head.weight','ffn.down.weight','ffn.up.weight','ffn.gate.weight','gate_up.weight'] #, ,
+            QuantListFP6 = ['att.receptance.weight','att.key.weight','att.value.weight','att.gate.weight','att.output.weight','ffn.key.weight','ffn.receptance.weight','ffn.value.weight','ffn.down.weight','ffn.up.weight','ffn.gate.weight','gate_up.weight'] #, ,
     
             
 
@@ -578,7 +593,7 @@ class RWKV_x(nn.Module):
             #         z[f'blocks.{i}.att.x_a'] = None
             #         z[f'blocks.{i}.att.x_g'] = None
             self.z = z
-            self.device = z['head.weight'].device
+            self.device = z['blocks.0.att.receptance.weight'].device
             self.dtype = z['emb.weight'].dtype
 
             if self.ModeMode != 'standard':
@@ -652,10 +667,10 @@ class RWKV_x(nn.Module):
                 self.n_embd, dtype=atype, requires_grad=False, device=dev
             ).contiguous()
 
-            self.RWKVMode
+            #self.RWKVMode
             tempstate = state_raw[f"blocks.{i}.att.time_state"]
             #if self.RWKVMode == 6:
-            tempstate=tempstate.transpose(1, 2)
+            #    tempstate=tempstate.transpose(1, 2)
             model_current_statetuned[i * 3 + 1] = (
                 tempstate
                 .to(dtype=torch.float, device=dev)
@@ -672,6 +687,8 @@ class RWKV_x(nn.Module):
         
         for i in range(self.n_layer):
             wkv_states[i] = model_current_statetuned[i*3 + 1]#.permute(0,2,1)
+
+        print(wkv_states)
 
         return wkv_states#.to(dtype=torch.float16)
     

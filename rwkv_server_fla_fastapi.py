@@ -5,7 +5,7 @@
 #Multi Recurrent State Sampling Ver
 import os
 from rwkvengine.rwkvinfer_fla import prompt_queue,LLMWorker,Prompt,PromptStatus
-from rwkvengine.chat_template import GetTemplate
+from rwkvengine.chat_template import GetTemplate,llmjpformatter,phi3formatter
 import pandas as pd
 import asyncio
 import json
@@ -146,6 +146,7 @@ params_base = {
 DefaultEndtoken = '\n\n'
 DefaultEndtoken_qwen = '<|im_end|>'
 DefaultEndtoken_llama = '<|eot_id|>'
+DefaultEndtoken_phi35 = '<|end|>'
 Endtoken = '\n\n'
 
 @app.post("/removemodel")
@@ -255,8 +256,10 @@ async def loadmodel(request: Request):
         engine1.LoadModel(model_filename,Quant,precision,adapter_model=adapter_filename,adapter_mode=adapter_mode,adapter_scale=adapter_scaling,fully_fusedrecurrent=args.fully_fusedrecurrent,template_mode=template_mode)
         if engine1.templatemode == 'world':
             model_endtoken = data.get('endtoken',DefaultEndtoken)
+        elif engine1.templatemode == 'phi3.5' or  engine1.templatemode == 'phi4mini':
+            model_endtoken = data.get('endtoken',DefaultEndtoken_phi35)
         else:
-            if engine1.templatemode == 'llama':
+            if engine1.templatemode == 'llmjp':
                 model_endtoken = data.get('endtoken',DefaultEndtoken_llama)
             else:
                 model_endtoken = data.get('endtoken',DefaultEndtoken_qwen)
@@ -505,6 +508,7 @@ async def verify_keys(request: Request):
 @app.post("/v1/chat/completions")
 @app.post("/chat/completions")
 async def rwkv_completions(request: Request):
+    global engine1
     data = await request.json()
 
     if args.debug:
@@ -552,11 +556,23 @@ async def rwkv_completions(request: Request):
 
     input_prompt = []
     input_prompt_stm = ""
-    for element in messages:
-        input_prompt.append(GetTemplate(len(input_prompt),element["role"],element["content"],Endtoken,engine1.templatemode))
-    input_prompt.append(GetTemplate(len(input_prompt),'assistant',None,Endtoken,engine1.templatemode))
+
+    if engine1.templatemode == 'llmjp':
+        input_prompt.append(llmjpformatter.format_chat(messages,add_generation_prompt=True))
+        #exit()
+    elif engine1.templatemode == 'phi3.5' or engine1.templatemode == 'phi4mini':
+        input_prompt.append(phi3formatter.format_chat(messages,add_generation_prompt=True))
+        #exit()
+    elif engine1.templatemode == 'phi4':
+        input_prompt.append(engine1.pipeline.generate_prompt_from_config(engine1.pipeline.modeltemplate,messages,True))
+    else:
+        for element in messages:
+            input_prompt.append(GetTemplate(len(input_prompt),element["role"],element["content"],Endtoken,engine1.templatemode))
+        input_prompt.append(GetTemplate(len(input_prompt),'assistant',None,Endtoken,engine1.templatemode))
 
     print(input_prompt)
+
+    #exit()
   
 
     models2 = [ModelList[0]]
@@ -652,7 +668,9 @@ async def rwkv_completions(request: Request):
         if args.debug:
             print('plane state')
         if target_state_tensor_wkv is not None:
-            QueryDatas.use_exist_state_wkv = target_state_tensor_wkv#copy.deepcopy(target_state_tensor_wkv)
+            QueryDatas.use_exist_state_wkv = copy.deepcopy(target_state_tensor_wkv)
+            #print(QueryDatas.use_exist_state_wkv)
+            #exit()
             if mrssmode:
                 QueryDatas.use_mrss = True
                 QueryDatas.use_contain_originalstate = contain_originalstate

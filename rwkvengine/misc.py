@@ -16,6 +16,9 @@ import triton.language as tl
 from torch.utils.cpp_extension import load
 from torch.profiler import profile, record_function, ProfilerActivity
 from tokenizers import Tokenizer
+import json
+# (標準ライブラリではない点に注意)
+from jinja2 import Template
 
 MyStatic = torch.jit.script
 
@@ -119,6 +122,7 @@ class TRIE_TOKENIZER():
 class PIPELINE():
     def __init__(self, mode='world'):
         self.mode = mode
+        self.hfmode = False
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
         #from rwkv_tokenizer import TRIE_TOKENIZER_MOSE
         if mode == 'world':
@@ -134,6 +138,52 @@ class PIPELINE():
             print(f'llmjp llama Tokenizer')
             from transformers import AutoTokenizer
             self.tokenizer = AutoTokenizer.from_pretrained(os.path.dirname(os.path.abspath(__file__)) + "/llmjp")
+        elif mode == 'phi3.5':
+            print(f'phi3.5 Tokenizer')
+            from transformers import AutoTokenizer
+            self.hfmode = True
+            self.tokenizer = AutoTokenizer.from_pretrained(os.path.dirname(os.path.abspath(__file__)) + "/phi3.5", add_prefix_space=True)
+        elif mode == 'phi4mini':
+            print(f'phi1 mini Tokenizer')
+            from transformers import AutoTokenizer
+            self.hfmode = True
+            self.tokenizer = AutoTokenizer.from_pretrained(os.path.dirname(os.path.abspath(__file__)) + "/phi4mini", add_prefix_space=True)
+        elif mode == 'phi4':
+            print(f'phi4 Tokenizer')
+            from transformers import AutoTokenizer
+            self.hfmode = True
+            self.tokenizer = AutoTokenizer.from_pretrained(os.path.dirname(os.path.abspath(__file__)) + "/phi4", add_prefix_space=True)
+            self.modeltemplate = self.load_tokenizer_config(os.path.dirname(os.path.abspath(__file__)) + "/phi4")
+
+    def load_tokenizer_config(self, config_path: str) -> dict:
+        """
+        TokenizerConfig (例: tokenizer_config.json) をロードして辞書として返す
+        """
+        with open(config_path + "/tokenizer_config.json", "r", encoding="utf-8") as f:
+            return json.load(f)
+
+    def generate_prompt_from_config(self, tokenizer_config: dict, messages: list, add_generation_prompt: bool = False) -> str:
+        """
+        tokenizer_config 内の chat_template を元に、messages (role, content) をまとめた文字列を生成する
+        """
+        # chat_template を取り出す
+        chat_template_str = tokenizer_config.get("chat_template", "")
+        if not chat_template_str:
+            raise ValueError("chat_template が TokenizerConfig 内に存在しません。")
+
+        # eos_token など必要なトークンも取り出す
+        eos_token = tokenizer_config.get("eos_token", "<|endoftext|>")
+
+        # テンプレートを読み込む
+        template = Template(chat_template_str)
+
+        # テンプレート変数を指定してレンダリング
+        rendered_text = template.render(
+            messages=messages,
+            add_generation_prompt=add_generation_prompt,
+            eos_token=eos_token
+        )
+        return rendered_text
 
 
     def refine_context(self, context):
@@ -156,6 +206,13 @@ class PIPELINE():
             return self.tokenizer.encode(x)
     
     def decode(self, x):
+        if self.hfmode:
+            #tokens_str = self.tokenizer.convert_ids_to_tokens(x)
+            #strs = self.tokenizer.convert_tokens_to_string(tokens_str)
+            #print(f'str = "{strs}"')
+            #return strs
+            return self.tokenizer.decode(x,skip_special_tokens=False,    # 特殊トークンをスキップしない
+    clean_up_tokenization_spaces=False)  # トークン化の際のスペースをクリーンアップしない)
         return self.tokenizer.decode(x)
 
     def sample_logits(self, logits, temperature=1.0, top_p=0.85, top_k=0):

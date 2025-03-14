@@ -55,6 +55,23 @@ class Qwen2MLP(nn.Module):
         down_proj = self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
         return down_proj
     
+class Phi3MLP(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+
+        self.config = config
+        self.gate_up_proj = nn.Linear(config.hidden_size, 2 * config.intermediate_size, bias=False)
+        self.down_proj = nn.Linear(config.intermediate_size, config.hidden_size, bias=False)
+        self.activation_fn = ACT2FN[config.hidden_act]
+
+    def forward(self, hidden_states: torch.FloatTensor) -> torch.FloatTensor:
+        up_states = self.gate_up_proj(hidden_states)
+
+        gate, up_states = up_states.chunk(2, dim=-1)
+        up_states = up_states * self.activation_fn(gate)
+
+        return self.down_proj(up_states)
+    
 class Qwen2RMSNorm(nn.Module):
     def __init__(self, hidden_size, eps=1e-6):
         """
@@ -86,12 +103,15 @@ class Qwen2RMSNorm(nn.Module):
     
 @torch.compile
 def fpx_matmul(x,weight,weight_state,ebits:int,mbits:int):
-    S0=x.shape[0]
-    S1=x.shape[1]
-    dtype = x.dtype
-    x = x.to(dtype=torch.float16).view(-1,x.shape[2])  
-    d = quant_llm_linear(ebits, mbits, x, weight, weight_state).view(S0,S1,-1).to(dtype=dtype)
-    return d
+    if weight.dtype == torch.uint8:
+        S0=x.shape[0]
+        S1=x.shape[1]
+        dtype = x.dtype
+        x = x.to(dtype=torch.float16).view(-1,x.shape[2])  
+        d = quant_llm_linear(ebits, mbits, x, weight, weight_state).view(S0,S1,-1).to(dtype=dtype)
+        return d
+    else:
+        return x @ weight.t()
 
 
 
@@ -241,8 +261,30 @@ class ARWKV_7(nn.Module):
     
 
 
+    '''
+    up_states = self.gate_up_proj(hidden_states)
 
+            gate, up_states = up_states.chunk(2, dim=-1)
+            up_states = up_states * self.activation_fn(gate)
 
+            return self.down_proj(up_states)
+    '''
+
+    @MyStatic
+    def ax070_MLP_PHI3_forward(x,gate_up,down_):
+        
+        up_states = hybrid_matmul(x,gate_up)
+        gate, up_states = up_states.chunk(2, dim=-1)
+        up_states = up_states * F.silu(gate)
+        return hybrid_matmul(up_states,down_)
+    
+    @torch.compile
+    def ax070_MLP_PHI3_forward_fpx(x,gate_up,down_,gate_up_state,down_state,ebits,mbits):
+        
+        up_states = fpx_matmul(x,gate_up,gate_up_state,ebits=ebits,mbits=mbits)
+        gate, up_states = up_states.chunk(2, dim=-1)
+        up_states = up_states * F.silu(gate)
+        return fpx_matmul(up_states,down_,down_state,ebits=ebits,mbits=mbits)
 
 
     @MyStatic
@@ -253,7 +295,7 @@ class ARWKV_7(nn.Module):
     def ax070_MLP_forward_fpx(x,gate_,down_,up_,gate_state,down_state,up_state,ebits,mbits):
         step1 = F.silu(fpx_matmul(x,gate_,gate_state,ebits,mbits)) * fpx_matmul(x,up_,up_state,ebits,mbits)
         return fpx_matmul(step1,down_,down_state,ebits,mbits)
-    
+    #@torch.compile
     def ax070_forward_seq(self, idx, last_shift_states: List[torch.Tensor],
                 last_wkv_states: List[torch.Tensor],  full_output:bool=False, KernelMode:int=0):
         with torch.no_grad(): 
@@ -283,7 +325,7 @@ class ARWKV_7(nn.Module):
 
                 #print(f'x = {x.dtype}')
 
-                xx = Qwen2RMSNorm.independent_forward(x,z[bbb+'ln1.weight'])
+                xx = Qwen2RMSNorm.independent_forward(x,z[bbb+'ln1.weight'],variance_epsilon=1e-6)
 
                 #print(f'xx norm = {xx.dtype}')
 
@@ -327,15 +369,26 @@ class ARWKV_7(nn.Module):
 
                 x = x + xx
 
-                xx = Qwen2RMSNorm.independent_forward(x,z[bbb+'ln2.weight'])
+                xx = Qwen2RMSNorm.independent_forward(x,z[bbb+'ln2.weight'],variance_epsilon=1e-6)
 
-                if StrategyMode == 0:
-                    xx = ARWKV_7.ax070_MLP_forward(xx,z[ffn+'gate.weight'],z[ffn+'down.weight'],z[ffn+'up.weight'])
-                if StrategyMode == 3:
-                    xx = ARWKV_7.ax070_MLP_forward_fpx(xx,z[ffn+'gate.weight'],z[ffn+'down.weight'],z[ffn+'up.weight'],
-                                                       z[ffn+'gate.weight.qstate'],z[ffn+'down.weight.qstate'],z[ffn+'up.weight.qstate'],
-                                                       self.ebits,self.mbits
-                                                       )
+
+                if self.ARWKVMLPMode == 0: 
+                    if StrategyMode == 0:
+                        xx = ARWKV_7.ax070_MLP_forward(xx,z[ffn+'gate.weight'],z[ffn+'down.weight'],z[ffn+'up.weight'])
+                    if StrategyMode == 3:
+                        xx = ARWKV_7.ax070_MLP_forward_fpx(xx,z[ffn+'gate.weight'],z[ffn+'down.weight'],z[ffn+'up.weight'],
+                                                        z[ffn+'gate.weight.qstate'],z[ffn+'down.weight.qstate'],z[ffn+'up.weight.qstate'],
+                                                        self.ebits,self.mbits
+                                                        )
+                elif self.ARWKVMLPMode == 1:
+                    if StrategyMode == 0:
+                        xx = ARWKV_7.ax070_MLP_PHI3_forward(xx,z[ffn+'gate_up.weight'],z[ffn+'down.weight'])
+                        #exit()
+                    if StrategyMode == 3:
+                        xx = ARWKV_7.ax070_MLP_PHI3_forward_fpx(xx,z[ffn+'gate_up.weight'],z[ffn+'down.weight'],
+                                                        z[ffn+'gate_up.weight.qstate'],z[ffn+'down.weight.qstate'],
+                                                        self.ebits,self.mbits
+                                                        )
 
                 x = x + xx
 
@@ -346,7 +399,7 @@ class ARWKV_7(nn.Module):
             
             
             #x = F.layer_norm(x, (self.n_embd,), weight=z['ln_out.weight'], bias=z['ln_out.bias'])
-            x = Qwen2RMSNorm.independent_forward(x,z['ln_out.weight'])
+            x = Qwen2RMSNorm.independent_forward(x,z['ln_out.weight'],variance_epsilon=1e-6)
             if StrategyMode == 0:
                 x = hybrid_matmul(x , z['head.weight'])
             if StrategyMode == 3:

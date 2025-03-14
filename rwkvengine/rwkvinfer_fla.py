@@ -235,13 +235,26 @@ class LLMWorker:
         self.model = RWKV_x(modelpath,base_precision=precision,adapter_model=adapter_model,adapter_mode=adapter_mode,adapter_scale=adapter_scale,fully_fusedrecurrent=fully_fusedrecurrent)
         
         if self.model.ARWKVMode:
-            if template_mode == 'llmjp':
-                self.pipeline = PIPELINE('qwen')
-                self.templatemode = 'llama'
-            
+            if self.model.ARWKVMLPMode == 1 and template_mode == 'phi3.5':
+                #Phi3.5 mode
+                self.pipeline = PIPELINE('phi3.5')
+                self.templatemode = 'phi3.5'
+            elif self.model.ARWKVMLPMode == 1 and template_mode == 'phi4mini':
+                #Phi3.5 mode
+                self.pipeline = PIPELINE('phi4mini')
+                self.templatemode = 'phi4mini'
+            elif self.model.ARWKVMLPMode == 1 and template_mode == 'phi4':
+                #Phi3.5 mode
+                self.pipeline = PIPELINE('phi4')
+                self.templatemode = 'phi4'
             else:
-                self.pipeline = PIPELINE('qwen')
-                self.templatemode = 'qwen'
+                if template_mode == 'llmjp':
+                    self.pipeline = PIPELINE('llmjp')
+                    self.templatemode = 'llmjp'
+                
+                else:
+                    self.pipeline = PIPELINE('qwen')
+                    self.templatemode = 'qwen'
         else:
             self.pipeline = PIPELINE('world')
             self.templatemode = 'world'
@@ -275,6 +288,7 @@ class LLMWorker:
       
 
             if output is not None:
+                #print(output)
 
                 if currentoutputcount < len(output):
                     nextcount = len(output)
