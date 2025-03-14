@@ -105,7 +105,7 @@ def hybrid_matmul(a:torch.Tensor,b:torch.Tensor):
     #MatmulScale = (448 / max_val).clamp(min=1e-6)  # ゼロ割防止
     #MatmulScale = (448 / xg.abs().amax(dim=1).mean()).clamp(min=1e-6)
    # print(float(MatmulScale))
-    MatmulScale = 0.5
+    #MatmulScale = 0.5
     
     if b.dtype == torch.float8_e4m3fn:
             
@@ -115,7 +115,7 @@ def hybrid_matmul(a:torch.Tensor,b:torch.Tensor):
                     
                 S0=xg.shape[0]
                 if xg.dtype != torch.float8_e4m3fn:
-                    xg=xg * MatmulScale
+                    #xg=xg * MatmulScale
                     xg = torch.clamp(xg, min=-448.0, max=448.0) # for avoid NaN
 
                     maxs = xg.abs().max()
@@ -126,7 +126,7 @@ def hybrid_matmul(a:torch.Tensor,b:torch.Tensor):
                     b.t(),
                     bias=None,
                     out_dtype=a.dtype,
-                    scale_a=torch.tensor(1/MatmulScale, device='cuda'),
+                    scale_a=torch.tensor(1.0, device='cuda'),
                     scale_b=torch.tensor(1.0, device='cuda'),
                     use_fast_accum = True
                 )
@@ -136,7 +136,7 @@ def hybrid_matmul(a:torch.Tensor,b:torch.Tensor):
 
                 S0=xg.shape[0]
                 S1=xg.shape[1]
-                xg=xg * MatmulScale
+                #xg=xg * MatmulScale
 
                 #xg = torch.clamp(xg, min=-448.0, max=448.0)#
                 xg = xg.clamp_(min=-448.0, max=448.0)#
@@ -154,7 +154,7 @@ def hybrid_matmul(a:torch.Tensor,b:torch.Tensor):
                     b.t(),
                     bias=None,
                     out_dtype=a.dtype,
-                    scale_a=torch.tensor(1/MatmulScale, device='cuda'),
+                    scale_a=torch.tensor(1.0, device='cuda'),
                     scale_b=torch.tensor(1.0, device='cuda'),
                     use_fast_accum = True
                 )

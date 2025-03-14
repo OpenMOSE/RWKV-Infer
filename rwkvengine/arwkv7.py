@@ -170,7 +170,7 @@ class ARWKV_7(nn.Module):
         bb=kk*a
 
         return r,w,k,v,g,aa,bb,xx,v_first
-    
+    @torch.compile
     def ax070_TimeMix_fla_Step2(r, w, k, v, aa, bb,state,FullyFusedMode = True):
 
         B,T,HC = w.shape
