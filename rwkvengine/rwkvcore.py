@@ -461,7 +461,7 @@ class RWKV_x(nn.Module):
 
             # FP6 Quantize Mode via Torch.AO
             elif self.bitfp6quant == True:
-                emboncpu = True
+                emboncpu = False
                 if self.bitfp5quant:
                     self.ebits, self.mbits = 2, 2
                 else:

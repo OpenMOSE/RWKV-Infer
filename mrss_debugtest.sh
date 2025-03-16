@@ -29,7 +29,7 @@ curl http://127.0.0.1:9000/healthcheck
 #curl http://127.0.0.1:9000/loadmodel -X POST -H "Content-Type: application/json" -d '{"model_filename":"/home/client/Projects/RWKV-LM-RLHF/main/myfolder/models/rwkv-x070-2b9-world-v3-preview-20250210-ctx4k.pth","model_viewname":"RWKV x070 2B9","model_strategy":"bf16","adapter_filename":"/home/client/Projects/RWKV-LM-RLHF/main/myfolder/Outputs/x070-nsha/rwkv-0.pth","adapter_mode":"","endtoken":"\\n\\n"}'
 
 
-curl http://127.0.0.1:9000/loadmodel -X POST -H "Content-Type: application/json" -d '{"model_filename":"models/rwkv-phi4-stage2.pth","model_viewname":"PRWKV7-Phi-4 Preview 0.1","model_strategy":"fp5","adapter_filename":"adapters/PRWKV7-Phi4-e7.pth","adapter_mode":"bone", "template":"phi4"}'
+curl http://127.0.0.1:9000/loadmodel -X POST -H "Content-Type: application/json" -d '{"model_filename":"models/PRWKV-7-Phi-4-Instruct-Preview-v0.1.pth","model_viewname":"PRWKV7-Phi-4 Preview 0.1","model_strategy":"fp6","adapter_filename":"adapters/PRWKV7-Phi4-e15.pth","adapter_mode":"", "template":"phi4"}'
 #
 #curl http://127.0.0.1:9000/loadmodel -X POST -H "Content-Type: application/json" -d '{"model_filename":"models/ARWKV_7B_R1_16K.pth","model_viewname":"ARWKV-7B-R1 16K","model_strategy":"fp16","adapter_filename":"adapters/arwkv-cje5-6.pth","adapter_mode":"","default_temperature":"1.0", "default_top_p":"0.3"}'
 
