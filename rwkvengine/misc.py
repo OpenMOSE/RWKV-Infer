@@ -134,6 +134,7 @@ class PIPELINE():
             print(f'Qwen Tokenizer')
             from transformers import AutoTokenizer
             self.tokenizer = AutoTokenizer.from_pretrained(os.path.dirname(os.path.abspath(__file__)) + "/qwen")
+            self.modeltemplate = self.load_tokenizer_config(os.path.dirname(os.path.abspath(__file__)) + "/qwen")
         elif mode == 'llmjp':
             print(f'llmjp llama Tokenizer')
             from transformers import AutoTokenizer

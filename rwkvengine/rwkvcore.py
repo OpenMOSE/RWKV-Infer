@@ -328,6 +328,9 @@ class RWKV_x(nn.Module):
                 self.n_head = n_head
                 self.ctx = 1024 #FLA Window
 
+
+            self.dim_hidden = z['emb.weight'].shape[1]
+
             
             self.n_layer = n_layer
 
@@ -632,45 +635,91 @@ class RWKV_x(nn.Module):
             
     
         
-    def load_state(self,state_filename):
+    def load_state(self,state_filename,EnableOffset = False):
         try:
             state_raw = torch.load(state_filename, map_location="cpu")
         except Exception as e:
             print(e)
+            if EnableOffset:
+                return "error", None
             return "error"
-        state_raw_shape = next(iter(state_raw.values())).shape
+        state_raw_shape = state_raw[f"blocks.0.att.time_state"].shape #next(iter(state_raw.values())).shape
+
+        state_keys = list(state_raw.keys())
+
+        state_count = 0
+        for key in state_keys:
+            #print(f'{key}')
+            if 'time_state' in key:
+                state_count = state_count + 1
+
+        #exit()
 
         #args = model.args
         self.debug = 1
         if self.debug:
-            print(f"{len(state_raw)} != {self.n_layer}")
+            print(f"{state_count} != {self.n_layer}")
             print(f"{state_raw_shape[0] * state_raw_shape[1]} != {self.n_embd}")
 
         if (
-            len(state_raw) != self.n_layer
+            state_count != self.n_layer
             or state_raw_shape[0] * state_raw_shape[1] != self.n_embd
         ):
             print("state failed to load")
+            if EnableOffset:
+                return "error", None
             return "error"
 
         #strategy = model.strategy
-
-        model_current_statetuned = [None] * self.n_layer * 3
-
+        
+        atype = torch.bfloat16 #dd.atype
         dev = 'cpu'
+        model_current_statetuned = [None] * self.n_layer * 3
+        #model_current_offset = [None] * self.n_layer * 2
+        model_current_offset = torch.zeros((self.n_layer,2,self.dim_hidden), dtype=atype, requires_grad=False, device=dev).contiguous()
+
+        
+
+
 
         for i in range(self.n_layer):
             #dd = strategy[i]
             #dd.device
-            atype = torch.bfloat16 #dd.atype
+            
             model_current_statetuned[i * 3 + 0] = torch.zeros(
                 self.n_embd, dtype=atype, requires_grad=False, device=dev
             ).contiguous()
 
             #self.RWKVMode
             tempstate = state_raw[f"blocks.{i}.att.time_state"]
-            #if self.RWKVMode == 6:
-            #    tempstate=tempstate.transpose(1, 2)
+
+            #Offset Tuning
+            if EnableOffset:
+                try:
+                    y_offset = state_raw[f"blocks.{i}.att.time_offset_y"]
+                    out_offset = state_raw[f"blocks.{i}.att.time_offset"]
+                except:
+                    y_offset = torch.zeros((self.dim_hidden),
+                                                     dtype=atype, requires_grad=False, device=dev
+                                          )
+                    out_offset = torch.zeros((self.dim_hidden),
+                                                     dtype=atype, requires_grad=False, device=dev
+                                          )
+                
+                model_current_offset[i][0]=y_offset
+                model_current_offset[i][1]=out_offset
+
+                print(f'y_offset={y_offset}')
+                print(f'out_offset={out_offset}')
+
+
+
+
+
+
+
+            if self.RWKVMode == 7:
+               tempstate=tempstate.transpose(1, 2)
             model_current_statetuned[i * 3 + 1] = (
                 tempstate
                 .to(dtype=torch.float, device=dev)
@@ -690,6 +739,9 @@ class RWKV_x(nn.Module):
 
         print(wkv_states)
 
+        if EnableOffset:
+            return wkv_states, model_current_offset
+
         return wkv_states#.to(dtype=torch.float16)
     
 
@@ -699,13 +751,13 @@ class RWKV_x(nn.Module):
     
     
 
-    def forward(self, idx, last_shift_states , last_wkv_states, one_mode = False, KernelMode = 0):
+    def forward(self, idx, last_shift_states , last_wkv_states, one_mode = False, KernelMode = 0,offset_tensor:torch.Tensor=None):
         if self.RWKVMode == 6:
             return RWKV_6.x060_forward(self,idx,last_shift_states,last_wkv_states)
         elif self.RWKVMode == 7 and self.ARWKVMode == 0:
             return RWKV_7.x070_forward(self,idx,last_shift_states,last_wkv_states,one_mode=one_mode,KernelMode=KernelMode,full_output=False)
         elif self.RWKVMode == 7 and self.ARWKVMode == 1:
-            return ARWKV_7.ax070_forward(self,idx,last_shift_states,last_wkv_states,one_mode=one_mode,KernelMode=KernelMode,full_output=False)
+            return ARWKV_7.ax070_forward(self,idx,last_shift_states,last_wkv_states,one_mode=one_mode,KernelMode=KernelMode,full_output=False,offset_tensor=offset_tensor)
     
 
 

@@ -18,7 +18,7 @@ if __name__ == '__main__':
     States = model.new_state(Target_batch)#state_empty(32, 1, 2560, 2560 // 32)
 
     #Input Context 
-    context =  'User: おつかれさま！\n\nAssistant:'
+    context =  'User: あなたの趣味をおしえて\n\nAssistant:'
 
     
 
@@ -34,8 +34,8 @@ if __name__ == '__main__':
 
     #Apply State-tuned wkv to InitialState
     #if no state-tuned commentout
-    # state_tuned_wkv = model.load_state('states/ojousama2.pth')
-    # wkv_states = state_tuned_wkv.view(state_tuned_wkv.shape[0],1,state_tuned_wkv.shape[1],state_tuned_wkv.shape[2],state_tuned_wkv.shape[3]).to('cuda')
+    state_tuned_wkv = model.load_state('states/ojousama2.pth')
+    wkv_states = state_tuned_wkv.view(state_tuned_wkv.shape[0],1,state_tuned_wkv.shape[1],state_tuned_wkv.shape[2],state_tuned_wkv.shape[3]).to('cuda')
 
 
     tokens = pipeline.encode(context)

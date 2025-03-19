@@ -293,7 +293,7 @@ async def loadstatemodel(request: Request):
              default_top_p = float(default_top_p)
 
 
-         state_tensor_wkv = engine1.model.load_state(state_filename) # if correct, have tensors :)
+         state_tensor_wkv, state_tensor_wkv_offset = engine1.model.load_state(state_filename,EnableOffset=True) # if correct, have tensors :)
          if type(state_tensor_wkv) == str:
              print('State Loading Error')
              raise HTTPException(status_code=500, detail='State file is incorrect. check filename or tensor size.')
@@ -301,6 +301,7 @@ async def loadstatemodel(request: Request):
          StateList.append({"state_filename":state_filename,
                            "state_viewname":state_viewname,
                            'state_tensor':state_tensor_wkv,
+                           'state_tensor_offset':state_tensor_wkv_offset,
                            'default_temperature':(default_temperature),
                            'default_top_p':(default_top_p)                           
                            })
@@ -359,21 +360,25 @@ async def mrss_loadstatemodel(request: Request):
              contain_originalstate = False
 
          state_tensor_wkvs_list = []
+         state_tensor_wkvs_offset_list = []
          print('start load')
 
          for i in range(state_count):
             print(f'loading state {state_filenames[i]}')
-            state_tensor_wkv = engine1.model.load_state(state_filenames[i]) # if correct, have tensors :)
+            state_tensor_wkv,state_tensor_wkv_offset = engine1.model.load_state(state_filenames[i],EnableOffset=True) # if correct, have tensors :)
             if type(state_tensor_wkv) == str:
                 print('State Loading Error')
                 raise HTTPException(status_code=500, detail=f'{ state_filenames[i] } State file is incorrect. check filename or tensor size.')
             else:
                 state_tensor_wkvs_list.append(state_tensor_wkv)
+                state_tensor_wkvs_offset_list.append(state_tensor_wkv_offset)
          print('start cat')
 
          state_tensor_wkvs = torch.stack(state_tensor_wkvs_list, dim=0)
+         state_tensor_wkvs_offset = torch.stack(state_tensor_wkvs_offset_list, dim=0)
 
          print(f'state_tensor_wkvs shape = {state_tensor_wkvs.shape}')
+         print(f'state_tensor_wkvs_offset shape = {state_tensor_wkvs_offset.shape}')
 
          print('cat ok')
 
@@ -386,6 +391,7 @@ async def mrss_loadstatemodel(request: Request):
          StateList.append({"state_filename":totalfilename,
                            "state_viewname":state_viewname,
                            'state_tensor':state_tensor_wkvs,
+                           'state_tensor_offset':state_tensor_wkvs_offset,
                            'contain_originalstate':contain_originalstate,
                            'state_gatingweight':state_gatingweight,
                            'mrssmode':True,
@@ -578,12 +584,14 @@ async def rwkv_completions(request: Request):
     models2 = [ModelList[0]]
     models2[0]['filename'] = ""
     models2[0]['state_tensor'] = None
+    models2[0]['state_tensor_offset'] = None
 
     for State in StateList:
         models2.append({"object":"models",
                         "id":f"{ModelList[0]['id']} {State['state_viewname']}",
                         "filename":State['state_filename'],
                         "state_tensor":State['state_tensor'],
+                        "state_tensor_offset":State['state_tensor_offset'],
                         'contain_originalstate':State.get('contain_originalstate',False),
                         'state_gatingweight':State.get('state_gatingweight',[]),
                         'mrssmode':State.get('mrssmode',False),
@@ -602,6 +610,7 @@ async def rwkv_completions(request: Request):
         if modelname['id'] == model:
             target_state_filename = modelname['filename']
             target_state_tensor_wkv = modelname['state_tensor']
+            target_state_tensor_wkv_offset = modelname['state_tensor_offset']
             default_temperature = modelname.get('default_temperature',None)#['default_temperature']
             default_top_p = modelname.get('default_top_p',None)#['default_top_p']
             #if modelname['mrssmode'] == True:
@@ -656,6 +665,7 @@ async def rwkv_completions(request: Request):
         QueryDatas.base_state_tuned = target_state_filename
         QueryDatas.use_exist_state_wkv = wkv_state#copy.deepcopy(wkv_state)
         QueryDatas.use_exist_state_shift = shift_state#copy.deepcopy(shift_state)
+        QueryDatas.use_exist_state_wkv_offset = copy.deepcopy(target_state_tensor_wkv_offset)
  
         if mrssmode:
             QueryDatas.use_mrss = True
@@ -669,6 +679,7 @@ async def rwkv_completions(request: Request):
             print('plane state')
         if target_state_tensor_wkv is not None:
             QueryDatas.use_exist_state_wkv = copy.deepcopy(target_state_tensor_wkv)
+            QueryDatas.use_exist_state_wkv_offset = copy.deepcopy(target_state_tensor_wkv_offset)
             #print(QueryDatas.use_exist_state_wkv)
             #exit()
             if mrssmode:

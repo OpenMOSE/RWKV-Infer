@@ -45,6 +45,7 @@ class Prompt:
     base_state_tuned: str = "None"
     use_exist_state_wkv: Optional[torch.Tensor] = None
     use_exist_state_shift: Optional[torch.Tensor] = None
+    use_exist_state_wkv_offset: Optional[torch.Tensor] = None
     use_mrss: bool = False
     fixed_state_count: int = 0
     use_contain_originalstate: bool = False
@@ -78,6 +79,7 @@ class PromptQueue:
                       #result: Optional[str] = None, 
                       wkv_state : Optional[torch.Tensor]=None,
                       shift_state : Optional[torch.Tensor]=None, 
+                      wkv_state_offset : Optional[torch.Tensor]=None, 
                        
                         ):
         if prompt_id in self.prompts:
@@ -88,6 +90,8 @@ class PromptQueue:
                 self.prompts[prompt_id].use_exist_state_wkv = wkv_state
             if shift_state is not None:
                 self.prompts[prompt_id].use_exist_state_shift = shift_state
+            if wkv_state_offset is not None:
+                self.prompts[prompt_id].use_exist_state_wkv = wkv_state_offset
 
 prompt_queue = PromptQueue()
 
@@ -373,6 +377,7 @@ class LLMWorker:
                                 'use_state-tuned':prompt.base_state_tuned,
                                 'wkv_states' : prompt.use_exist_state_wkv,
                                 'shift_states' : prompt.use_exist_state_shift,
+                                'wkv_states_offset':prompt.use_exist_state_wkv_offset,
                                 'current_prob' : None,
                                 'input_logits' : [],
                                 'input_logits_record' : prompt.input_logits_record,
@@ -433,6 +438,7 @@ class LLMWorker:
                     prompts_ids = [] 
                     b_wkv_states = []
                     b_shift_states = []
+                    b_wkv_states_offset = []
                     mrss_info = []
                     input_logits = []
                     input_logits_record = []
@@ -462,6 +468,8 @@ class LLMWorker:
                                 prompts_ids.append(work['prompt_id'])
                                 b_wkv_states.append(work['wkv_states'])
                                 b_shift_states.append(work['shift_states'])
+                                b_wkv_states_offset.append(work['wkv_states_offset'])
+
                                 input_logits.append(work['input_logits'])
                                 input_logits_record.append(work['input_logits_record'])
                                 occurrence.append(work['occurrence'])
@@ -507,6 +515,16 @@ class LLMWorker:
         
                         self.States = self.model.new_state(realbatchcount)
 
+
+                        #2025.03.17 Implement State-Offset
+                        BatchCount = realbatchcount#len(prompts)
+                        HiddenDim = self.model.dim_hidden
+                        n_layer = self.model.n_layer
+                        if self.model.RWKVMode == 7:
+                            offset_tensor = torch.zeros((BatchCount,n_layer,2,HiddenDim),dtype=torch.bfloat16,device=self.model.device)
+                        else:
+                            offset_tensor = None
+
                         print(f'{len(prompts)}')
                         #print(prompts)
                         for j in range(len(prompts)):
@@ -530,15 +548,18 @@ class LLMWorker:
                                 if type(b_wkv_states[i])==list:
                                     b_wkv_states[i] = torch.stack(b_wkv_states[i],dim=0)
 
+                                if type(b_wkv_states_offset[i])==list:
+                                    b_wkv_states_offset[i] = torch.stack(b_wkv_states_offset[i],dim=0)
+
                                 mrss_state_count = mrss_info[i]['fixed_state_count']#len(b_wkv_states[i])
                                 for j in range(mrss_state_count):
                                     wkv_states[NowTensorPosition + j] = b_wkv_states[i][j]
+                                    if offset_tensor is not None:
+                                        offset_tensor[NowTensorPosition + j] = b_wkv_states_offset[i][j]
 
                                 if mrss_info[i]['use_contain_originalstate'] == True:
                                     if len(b_wkv_states[i]) == mrss_state_count + 1:
                                         wkv_states[NowTensorPosition + mrss_state_count] = b_wkv_states[i][mrss_state_count]
-                                    #else:
-                                    #    print('through')
 
                                 if b_shift_states[i] is not None:
                                     if type(b_shift_states[i])==list:
@@ -556,6 +577,12 @@ class LLMWorker:
                                     if type(b_wkv_states[i])==list:
                                         b_wkv_states[i] = torch.stack(b_wkv_states[i],dim=0)
                                     wkv_states[NowTensorPosition] = b_wkv_states[i]
+
+                                if b_wkv_states_offset[i] is not None:
+                                    if type(b_wkv_states_offset[i])==list:
+                                        b_wkv_states_offset[i] = torch.stack(b_wkv_states_offset[i],dim=0)
+                                    if offset_tensor is not None:
+                                        offset_tensor[NowTensorPosition] = b_wkv_states_offset[i]
 
                                 if b_shift_states[i] is not None:
                                     if type(b_shift_states[i])==list:
@@ -578,7 +605,7 @@ class LLMWorker:
                         else:
                             KernelMode = 0
 
-                        x, shift_states, wkv_states = self.model.forward(idx, shift_states, wkv_states,KernelMode=KernelMode)
+                        x, shift_states, wkv_states = self.model.forward(idx, shift_states, wkv_states,KernelMode=KernelMode,offset_tensor=offset_tensor)
 
                         
 
@@ -655,6 +682,7 @@ class LLMWorker:
                     token = [work['currenttoken'] for work in valid_works]
                     token_ids = [work['prompt_id'] for work in valid_works]
                     b_wkv_states = [work['wkv_states'] for work in valid_works]
+                    b_wkv_states_offset = [work['wkv_states_offset'] for work in valid_works]
                     b_shift_states = [work['shift_states'] for work in valid_works]
                     current_prob = [work['current_prob'] for work in valid_works]
                     temperature = [torch.Tensor([float(work['temperature'])]) for work in valid_works]
@@ -770,20 +798,7 @@ class LLMWorker:
                             try:
                                 tmp = self.pipeline.decode(out_tokens[j][out_last[j]:])
                                 if ("\ufffd" not in tmp) and (not tmp.endswith("\n")) and (not tmp.endswith(end_token[j][0])):
-                                        #yield tmp
-                                        #if j == Target_batch - 1:
-                                        #print(tmp,end="", flush=True)
-                                        #if j == 0:
-                                        #    print(tmp,end="", flush=True)
-                                        #print(tmp,end="", flush=True)
-
-
-                                        #outputs[j] = outputs[j] + tmp
-
                                         outputs[j].append(tmp)
-
-
-
                                         out_last[j] = counts[j] + 1
                                 #print(f'outtokens = {len(out_tokens[j])}')
                                 #print(f'{int(counts[j])} {max_tokens[j]}')
@@ -845,15 +860,17 @@ class LLMWorker:
                             shift_states = self.States.shift_states.permute(1, 0, 2) 
                             wkv_states = self.States.wkv_states.permute(1, 0, 2, 3, 4) 
 
-                        # for i in range(len(token)):
-                        #     if b_wkv_states[i] is not None:
-                        #         wkv_states[i] = b_wkv_states[i]#prompts['wkv_states']
-                        #     #else:
-                        #     #    print('wkv is none')
-                        #     if b_shift_states[i] is not None:
-                        #         shift_states[i] = b_shift_states[i]#prompts['shift_states']
-                        #     #else:
-                        #     #    print('shift is none')
+                        
+                        #2025.03.17 Implement State-Offset
+                        BatchCount = realbatchcount#len(prompts)
+                        HiddenDim = self.model.dim_hidden
+                        n_layer = self.model.n_layer
+                        if self.model.RWKVMode == 7:
+                            offset_tensor = torch.zeros((BatchCount,n_layer,2,HiddenDim),dtype=torch.bfloat16,device=self.model.device)
+                        else:
+                            offset_tensor = None
+
+
                         NowTensorPosition = 0
                         for i in range(len(token_ids)):
                             if mrss_info[i]['use_mrss'] == True:
@@ -861,9 +878,16 @@ class LLMWorker:
                                 if type(b_wkv_states[i])==list:
                                     b_wkv_states[i] = torch.stack(b_wkv_states[i],dim=0)
 
+                                if type(b_wkv_states_offset[i])==list:
+                                    b_wkv_states_offset[i] = torch.stack(b_wkv_states_offset[i],dim=0)
+                                    
+
+
                                 mrss_state_count = len(b_wkv_states[i])
                                 for j in range(mrss_state_count):
                                     wkv_states[NowTensorPosition + j] = b_wkv_states[i][j]
+                                    if offset_tensor is not None:
+                                        offset_tensor[NowTensorPosition + j] = b_wkv_states_offset[i][j]
 
                                 if mrss_info[i]['use_contain_originalstate'] == True:
                                     if len(b_wkv_states[i]) == mrss_state_count + 1:
@@ -888,6 +912,12 @@ class LLMWorker:
                                         b_wkv_states[i] = torch.stack(b_wkv_states[i],dim=0)
                                     wkv_states[NowTensorPosition] = b_wkv_states[i]
 
+                                if b_wkv_states_offset[i] is not None:
+                                    if type(b_wkv_states_offset[i])==list:
+                                        b_wkv_states_offset[i] = torch.stack(b_wkv_states_offset[i],dim=0)
+                                    if offset_tensor is not None:
+                                        offset_tensor[NowTensorPosition] = b_wkv_states_offset[i]
+
                                 if b_shift_states[i] is not None:
                                     if type(b_shift_states[i])==list:
                                         b_shift_states[i] = torch.stack(b_shift_states[i],dim=0)
@@ -901,7 +931,7 @@ class LLMWorker:
                             shift_states = shift_states.permute(1,0,2)
                             wkv_states = wkv_states.permute(1, 0, 2, 3, 4)
 
-                        x, shift_states, wkv_states = self.model.forward(idx, shift_states, wkv_states,one_mode=True)
+                        x, shift_states, wkv_states = self.model.forward(idx, shift_states, wkv_states,one_mode=True,offset_tensor=offset_tensor)
 
                         if x.dim() == 2:
                             x = x.view(x.shape[0],1,x.shape[1])

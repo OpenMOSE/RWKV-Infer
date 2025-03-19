@@ -170,7 +170,7 @@ class ARWKV_7(nn.Module):
         bb=kk*a
 
         return r,w,k,v,g,aa,bb,xx,v_first
-    @torch.compile
+    @torch.compiler.disable#@torch.compile
     def ax070_TimeMix_fla_Step2(r, w, k, v, aa, bb,state,FullyFusedMode = True):
 
         B,T,HC = w.shape
@@ -186,13 +186,19 @@ class ARWKV_7(nn.Module):
             xx, state = fused_recurrent_rwkv7(r_, w_, k_, v_, aa_, bb_, scale=1.0, initial_state=state, output_final_state=True, head_first=False)
         return xx, state
     @MyStatic
-    def ax070_TimeMix_fla_Step3(B:int,T:int,H:int,N:int,r,k,r_k,v,g,O_,x,xx,state,v_first):
+    def ax070_TimeMix_fla_Step3(B:int,T:int,H:int,N:int,r,k,r_k,v,g,O_,x,xx,state,v_first,y_offset,out_offset):
+
+        xs = xx.shape
+        xx = xx.view(B,T,-1) * (1 + y_offset).unsqueeze(1)
+        xx = xx.view(xs)
 
         xx = xx.view(B,T,-1).to(dtype=r.dtype)
 
         xx = xx + ((r * k * r_k).view(B,T,H,N).sum(dim=-1, keepdim=True) * v.view(B,T,H,N)).view(B,T,H*N)
         xx=xx.to(dtype=g.dtype)
-        return hybrid_matmul((xx * g) , O_), x[:,-1], state.float(), v_first
+
+        output = hybrid_matmul((xx * g) , O_) * ( 1 + out_offset).unsqueeze(1)
+        return output, x[:,-1], state.float(), v_first
     
 
 
@@ -246,13 +252,20 @@ class ARWKV_7(nn.Module):
     
 
     @torch.compile
-    def ax070_TimeMix_fla_Step3_fpx(B:int,T:int,H:int,N:int,r,k,r_k,v,g,O_,x,xx,state,v_first,O_state,ebits,mbits):
+    def ax070_TimeMix_fla_Step3_fpx(B:int,T:int,H:int,N:int,r,k,r_k,v,g,O_,x,xx,state,v_first,O_state,ebits,mbits,y_offset,out_offset):
+
+        #prefix offset
+        xs = xx.shape
+        xx = xx.view(B,T,-1) * (1 + y_offset).unsqueeze(1)
+        xx = xx.view(xs)
 
         xx = xx.view(B,T,-1).to(dtype=r.dtype)
 
         xx = xx + ((r * k * r_k).view(B,T,H,N).sum(dim=-1, keepdim=True) * v.view(B,T,H,N)).view(B,T,H*N)
         xx=xx.to(dtype=g.dtype)
-        return fpx_matmul((xx * g) , O_, O_state,ebits,mbits), x[:,-1], state.float(), v_first
+        output = fpx_matmul((xx * g), O_, O_state,ebits,mbits) * ( 1 + out_offset ).unsqueeze(1)
+
+        return  output, x[:,-1], state.float(), v_first
 
 
 
@@ -295,9 +308,13 @@ class ARWKV_7(nn.Module):
     def ax070_MLP_forward_fpx(x,gate_,down_,up_,gate_state,down_state,up_state,ebits,mbits):
         step1 = F.silu(fpx_matmul(x,gate_,gate_state,ebits,mbits)) * fpx_matmul(x,up_,up_state,ebits,mbits)
         return fpx_matmul(step1,down_,down_state,ebits,mbits)
-    #@torch.compile
+    @torch.compile
     def ax070_forward_seq(self, idx, last_shift_states: List[torch.Tensor],
-                last_wkv_states: List[torch.Tensor],  full_output:bool=False, KernelMode:int=0):
+                last_wkv_states: List[torch.Tensor],  full_output:bool=False, KernelMode:int=0, offset_tensor:torch.Tensor=None):
+        
+        if offset_tensor is not None:
+            offset_tensor = offset_tensor.to(dtype = self.dtype)
+
         with torch.no_grad(): 
             z = self.z
 
@@ -323,6 +340,27 @@ class ARWKV_7(nn.Module):
                 channel_mix_state = last_shift_states[i*2+1]
                 time_mix_state = last_wkv_states[i]
 
+                if offset_tensor is None:
+                    y_offset = torch.zeros((idx.shape[0],x.shape[2]),dtype=x.dtype, device=x.device)
+                    out_offset = torch.zeros((idx.shape[0],x.shape[2]),dtype=x.dtype, device=x.device)
+
+                #if fullbatch offset_tensor shape = B,n_layer,2,hidden_dim
+                
+                elif offset_tensor.shape[0] != idx.shape[0]:
+                    #maybe got only batch0 offset
+                    #so expand realbatch
+                    #print('copied')
+                    offset_tensor = offset_tensor.repeat(idx.shape[0], 1, 1, 1)
+
+                if offset_tensor is not None:
+                    #print(f'offset tensor have!!!')
+                    y_offset = offset_tensor[:,i,0,:] # B,Hidden_dim
+                    out_offset = offset_tensor[:,i,1,:] # B,Hidden_dim
+
+                #print(f'y_offset = {y_offset}')
+                #print(f'out_offset = {out_offset}')
+
+
                 #print(f'x = {x.dtype}')
 
                 xx = Qwen2RMSNorm.independent_forward(x,z[bbb+'ln1.weight'],variance_epsilon=1e-6)
@@ -344,7 +382,7 @@ class ARWKV_7(nn.Module):
                         xx_step2, time_mix_state = ARWKV_7.ax070_TimeMix_fla_Step2(r,w,k,v,aa,bb,time_mix_state,self.fully_fusedrecurrent)
 
                         xx, time_mix_shift, time_mix_state, v_first = ARWKV_7.ax070_TimeMix_fla_Step3(B,T,self.n_head,self.head_size,r,k,z[att+'r_k'],v,g,z[att+'output.weight'],
-                                                                                                    xx,xx_step2,time_mix_state,v_first)
+                                                                                                    xx,xx_step2,time_mix_state,v_first,y_offset,out_offset)
                         
                 if StrategyMode == 3:
                         r,w,k,v,g,aa,bb,xx_step1,v_first = ARWKV_7.ax070_TimeMix_fla_Step1_fpx(i, self.n_head, self.head_size, xx, time_mix_shift, v_first, time_mix_state,
@@ -362,7 +400,8 @@ class ARWKV_7(nn.Module):
                         xx, time_mix_shift, time_mix_state, v_first = ARWKV_7.ax070_TimeMix_fla_Step3_fpx(B,T,self.n_head,self.head_size,r,k,z[att+'r_k'],v,g,z[att+'output.weight'],
                                                                                                     xx,xx_step2,time_mix_state,v_first,
                                                                                                     z[att+'output.weight.qstate'],
-                                                                                                    self.ebits,self.mbits
+                                                                                                    self.ebits,self.mbits,
+                                                                                                    y_offset,out_offset
                                                                                                     )
 
 
@@ -411,8 +450,9 @@ class ARWKV_7(nn.Module):
 
 
     def ax070_forward(self, idx, last_shift_states: List[torch.Tensor],
-                last_wkv_states: List[torch.Tensor], full_output=False,one_mode=False,KernelMode = 0):
-        return ARWKV_7.ax070_forward_seq(self,idx, last_shift_states,last_wkv_states, full_output,KernelMode)
+                last_wkv_states: List[torch.Tensor], full_output=False,one_mode=False,KernelMode = 0,offset_tensor:torch.Tensor=None):
+        #offset_tensor = None
+        return ARWKV_7.ax070_forward_seq(self,idx, last_shift_states,last_wkv_states, full_output,KernelMode,offset_tensor)
     
 
 
