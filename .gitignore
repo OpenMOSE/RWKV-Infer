@@ -169,3 +169,5 @@ fla/ops/rwkv6/__pycache__/chunk.cpython-310.pyc
 fla/ops/rwkv6/__pycache__/recurrent_fuse.cpython-310.pyc
 rwkv/__pycache__/__init__.cpython-310.pyc
 rwkv/__pycache__/rwkv_tokenizer.cpython-310.pyc
+
+arwkv_load.sh

@@ -20,6 +20,7 @@ import json
 # (標準ライブラリではない点に注意)
 from jinja2 import Template
 
+
 MyStatic = torch.jit.script
 
 class TRIE:
@@ -155,6 +156,12 @@ class PIPELINE():
             self.hfmode = True
             self.tokenizer = AutoTokenizer.from_pretrained(os.path.dirname(os.path.abspath(__file__)) + "/phi4", add_prefix_space=True)
             self.modeltemplate = self.load_tokenizer_config(os.path.dirname(os.path.abspath(__file__)) + "/phi4")
+        elif mode == 'mistralsmall3':
+            print(f'mistral small 3 Tokenizer')
+            from transformers import AutoTokenizer
+            self.hfmode = True
+            self.tokenizer = AutoTokenizer.from_pretrained(os.path.dirname(os.path.abspath(__file__)) + "/mistralsmall3") #, add_prefix_space=True
+            self.modeltemplate = self.load_tokenizer_config(os.path.dirname(os.path.abspath(__file__)) + "/mistralsmall3")
 
     def load_tokenizer_config(self, config_path: str) -> dict:
         """
@@ -168,7 +175,7 @@ class PIPELINE():
         tokenizer_config 内の chat_template を元に、messages (role, content) をまとめた文字列を生成する
         """
         # chat_template を取り出す
-        chat_template_str = tokenizer_config.get("chat_template", "")
+        chat_template_str = tokenizer_config.get("chat_template", None)
         if not chat_template_str:
             raise ValueError("chat_template が TokenizerConfig 内に存在しません。")
 
@@ -177,6 +184,14 @@ class PIPELINE():
 
         # テンプレートを読み込む
         template = Template(chat_template_str)
+        from datetime import datetime
+        # カスタム関数の定義
+        def strftime_now(format_string):
+            return datetime.now().strftime(format_string)
+        
+        template.globals['strftime_now'] = strftime_now
+
+        #print(chat_template_str)
 
         # テンプレート変数を指定してレンダリング
         rendered_text = template.render(

@@ -363,7 +363,7 @@ class ARWKV_7(nn.Module):
 
                 #print(f'x = {x.dtype}')
 
-                xx = Qwen2RMSNorm.independent_forward(x,z[bbb+'ln1.weight'],variance_epsilon=1e-6)
+                xx = Qwen2RMSNorm.independent_forward(x,z[bbb+'ln1.weight'],variance_epsilon=1e-5)
 
                 #print(f'xx norm = {xx.dtype}')
 
@@ -408,7 +408,7 @@ class ARWKV_7(nn.Module):
 
                 x = x + xx
 
-                xx = Qwen2RMSNorm.independent_forward(x,z[bbb+'ln2.weight'],variance_epsilon=1e-6)
+                xx = Qwen2RMSNorm.independent_forward(x,z[bbb+'ln2.weight'],variance_epsilon=1e-5)
 
 
                 if self.ARWKVMLPMode == 0: 
@@ -438,7 +438,7 @@ class ARWKV_7(nn.Module):
             
             
             #x = F.layer_norm(x, (self.n_embd,), weight=z['ln_out.weight'], bias=z['ln_out.bias'])
-            x = Qwen2RMSNorm.independent_forward(x,z['ln_out.weight'],variance_epsilon=1e-6)
+            x = Qwen2RMSNorm.independent_forward(x,z['ln_out.weight'],variance_epsilon=1e-5)
             if StrategyMode == 0:
                 x = hybrid_matmul(x , z['head.weight'])
             if StrategyMode == 3:

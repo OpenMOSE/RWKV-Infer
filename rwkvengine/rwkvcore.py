@@ -1,7 +1,8 @@
 #Refactoring RWKV x060,x070 Inference Engine with Flash Linear Attention
 # Experimental Implement x070
 #2024 OpenMOSE
-
+from safetensors import safe_open
+from safetensors.torch import load_file
 #Test Torchao
 import torchao
 from torchao.dtypes.floatx import to_scaled_tc_floatx
@@ -112,8 +113,48 @@ class RWKV_x(nn.Module):
                 self.base_precision = torch.bfloat16
             
             modelpath = load_model
+            self.SafeTensorMode = False
 
-            z = torch.load(modelpath,map_location="cpu",mmap=True)
+            def load_split_safetensors(model_dir, device="cpu"):
+                """
+                分割されたSafeTensorファイルを読み込む関数
+                
+                Args:
+                    model_dir: 分割されたSafeTensorファイルが格納されているディレクトリパス
+                    device: ロード先のデバイス（デフォルトは"cpu"）
+                
+                Returns:
+                    dict: 統合されたモデルの状態辞書
+                """
+                # ディレクトリから全てのsafetensorファイルを取得
+                files = sorted([f for f in os.listdir(model_dir) if f.endswith('.safetensors')])
+                
+                if not files:
+                    raise ValueError(f"No safetensors files found in {model_dir}")
+                
+                # 状態辞書を初期化
+                state_dict = {}
+                
+                # 各ファイルを読み込んで統合
+                for file in files:
+                    file_path = os.path.join(model_dir, file)
+                    # load_fileはtorch形式で読み込む
+                    file_state_dict = load_file(file_path, device=device)
+                    state_dict.update(file_state_dict)
+                
+                return state_dict
+            if '.pth' in modelpath:
+                z = torch.load(modelpath,map_location="cpu",mmap=True)
+            else:
+                self.SafeTensorMode = True
+                # safetensor_files = sorted([f for f in os.listdir(modelpath) if f.endswith('.safetensors')])
+                # self.modelpath = modelpath
+                # self.safetensor_files = safetensor_files
+                # if not safetensor_files:
+                #     raise ValueError(f"No safetensors files found in {modelpath}")
+                z = load_split_safetensors(modelpath)
+
+
             z_adapter_keys = None
             self.ModeMode = 'standard'
             if adapter_model != '' and adapter_mode != '':
@@ -199,8 +240,16 @@ class RWKV_x(nn.Module):
 
                     return weight
                 
-                    
+            # if self.SafeTensorMode:
+            #     keys = []
+            #     for file in self.safetensor_files:
+            #         file_path = os.path.join(self.modelpath, file)
+            #         # safe_openを使ってメモリマッピングでファイルを開く
+            #         with safe_open(file_path, framework="pt", device='cpu') as f:
+            #             for key in f.keys():
+            #                 keys.append(key)
 
+            # else:
             keys = list(z.keys())
             print("keys", keys)
 
@@ -469,7 +518,12 @@ class RWKV_x(nn.Module):
                     self.ebits, self.mbits = 2, 2
                 else:
                     self.ebits, self.mbits = 3, 2
+                count = 0
                 for k in keys:
+                    count = count + 1
+                    #if count % 10:
+                        #gc.collect()
+                        #torch.cuda.empty_cache()
                     if self.ModeMode != 'standard':
                         z[k] = z[k].to(device='cuda', dtype=(self.base_precision))
                         z[k] = Attach_Adapter(keyname=k,weight=z[k],adapter=z_adapter,mode=self.ModeMode,scaling=adapter_scale,device='cuda')
