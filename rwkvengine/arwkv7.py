@@ -188,16 +188,16 @@ class ARWKV_7(nn.Module):
     @MyStatic
     def ax070_TimeMix_fla_Step3(B:int,T:int,H:int,N:int,r,k,r_k,v,g,O_,x,xx,state,v_first,y_offset,out_offset):
 
-        xs = xx.shape
-        xx = xx.view(B,T,-1) * (1 + y_offset).unsqueeze(1)
-        xx = xx.view(xs)
+        # xs = xx.shape
+        # xx = xx.view(B,T,-1) * (1 + y_offset).unsqueeze(1)
+        # xx = xx.view(xs)
 
         xx = xx.view(B,T,-1).to(dtype=r.dtype)
 
         xx = xx + ((r * k * r_k).view(B,T,H,N).sum(dim=-1, keepdim=True) * v.view(B,T,H,N)).view(B,T,H*N)
         xx=xx.to(dtype=g.dtype)
 
-        output = hybrid_matmul((xx * g) , O_) * ( 1 + out_offset).unsqueeze(1)
+        output = hybrid_matmul((xx * g) , O_)# * ( 1 + out_offset).unsqueeze(1)
         return output, x[:,-1], state.float(), v_first
     
 
@@ -255,15 +255,15 @@ class ARWKV_7(nn.Module):
     def ax070_TimeMix_fla_Step3_fpx(B:int,T:int,H:int,N:int,r,k,r_k,v,g,O_,x,xx,state,v_first,O_state,ebits,mbits,y_offset,out_offset):
 
         #prefix offset
-        xs = xx.shape
-        xx = xx.view(B,T,-1) * (1 + y_offset).unsqueeze(1)
-        xx = xx.view(xs)
+        # xs = xx.shape
+        # xx = xx.view(B,T,-1) * (1 + y_offset).unsqueeze(1)
+        # xx = xx.view(xs)
 
         xx = xx.view(B,T,-1).to(dtype=r.dtype)
 
         xx = xx + ((r * k * r_k).view(B,T,H,N).sum(dim=-1, keepdim=True) * v.view(B,T,H,N)).view(B,T,H*N)
         xx=xx.to(dtype=g.dtype)
-        output = fpx_matmul((xx * g), O_, O_state,ebits,mbits) * ( 1 + out_offset ).unsqueeze(1)
+        output = fpx_matmul((xx * g), O_, O_state,ebits,mbits)# * ( 1 + out_offset ).unsqueeze(1)
 
         return  output, x[:,-1], state.float(), v_first
 
@@ -363,7 +363,7 @@ class ARWKV_7(nn.Module):
 
                 #print(f'x = {x.dtype}')
 
-                xx = Qwen2RMSNorm.independent_forward(x,z[bbb+'ln1.weight'],variance_epsilon=1e-5)
+                xx = Qwen2RMSNorm.independent_forward(x,z[bbb+'ln1.weight'],variance_epsilon=1e-6)
 
                 #print(f'xx norm = {xx.dtype}')
 
@@ -408,7 +408,7 @@ class ARWKV_7(nn.Module):
 
                 x = x + xx
 
-                xx = Qwen2RMSNorm.independent_forward(x,z[bbb+'ln2.weight'],variance_epsilon=1e-5)
+                xx = Qwen2RMSNorm.independent_forward(x,z[bbb+'ln2.weight'],variance_epsilon=1e-6)
 
 
                 if self.ARWKVMLPMode == 0: 
@@ -438,7 +438,7 @@ class ARWKV_7(nn.Module):
             
             
             #x = F.layer_norm(x, (self.n_embd,), weight=z['ln_out.weight'], bias=z['ln_out.bias'])
-            x = Qwen2RMSNorm.independent_forward(x,z['ln_out.weight'],variance_epsilon=1e-5)
+            x = Qwen2RMSNorm.independent_forward(x,z['ln_out.weight'],variance_epsilon=1e-6)
             if StrategyMode == 0:
                 x = hybrid_matmul(x , z['head.weight'])
             if StrategyMode == 3:

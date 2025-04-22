@@ -128,40 +128,67 @@ class PIPELINE():
         #from rwkv_tokenizer import TRIE_TOKENIZER_MOSE
         if mode == 'world':
             self.tokenizer = TRIE_TOKENIZER(os.path.dirname(os.path.abspath(__file__)) + '/rwkv_vocab_v20230424.txt')  
+            self.modeltemplate = self.load_tokenizer_config(os.path.dirname(os.path.abspath(__file__)) + "/world")
+            self.default_eos_token = self.modeltemplate.get("eos_token", "<|endoftext|>")
         elif mode == 'pile':
             print(f'Pile Tokenizer')
             self.tokenizer = Tokenizer.from_file(os.path.dirname(os.path.abspath(__file__)) + "/20B_tokenizer.json")
+            self.default_eos_token = "\n\n"
         elif mode == 'qwen':
             print(f'Qwen Tokenizer')
             from transformers import AutoTokenizer
             self.tokenizer = AutoTokenizer.from_pretrained(os.path.dirname(os.path.abspath(__file__)) + "/qwen")
             self.modeltemplate = self.load_tokenizer_config(os.path.dirname(os.path.abspath(__file__)) + "/qwen")
+            self.default_eos_token = self.modeltemplate.get("eos_token", "<|endoftext|>")
         elif mode == 'llmjp':
             print(f'llmjp llama Tokenizer')
             from transformers import AutoTokenizer
             self.tokenizer = AutoTokenizer.from_pretrained(os.path.dirname(os.path.abspath(__file__)) + "/llmjp")
+            self.modeltemplate = self.load_tokenizer_config(os.path.dirname(os.path.abspath(__file__)) + "/llmjp")
+            self.default_eos_token = self.modeltemplate.get("eos_token", "<|endoftext|>")
         elif mode == 'phi3.5':
             print(f'phi3.5 Tokenizer')
             from transformers import AutoTokenizer
             self.hfmode = True
             self.tokenizer = AutoTokenizer.from_pretrained(os.path.dirname(os.path.abspath(__file__)) + "/phi3.5", add_prefix_space=True)
+            self.modeltemplate = self.load_tokenizer_config(os.path.dirname(os.path.abspath(__file__)) + "/phi3.5")
+            self.default_eos_token = self.modeltemplate.get("eos_token", "<|endoftext|>")
+
         elif mode == 'phi4mini':
             print(f'phi1 mini Tokenizer')
             from transformers import AutoTokenizer
             self.hfmode = True
             self.tokenizer = AutoTokenizer.from_pretrained(os.path.dirname(os.path.abspath(__file__)) + "/phi4mini", add_prefix_space=True)
+            self.modeltemplate = self.load_tokenizer_config(os.path.dirname(os.path.abspath(__file__)) + "/phi4mini")
+            self.default_eos_token = self.modeltemplate.get("eos_token", "<|endoftext|>")
         elif mode == 'phi4':
             print(f'phi4 Tokenizer')
             from transformers import AutoTokenizer
             self.hfmode = True
             self.tokenizer = AutoTokenizer.from_pretrained(os.path.dirname(os.path.abspath(__file__)) + "/phi4", add_prefix_space=True)
             self.modeltemplate = self.load_tokenizer_config(os.path.dirname(os.path.abspath(__file__)) + "/phi4")
+            self.default_eos_token = self.modeltemplate.get("eos_token", "<|endoftext|>")
         elif mode == 'mistralsmall3':
             print(f'mistral small 3 Tokenizer')
             from transformers import AutoTokenizer
             self.hfmode = True
             self.tokenizer = AutoTokenizer.from_pretrained(os.path.dirname(os.path.abspath(__file__)) + "/mistralsmall3") #, add_prefix_space=True
             self.modeltemplate = self.load_tokenizer_config(os.path.dirname(os.path.abspath(__file__)) + "/mistralsmall3")
+            self.default_eos_token = self.modeltemplate.get("eos_token", "<|endoftext|>")
+        elif mode == 'rekaflash3':
+            print(f'rekaflash3 Tokenizer')
+            from transformers import AutoTokenizer
+            self.hfmode = True
+            self.tokenizer = AutoTokenizer.from_pretrained(os.path.dirname(os.path.abspath(__file__)) + "/rekaflash3") #, add_prefix_space=True
+            self.modeltemplate = self.load_tokenizer_config(os.path.dirname(os.path.abspath(__file__)) + "/rekaflash3")
+            self.default_eos_token = self.modeltemplate.get("eos_token", "<|endoftext|>")
+        else:
+            print(f'{mode} Tokenizer')
+            from transformers import AutoTokenizer
+            self.hfmode = True
+            self.tokenizer = AutoTokenizer.from_pretrained(os.path.dirname(os.path.abspath(__file__)) + f"/{mode}") #, add_prefix_space=True
+            self.modeltemplate = self.load_tokenizer_config(os.path.dirname(os.path.abspath(__file__)) + f"/{mode}")
+            self.default_eos_token = self.modeltemplate.get("eos_token", "<|endoftext|>")
 
     def load_tokenizer_config(self, config_path: str) -> dict:
         """
@@ -438,6 +465,121 @@ class PIPELINE():
         
         return samples#
     
+    def improved_nucleus_sampling_multi_static_topk(self, logits, temperature, top_p, top_k=5):
+        """
+        logits       : [batch_size, vocab_size] のテンソル
+        temperature  : スカラー もしくは [batch_size, 1] のテンソル
+        top_p        : スカラー もしくは [batch_size, 1] のテンソル
+        top_k        : None, スカラー(int), もしくは [batch_size, 1] のテンソル
+        """
+        device = logits.device
+        batch_size, vocab_size = logits.size()
+
+        # (1) temperature をテンソル化して準備
+        # --------------------------------
+        if isinstance(temperature, (float, int)):
+            # スカラー → バッチサイズぶん展開
+            temperature = torch.full((batch_size, 1), fill_value=temperature, 
+                                    device=device, dtype=logits.dtype)
+        else:
+            # すでに [batch_size, 1] と仮定
+            temperature = temperature.view(batch_size, 1).to(device=device, dtype=logits.dtype)
+        # 0.0 はゼロ除算回避のため 1.0 に置き換える
+        temperature[temperature == 0.0] = 1.0
+
+        # (2) top_p をテンソル化
+        # --------------------------------
+        if isinstance(top_p, (float, int)):
+            # スカラー → バッチサイズぶん展開
+            p = torch.full((batch_size, 1), fill_value=top_p, 
+                        device=device, dtype=logits.dtype)
+        else:
+            # すでに [batch_size, 1] と仮定
+            p = top_p.view(batch_size, 1).to(device=device, dtype=logits.dtype)
+
+        # (3) top_k をバッチ単位で処理するための準備
+        # --------------------------------
+        # None や 0 以下の場合はTop-Kなしとみなす
+        top_k_tensor = None
+        if top_k is not None and isinstance(top_k, int) and top_k > 0:
+            # スカラー (整数) の場合
+            # → 全バッチ同じK
+            top_k_tensor = torch.full((batch_size,), fill_value=top_k, device=device, dtype=torch.long)
+        elif torch.is_tensor(top_k):
+            # すでにバッチサイズと同じかどうかを仮定
+            # [batch_size, 1] または [batch_size] など
+            top_k = top_k.view(-1).to(device=device, dtype=torch.long)
+            # k <= 0 のものは使えないので min(k, 1) のチェックなど適宜する
+            top_k = torch.clamp(top_k, min=0)
+            if top_k.size(0) == batch_size:
+                top_k_tensor = top_k
+            else:
+                # サイズが合わない場合はエラーにするか、適当に処理する
+                raise ValueError(f"top_k がバッチサイズ({batch_size})と合いません: {top_k.size()}")
+        # top_k_tensor が None のままなら「Top-Kなし」として扱う
+
+        # (4) softmax で確率に変換
+        # --------------------------------
+        # float16/bfloat16 環境の場合も考慮し、float32 で一度計算する例
+        probs = F.softmax(logits.to(dtype=torch.float32), dim=-1)
+
+        # (5) バッチごとに Top-K を適用（top_k_tensor があれば）
+        # --------------------------------
+        if top_k_tensor is not None:
+            new_probs = torch.zeros_like(probs)
+            for i in range(batch_size):
+                k_i = top_k_tensor[i].item()
+                if k_i > 0:
+                    # バッチ i の確率分布のみ取り出し
+                    row_probs = probs[i]  # shape: [vocab_size]
+                    # 上位 k_i を取得
+                    topk_probs, topk_indices = torch.topk(row_probs, k_i, dim=-1)
+                    # 一旦全部0にして、該当indexにだけ値を割り当てる
+                    temp = torch.zeros_like(row_probs)
+                    temp.scatter_(0, topk_indices, topk_probs)
+                    new_probs[i] = temp
+                else:
+                    # k_i <= 0 はマスク扱い(Top-K無効と同じ)
+                    new_probs[i] = probs[i]
+            probs = new_probs
+
+        # (6) Top-P (Nucleus) をバッチ単位で適用
+        # --------------------------------
+        # 降順にソート
+        sorted_probs, sorted_indices = torch.sort(probs, descending=True, dim=-1)
+        cumulative_probs = torch.cumsum(sorted_probs, dim=-1)
+
+        # 累積確率が p を超える部分をマスク
+        # 先頭要素を除いて True をずらすことでしきい値を超えた直後からマスク
+        sorted_indices_to_remove = (cumulative_probs > p)
+        shifted = torch.zeros_like(sorted_indices_to_remove)
+        shifted[:, 1:] = sorted_indices_to_remove[:, :-1]
+        sorted_indices_to_remove = shifted
+        sorted_indices_to_remove[:, 0] = False
+
+        # 元のインデックスにマスクを適用
+        indices_to_remove = torch.zeros_like(sorted_indices_to_remove)
+        indices_to_remove.scatter_(1, sorted_indices, sorted_indices_to_remove)
+        probs = probs.masked_fill(indices_to_remove, 0.0)
+
+        # (7) 温度スケーリング
+        # --------------------------------
+        # （全成分 1.0 のバッチもあるので、==1.0 全部 が False のバッチもあるかもしれませんが、
+        #   一応一括で計算）
+        # temperature はバッチ単位 [batch_size, 1]
+        # probs は [batch_size, vocab_size]
+        if not torch.all(temperature == 1.0):
+            # (1.0 / temperature): shape [batch_size, 1]
+            inv_temp = 1.0 / temperature
+            # broadcasting
+            probs = probs ** inv_temp
+            probs = probs / probs.sum(dim=-1, keepdim=True)
+
+        # (8) multinomial サンプリング
+        # --------------------------------
+        samples = torch.multinomial(probs, num_samples=1).squeeze(-1)
+
+        return samples
 
 class TimeMixState:
     def __init__(self, shift_state: torch.Tensor, wkv_state: torch.Tensor):

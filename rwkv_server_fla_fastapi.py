@@ -143,11 +143,11 @@ params_base = {
             "half_life": 400,
             "stop": ['\n\n'] #\n\n \x17
         }
-DefaultEndtoken = '\n\n'
-DefaultEndtoken_qwen = '<|im_end|>'
-DefaultEndtoken_llama = '<|eot_id|>'
-DefaultEndtoken_phi35 = '<|end|>'
-Endtoken = '\n\n'
+# DefaultEndtoken = '\n\n'
+# DefaultEndtoken_qwen = '<|im_end|>'
+# DefaultEndtoken_llama = '<|eot_id|>'
+# DefaultEndtoken_phi35 = '<|end|>'
+# Endtoken = '\n\n'
 
 @app.post("/removemodel")
 async def removemodel():
@@ -209,18 +209,7 @@ async def loadmodel(request: Request):
         #wrappers[0].load_model(model_filename,model_strategy)
         Quant = False
         precision = ''
-        # if model_strategy == 'quantfp16':
-        #     Quant = True
-        #     precision = 'fp16'
-        # if model_strategy == 'quantfp16i8':
-        #     Quant = True
-        #     precision = 'fp16int8'
-        # if model_strategy == 'quantbf16':
-        #     Quant = True
-        #     precision = ''
-        # if model_strategy == 'quantbf16i8':
-        #     Quant = True
-        #     precision = 'int8'
+
         if model_strategy == 'fp16':
             Quant = False
             precision = 'fp16'
@@ -254,15 +243,16 @@ async def loadmodel(request: Request):
         DynamicStateList = []
         
         engine1.LoadModel(model_filename,Quant,precision,adapter_model=adapter_filename,adapter_mode=adapter_mode,adapter_scale=adapter_scaling,fully_fusedrecurrent=args.fully_fusedrecurrent,template_mode=template_mode)
-        if engine1.templatemode == 'world':
-            model_endtoken = data.get('endtoken',DefaultEndtoken)
-        elif engine1.templatemode == 'phi3.5' or  engine1.templatemode == 'phi4mini':
-            model_endtoken = data.get('endtoken',DefaultEndtoken_phi35)
-        else:
-            if engine1.templatemode == 'llmjp':
-                model_endtoken = data.get('endtoken',DefaultEndtoken_llama)
-            else:
-                model_endtoken = data.get('endtoken',DefaultEndtoken_qwen)
+        model_endtoken = data.get('endtoken',engine1.pipeline.default_eos_token)
+        # if engine1.templatemode == 'world':
+        #     model_endtoken = data.get('endtoken',DefaultEndtoken)
+        # elif engine1.templatemode == 'phi3.5' or  engine1.templatemode == 'phi4mini':
+        #     model_endtoken = data.get('endtoken',DefaultEndtoken_phi35)
+        # else:
+        #     if engine1.templatemode == 'llmjp':
+        #         model_endtoken = data.get('endtoken',DefaultEndtoken_llama)
+        #     else:
+        #         model_endtoken = data.get('endtoken',DefaultEndtoken_qwen)
 
         Endtoken = model_endtoken.encode().decode('unicode_escape')
 
@@ -563,18 +553,20 @@ async def rwkv_completions(request: Request):
     input_prompt = []
     input_prompt_stm = ""
 
-    if engine1.templatemode == 'llmjp':
-        input_prompt.append(llmjpformatter.format_chat(messages,add_generation_prompt=True))
-        #exit()
-    elif engine1.templatemode == 'phi3.5' or engine1.templatemode == 'phi4mini':
-        input_prompt.append(phi3formatter.format_chat(messages,add_generation_prompt=True))
-        #exit()
-    elif engine1.templatemode == 'phi4':
-        input_prompt.append(engine1.pipeline.generate_prompt_from_config(engine1.pipeline.modeltemplate,messages,True))
-    else:
-        for element in messages:
-            input_prompt.append(GetTemplate(len(input_prompt),element["role"],element["content"],Endtoken,engine1.templatemode))
-        input_prompt.append(GetTemplate(len(input_prompt),'assistant',None,Endtoken,engine1.templatemode))
+    input_prompt.append(engine1.pipeline.generate_prompt_from_config(engine1.pipeline.modeltemplate,messages,True))
+
+    # if engine1.templatemode == 'llmjp':
+    #     input_prompt.append(llmjpformatter.format_chat(messages,add_generation_prompt=True))
+    #     #exit()
+    # elif engine1.templatemode == 'phi3.5' or engine1.templatemode == 'phi4mini':
+    #     input_prompt.append(phi3formatter.format_chat(messages,add_generation_prompt=True))
+    #     #exit()
+    # elif engine1.templatemode == 'phi4':
+    #     input_prompt.append(engine1.pipeline.generate_prompt_from_config(engine1.pipeline.modeltemplate,messages,True))
+    # else:
+    #     for element in messages:
+    #         input_prompt.append(GetTemplate(len(input_prompt),element["role"],element["content"],Endtoken,engine1.templatemode))
+    #     input_prompt.append(GetTemplate(len(input_prompt),'assistant',None,Endtoken,engine1.templatemode))
 
     print(input_prompt)
 

@@ -15,27 +15,40 @@ if __name__ == '__main__':
 
     pipeline = PIPELINE("mistralsmall3")
 
-    text = "こんにちは、世界！"
+    text = "The Large Language Model is "
     # エンコード：通常は input_ids というキーでID列が得られます
     encoded = pipeline.encode(text)
-    print("Encoded IDs:", encoded)
+    #print("Encoded IDs:", encoded)
 
     # デコード
-    decoded = pipeline.decode(encoded)
-    print("Decoded text:", decoded)
+   # decoded = pipeline.decode(text)
+    #print("Decoded text:", decoded)
+
+    messages = [
+        #{'role':'system', 'content':"You are Mistral Small 3, a Large Language Model (LLM) created by Mistral AI, a French startup headquartered in Paris.Your knowledge base was last updated on 2023-10-01. The current date is 2025-01-30.When you're not sure about some information, you say that you don't have the information and don't make up anything."},
+        {'role':'system', 'content':"You are Mistral Small 3"},
+        {'role':'assistant', 'content':"Gooday! how can i help you?"},
+        {'role':'user', 'content':"Hi! Tell me what is Large Language Model?"},
+    ]
 
     messages = [
         {'role':'system', 'content':"You are Mistral Small 3, a Large Language Model (LLM) created by Mistral AI, a French startup headquartered in Paris.Your knowledge base was last updated on 2023-10-01. The current date is 2025-01-30.When you're not sure about some information, you say that you don't have the information and don't make up anything."},
-        {'role':'user', 'content':"who are you?"}
+        #{'role':'system', 'content':"You are Mistral Small 3"},
+        {'role':'assistant', 'content':"Gooday! how can i help you?"},
+        {'role':'user', 'content':"Tell what is famous travel spot in japan. please tell me about it."},
     ]
-    context = pipeline.generate_prompt_from_config(pipeline.modeltemplate,messages,True)
+
+
+    context = pipeline.generate_prompt_from_config(pipeline.modeltemplate,messages,False)
+
+    context = " "
 
 
     #exit()
 
     model = RWKV_x('/home/client/Projects/Models/PRWKV-7-Mistral-Small-Instruct-Preview-v0.1','fp5',
-                   adapter_model='',
-                   adapter_mode='',
+                   adapter_model='/home/client/Projects/RWKV-LM-RLHF/main/myfolder/Outputs/prwkvtest/rwkv-0.pth',
+                   adapter_mode='lora',
                    fully_fusedrecurrent=args.fully_fused)
 
     Target_batch = args.tb
@@ -99,7 +112,7 @@ if __name__ == '__main__':
     del wkv_states1
 
     t_prefill_0 = time.perf_counter()
-    x, shift_states, wkv_states = model.forward(copy.deepcopy(idx), shift_states, wkv_states,KernelMode=0) #FLA
+    x, shift_states, wkv_states = model.forward(copy.deepcopy(idx), shift_states, wkv_states,KernelMode=1) #FLA
     t_prefill_1 = time.perf_counter()
 
 
@@ -171,13 +184,15 @@ if __name__ == '__main__':
 
     maxtoken= 1000
 
-    temperature = torch.full((Target_batch,), 0.3)
-    top_p = torch.full((Target_batch,), 0.3)
+    temperature = torch.full((Target_batch,), 1.0)
+    top_p = torch.full((Target_batch,), 1.0)
 
 
     SamplingSum = 0
     ForwardSum = 0
     DecodeSum = 0
+
+    occurrence = [{},{},{},{}]
 
     for i in range(maxtoken):
         
@@ -188,7 +203,17 @@ if __name__ == '__main__':
             x = x.view(x.shape[0],1,x.shape[1])
         x[:, -1, 0] -= 1e10
 
-        otokens = pipeline.improved_nucleus_sampling_multi_static(x[:, -1], temperature=temperature, top_p=top_p).tolist()
+        for j in range(Target_batch):
+            for n in occurrence[j]:
+                x[j][-1][n] -= 0.2 + occurrence[j][n] * 0.3
+
+        otokens = pipeline.improved_nucleus_sampling_multi_static_topk(x[:, -1], temperature=temperature, top_p=top_p,top_k=50).tolist()
+
+        for j in range(Target_batch):
+            for xxx in occurrence[j]:
+                    occurrence[j][xxx] *= 0.996
+            tk = otokens[j]
+            occurrence[j][tk] = 1 + (occurrence[j][tk] if tk in occurrence[j] else 0)
 
         tokens = []
         for j in range(Target_batch):

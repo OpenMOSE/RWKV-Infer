@@ -239,26 +239,28 @@ class LLMWorker:
         self.model = RWKV_x(modelpath,base_precision=precision,adapter_model=adapter_model,adapter_mode=adapter_mode,adapter_scale=adapter_scale,fully_fusedrecurrent=fully_fusedrecurrent)
         
         if self.model.ARWKVMode:
-            if self.model.ARWKVMLPMode == 1 and template_mode == 'phi3.5':
-                #Phi3.5 mode
-                self.pipeline = PIPELINE('phi3.5')
-                self.templatemode = 'phi3.5'
-            elif self.model.ARWKVMLPMode == 1 and template_mode == 'phi4mini':
-                #Phi3.5 mode
-                self.pipeline = PIPELINE('phi4mini')
-                self.templatemode = 'phi4mini'
-            elif self.model.ARWKVMLPMode == 1 and template_mode == 'phi4':
-                #Phi3.5 mode
-                self.pipeline = PIPELINE('phi4')
-                self.templatemode = 'phi4'
-            else:
-                if template_mode == 'llmjp':
-                    self.pipeline = PIPELINE('llmjp')
-                    self.templatemode = 'llmjp'
+            self.pipeline = PIPELINE(template_mode)
+            self.templatemode = template_mode
+            # if self.model.ARWKVMLPMode == 1 and template_mode == 'phi3.5':
+            #     #Phi3.5 mode
+            #     self.pipeline = PIPELINE('phi3.5')
+            #     self.templatemode = 'phi3.5'
+            # elif self.model.ARWKVMLPMode == 1 and template_mode == 'phi4mini':
+            #     #Phi3.5 mode
+            #     self.pipeline = PIPELINE('phi4mini')
+            #     self.templatemode = 'phi4mini'
+            # elif self.model.ARWKVMLPMode == 1 and template_mode == 'phi4':
+            #     #Phi3.5 mode
+            #     self.pipeline = PIPELINE('phi4')
+            #     self.templatemode = 'phi4'
+            # else:
+            #     if template_mode == 'llmjp':
+            #         self.pipeline = PIPELINE('llmjp')
+            #         self.templatemode = 'llmjp'
                 
-                else:
-                    self.pipeline = PIPELINE('qwen')
-                    self.templatemode = 'qwen'
+            #     else:
+            #         self.pipeline = PIPELINE('qwen')
+            #         self.templatemode = 'qwen'
         else:
             self.pipeline = PIPELINE('world')
             self.templatemode = 'world'
@@ -521,7 +523,7 @@ class LLMWorker:
                         HiddenDim = self.model.dim_hidden
                         n_layer = self.model.n_layer
                         if self.model.RWKVMode == 7:
-                            offset_tensor = torch.zeros((BatchCount,n_layer,2,HiddenDim),dtype=torch.bfloat16,device=self.model.device)
+                            offset_tensor = torch.zeros((BatchCount,n_layer,HiddenDim),dtype=torch.bfloat16,device=self.model.device)
                         else:
                             offset_tensor = None
 
@@ -605,7 +607,7 @@ class LLMWorker:
                         else:
                             KernelMode = 0
 
-                        x, shift_states, wkv_states = self.model.forward(idx, shift_states, wkv_states,KernelMode=KernelMode,offset_tensor=offset_tensor)
+                        x, shift_states, wkv_states = self.model.forward(idx, shift_states, wkv_states,KernelMode=KernelMode,time_offset_state=offset_tensor)
 
                         
 
@@ -822,6 +824,33 @@ class LLMWorker:
                                         tmp = tmp.replace(stop,'')
                                         #outputs[j] = outputs[j] + tmp
                                         exit_flag = True
+                                for stop in end_token[j]:
+                                    # 末尾から文字列を構築
+                                    target_len = len(stop)
+                                    search_str = stop
+                                    accum_str = ''
+                                    matched_token_count = 0
+                                    for i in range(1, len(outputs[j]) + 1):
+                                        token = outputs[j][-i]
+                                        accum_str = token + accum_str
+                                        matched_token_count += 1
+
+                                        if len(accum_str) >= target_len:
+                                            if search_str in accum_str:
+                                                # 該当部分を削除
+                                                print('Endtoken detected')
+                                                print(outputs[j])
+                                                del outputs[j][-matched_token_count:]
+                                                print(outputs[j])
+
+                                                #outputs[j].append(accum_str.replace(search_str,''))
+                                                print(f'Endtoken = {stop}')
+                                                exit_flag = True
+                                                tmp=''
+                                                #print(f"見つかって削除されました！新しいTextArray: {outputs[j]}")
+                                            # else:
+                                            #     print("見つかりませんでした。")
+                                            break
                                 if exit_flag:
                                     statuss[j] = 'idle'
 
@@ -866,7 +895,7 @@ class LLMWorker:
                         HiddenDim = self.model.dim_hidden
                         n_layer = self.model.n_layer
                         if self.model.RWKVMode == 7:
-                            offset_tensor = torch.zeros((BatchCount,n_layer,2,HiddenDim),dtype=torch.bfloat16,device=self.model.device)
+                            offset_tensor = torch.zeros((BatchCount,n_layer,HiddenDim),dtype=torch.bfloat16,device=self.model.device)
                         else:
                             offset_tensor = None
 
@@ -931,7 +960,7 @@ class LLMWorker:
                             shift_states = shift_states.permute(1,0,2)
                             wkv_states = wkv_states.permute(1, 0, 2, 3, 4)
 
-                        x, shift_states, wkv_states = self.model.forward(idx, shift_states, wkv_states,one_mode=True,offset_tensor=offset_tensor)
+                        x, shift_states, wkv_states = self.model.forward(idx, shift_states, wkv_states,one_mode=True,time_offset_state=offset_tensor)
 
                         if x.dim() == 2:
                             x = x.view(x.shape[0],1,x.shape[1])

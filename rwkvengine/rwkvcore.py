@@ -45,6 +45,7 @@ MyStatic = torch.jit.script
 from rwkvengine.rwkv6 import RWKV_6, fused_recurrent_rwkv6_torch
 from rwkvengine.rwkv7 import RWKV_7
 from rwkvengine.arwkv7 import ARWKV_7
+from rwkvengine.prwkv7 import PRWKV_7
 
 
 
@@ -256,8 +257,9 @@ class RWKV_x(nn.Module):
 
             self.emboncpu = False
             RWKVMode = 6 #default RWKV 6
-
             self.gate_enable = False
+
+            
 
             self.MoE = 0
             for key in keys:
@@ -268,7 +270,7 @@ class RWKV_x(nn.Module):
                 elif 'router' in key and self.MoE != 1:
                     self.MoE = 1
                     print('Shared Mixture of Experts Mode!')
-                elif 'x_g' in key and self.gate_enable != True:
+                elif ('x_g' in key or 'g1' in key ) and self.gate_enable != True:
                     self.gate_enable = True
                     print('Gate Enabled')
 
@@ -282,7 +284,7 @@ class RWKV_x(nn.Module):
                         self.MoE = 1
                         print('Shared Mixture of Experts Mode!')
                         #exit()
-                    elif 'x_g' in key and self.gate_enable != True:
+                    elif  ('x_g' in key or 'g1' in key ) and self.gate_enable != True:
                         self.gate_enable = True
                         print('Gate Enabled')
 
@@ -290,17 +292,24 @@ class RWKV_x(nn.Module):
             ARWKVMode = 0
 
             self.ARWKVMLPMode = 0
+            self.TokenshiftMode = 1
 
 
             for key in keys:
                 if '.down.weight' in key and ARWKVMode != 1:
                     print("ARWKV-7 Mode :) Powered by RWKV-Red-Team.")
                     ARWKVMode = 1
+                if '.x_a' in key and self.TokenshiftMode != 0:
+                    print("Tokenshift Found")
+                    self.TokenshiftMode = 0
             if z_adapter_keys is not None:
                 for key in z_adapter_keys:
                     if '.down.weight' in key and ARWKVMode != 1:
                         print("ARWKV-7 Mode. Powered by RWKV-Red-Team.")
                         ARWKVMode = 1
+                    if '.x_a' in key and self.TokenshiftMode != 0:
+                        print("Tokenshift Found")
+                        self.TokenshiftMode = 0
 
             self.ARWKVMode = ARWKVMode
 
@@ -702,10 +711,14 @@ class RWKV_x(nn.Module):
         state_keys = list(state_raw.keys())
 
         state_count = 0
+        state_time_offset_mode = 0
         for key in state_keys:
             #print(f'{key}')
-            if 'time_state' in key:
+            if 'time_state' in key and 'time_offset' not in key:
                 state_count = state_count + 1
+            if 'time_offset' in key:
+                if state_raw[key].shape == state_raw_shape:
+                    state_time_offset_mode = 1
 
         #exit()
 
@@ -729,12 +742,9 @@ class RWKV_x(nn.Module):
         atype = torch.bfloat16 #dd.atype
         dev = 'cpu'
         model_current_statetuned = [None] * self.n_layer * 3
-        #model_current_offset = [None] * self.n_layer * 2
-        model_current_offset = torch.zeros((self.n_layer,2,self.dim_hidden), dtype=atype, requires_grad=False, device=dev).contiguous()
 
-        
-
-
+        model_current_offset = torch.zeros((self.n_layer,self.dim_hidden), dtype=atype, requires_grad=False, device=dev).contiguous()
+   
 
         for i in range(self.n_layer):
             #dd = strategy[i]
@@ -746,29 +756,19 @@ class RWKV_x(nn.Module):
 
             #self.RWKVMode
             tempstate = state_raw[f"blocks.{i}.att.time_state"]
-
+            
             #Offset Tuning
             if EnableOffset:
-                try:
-                    y_offset = state_raw[f"blocks.{i}.att.time_offset_y"]
-                    out_offset = state_raw[f"blocks.{i}.att.time_offset"]
-                except:
-                    y_offset = torch.zeros((self.dim_hidden),
-                                                     dtype=atype, requires_grad=False, device=dev
-                                          )
-                    out_offset = torch.zeros((self.dim_hidden),
-                                                     dtype=atype, requires_grad=False, device=dev
-                                          )
-                
-                model_current_offset[i][0]=y_offset
-                model_current_offset[i][1]=out_offset
+                    try:
+                        time_state_offset = state_raw[f"blocks.{i}.att.time_offset"]
+                        #time_state_offset=time_state_offset.transpose(1, 2)
+                        
+                    except:
+                        time_state_offset = torch.zeros((self.dim_hidden),
+                                                        dtype=atype, requires_grad=False, device=dev
+                                            )
 
-                print(f'y_offset={y_offset}')
-                print(f'out_offset={out_offset}')
-
-
-
-
+                    model_current_offset[i]=time_state_offset
 
 
 
@@ -805,13 +805,18 @@ class RWKV_x(nn.Module):
     
     
 
-    def forward(self, idx, last_shift_states , last_wkv_states, one_mode = False, KernelMode = 0,offset_tensor:torch.Tensor=None):
+    def forward(self, idx, last_shift_states , last_wkv_states, one_mode = False, KernelMode = 0,time_offset_state:torch.Tensor=None):
         if self.RWKVMode == 6:
             return RWKV_6.x060_forward(self,idx,last_shift_states,last_wkv_states)
         elif self.RWKVMode == 7 and self.ARWKVMode == 0:
-            return RWKV_7.x070_forward(self,idx,last_shift_states,last_wkv_states,one_mode=one_mode,KernelMode=KernelMode,full_output=False)
-        elif self.RWKVMode == 7 and self.ARWKVMode == 1:
-            return ARWKV_7.ax070_forward(self,idx,last_shift_states,last_wkv_states,one_mode=one_mode,KernelMode=KernelMode,full_output=False,offset_tensor=offset_tensor)
+            return RWKV_7.x070_forward(self,idx,last_shift_states,last_wkv_states,one_mode=one_mode,KernelMode=KernelMode,full_output=False,time_offset_state=time_offset_state)
+        elif self.RWKVMode == 7 and self.ARWKVMode == 1 and self.TokenshiftMode == 0:
+            print('ARWKV')
+            return ARWKV_7.ax070_forward(self,idx,last_shift_states,last_wkv_states,one_mode=one_mode,KernelMode=KernelMode,full_output=False )
+        
+        elif self.RWKVMode == 7 and self.ARWKVMode == 1 and self.TokenshiftMode == 1:
+            print('PRWKV')
+            return PRWKV_7.PRWKV7_forward(self,idx,last_shift_states,last_wkv_states,one_mode=one_mode,KernelMode=KernelMode,full_output=False,time_offset_state=time_offset_state)
     
 
 
