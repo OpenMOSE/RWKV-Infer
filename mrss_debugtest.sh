@@ -2,7 +2,7 @@
 curl http://127.0.0.1:9000/healthcheck
 
  
-curl http://127.0.0.1:9000/loadmodel -X POST -H "Content-Type: application/json" -d '{"model_filename":"models/PRWKV7-cxa075-qwen14b-stage2-final.pth","model_viewname":"PRWKV7-cxa075 Qwen 2.5 14B Stage3 e5","model_strategy":"fp6","adapter_filename":"adapters/testbone3.pth","adapter_mode":"bone", "template":"qwen", "endtoken":"<|im_end|>"}'
+curl http://127.0.0.1:9000/loadmodel -X POST -H "Content-Type: application/json" -d '{"model_filename":"models/PRWKV7-cxa075-qwen14b-stage2-final.pth","model_viewname":"PRWKV7-cxa075 Qwen 2.5 14B Stage3 16k chunk","model_strategy":"fp6","adapter_filename":"adapters/testlora2.pth","adapter_mode":"lora", "template":"qwen", "endtoken":"<|im_end|>"}'
 #
 #curl http://127.0.0.1:9000/loadmodel -X POST -H "Content-Type: application/json" -d '{"model_filename":"models/ARWKV_7B_R1_16K.pth","model_viewname":"ARWKV-7B-R1 16K","model_strategy":"fp16","adapter_filename":"adapters/arwkv-cje5-6.pth","adapter_mode":"","default_temperature":"1.0", "default_top_p":"0.3"}'
 

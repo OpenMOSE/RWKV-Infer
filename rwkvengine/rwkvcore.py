@@ -811,11 +811,11 @@ class RWKV_x(nn.Module):
         elif self.RWKVMode == 7 and self.ARWKVMode == 0:
             return RWKV_7.x070_forward(self,idx,last_shift_states,last_wkv_states,one_mode=one_mode,KernelMode=KernelMode,full_output=False,time_offset_state=time_offset_state)
         elif self.RWKVMode == 7 and self.ARWKVMode == 1 and self.TokenshiftMode == 0:
-            print('ARWKV')
+            #print('ARWKV')
             return ARWKV_7.ax070_forward(self,idx,last_shift_states,last_wkv_states,one_mode=one_mode,KernelMode=KernelMode,full_output=False )
         
         elif self.RWKVMode == 7 and self.ARWKVMode == 1 and self.TokenshiftMode == 1:
-            print('PRWKV')
+            #print('PRWKV')
             return PRWKV_7.PRWKV7_forward(self,idx,last_shift_states,last_wkv_states,one_mode=one_mode,KernelMode=KernelMode,full_output=False,time_offset_state=time_offset_state)
     
 
