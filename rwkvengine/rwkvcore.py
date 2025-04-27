@@ -460,7 +460,8 @@ class RWKV_x(nn.Module):
 
             # FP8 Transformer Engine Quantize Mode 
             if self.bitfp8quant == True:
-                emboncpu = True
+                emboncpu = False
+                self.ebits, self.mbits = 4, 3
                 for k in keys:
                     print(f' k = {k} shape = {z[k].shape}' )
                     if self.ModeMode != 'standard':
@@ -476,6 +477,15 @@ class RWKV_x(nn.Module):
                         torch.cuda.empty_cache() 
                         self.emboncpu = True
 
+                    def bf16_to_fp8(tensor):
+                        FP8_MAX = 448.0
+                        tensor=tensor.to(device='cuda')
+                        scale = FP8_MAX / torch.max(torch.abs(tensor)) + 1e-6
+                        tensor_scaled = tensor.float() * scale
+                        tensor_clipped = torch.clamp(tensor_scaled, -FP8_MAX, FP8_MAX)
+                        tensor_fp8 = tensor_clipped.to(dtype=torch.float8_e4m3fn ).contiguous()
+                        return tensor_fp8, scale.float()
+
 
 
 
@@ -483,9 +493,10 @@ class RWKV_x(nn.Module):
                         if k.endswith(QuantKey):
                             print(f'Quant {k} to torch.float8_e4m3fn')
                             QuantKeyFound = True
-                            amax = z[k].abs().max()
-                            print(f'amax = {float(amax)}')
-                            z[k] = z[k].to(device='cuda',dtype=torch.float8_e4m3fn).contiguous() 
+                            z[k], z[k+'.qstate'] = bf16_to_fp8(z[k])
+                            #amax = z[k].abs().max()
+                            #print(f'amax = {float(amax)}')
+                            #z[k] = z[k].to(device='cuda',dtype=torch.float8_e4m3fn).contiguous() 
                         
                     if QuantKeyFound == False:
                         for QuantKey in QuantList:

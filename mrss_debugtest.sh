@@ -1,8 +1,11 @@
 #!/bin/bash
 curl http://127.0.0.1:9000/healthcheck
 
- 
-curl http://127.0.0.1:9000/loadmodel -X POST -H "Content-Type: application/json" -d '{"model_filename":"models/PRWKV7-cxa075-qwen14b-stage2-final.pth","model_viewname":"PRWKV7-cxa075 Qwen 2.5 14B Stage3 16k chunk","model_strategy":"fp6","adapter_filename":"adapters/testlora2.pth","adapter_mode":"lora", "template":"qwen", "endtoken":"<|im_end|>"}'
+curl http://127.0.0.1:9000/loadmodel -X POST -H "Content-Type: application/json" -d '{"model_filename":"models/PRWKV7-cxa076-qwen3b-stage2final-ctx2048.pth","model_viewname":"PRWKV7-cxa076 Qwen 2.5 3B Stage2 FP8","model_strategy":"fp8","adapter_filename":"adapters/testlora7.pth","adapter_mode":"", "template":"qwen", "endtoken":"<|im_end|>","default_temperature":"1.0", "default_top_p":"0.3"}'
+
+#curl http://127.0.0.1:9000/loadmodel -X POST -H "Content-Type: application/json" -d '{"model_filename":"models/PRWKV7-cxa076-qwen14b-stage2-ctx2048.pth","model_viewname":"PRWKV7-cxa076 Qwen 2.5 14B Stage2Final FP8","model_strategy":"fp8","adapter_filename":"adapters/testlora7.pth","adapter_mode":"", "template":"qwen", "endtoken":"<|im_end|>","default_temperature":"1.0", "default_top_p":"0.3"}'
+#
+#curl http://127.0.0.1:9000/loadmodel -X POST -H "Content-Type: application/json" -d '{"model_filename":"models/PRWKV7-cxa075-qwen14b-stage2-final.pth","model_viewname":"PRWKV7-cxa075 Qwen 2.5 14B Stage3 16k e7","model_strategy":"fp6","adapter_filename":"adapters/testlora7.pth","adapter_mode":"lora", "template":"qwen", "endtoken":"<|im_end|>","default_temperature":"0.7", "default_top_p":"0.1"}'
 #
 #curl http://127.0.0.1:9000/loadmodel -X POST -H "Content-Type: application/json" -d '{"model_filename":"models/ARWKV_7B_R1_16K.pth","model_viewname":"ARWKV-7B-R1 16K","model_strategy":"fp16","adapter_filename":"adapters/arwkv-cje5-6.pth","adapter_mode":"","default_temperature":"1.0", "default_top_p":"0.3"}'
 
