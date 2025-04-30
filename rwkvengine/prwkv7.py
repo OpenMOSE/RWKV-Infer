@@ -292,6 +292,67 @@ class PRWKV_7(nn.Module):
 
         return r,w,k,v,aa,bb,xx,v_first
     
+    @MyStatic
+    def cxa076r_TimeMix_fla_Step1(layer_id: int, H: int, N: int,
+                        x, x_prev, v_first, state,
+                        w0, w1, w2, a0, a1, a2,
+                        v0, v1, v2,
+                        r_k, R_, K_, V_, O_,  R_bias, K_bias, V_bias, O_bias,
+                        ln_r,ln_k,rmsnorm_epsilon
+                        ):
+        dtype = x.dtype
+        B, T, HN = x.shape  # B, T, H*N
+        
+        xx = x
+
+        xr = xw = xk = xv = xa = xg = x
+
+
+        r = hybrid_matmul(xr,R_) + R_bias
+
+        w = -F.softplus(-(w0 + torch.tanh(xw @ w1) @ w2)) - 0.6
+
+        k = hybrid_matmul(xk,K_) + K_bias
+        v = hybrid_matmul(xv,V_) + V_bias
+
+        r = Qwen2RMSNorm.independent_forward(r.view(B,T,-1,N),ln_r,variance_epsilon=rmsnorm_epsilon)
+        k = Qwen2RMSNorm.independent_forward(k.view(B,T,-1,N),ln_k,variance_epsilon=rmsnorm_epsilon)
+
+
+
+        kv_dim = K_.shape[0]
+
+        k = k.view(B, T, int(kv_dim//N), N)
+        v = v.view(B, T, int(kv_dim//N), N)
+
+        #modified repeat_kv B,T,H_kv,D) -> B,T,H,D -> B,T,C
+        k = repeat_kv(k, int(HN//kv_dim))#reshape(B,T,-1) #(B,T,C)
+        v = repeat_kv(v, int(HN//kv_dim))#reshape(B,T,-1) #(B,T,C)
+
+        k = k.view(B, T, -1)
+        v = v.view(B, T, -1)
+
+
+        a = torch.sigmoid(a0 + (xa @ a1) @ a2)
+        
+        kk = torch.nn.functional.normalize((k).view(B,T,H,N), dim=-1, p=2.0).view(B,T,H*N)
+
+        k = k * (1.0 - w + a)
+
+        if layer_id == 0: v_first = v
+        else: v = v + (v_first - v) * torch.sigmoid(v0 + (xv @ v1) @ v2)
+     
+
+        B,T,HC = w.shape
+        C = state.shape[3]#64
+        H = int(HC//C)
+        
+
+        aa=-kk
+        bb=kk*a
+
+        return r,w,k,v,aa,bb,xx,v_first
+    
 
 
 
@@ -410,14 +471,65 @@ class PRWKV_7(nn.Module):
 
         return r,w,k,v,aa,bb,v_first
     
-    @MyStatic 
-    def cxa076_Accelerate_Step1(layer_id: int, H: int, N: int,
-                               kv_dim,xx,r,k,v,v_first,state,
-                               w0, w1, w2, a0, a1, a2,
-                                v0, v1, v2, 
-                               ):
-        dtype = xx.dtype
-        B, T, HN = xx.shape  # B, T, H*N
+    # @MyStatic 
+    # def cxa076_Accelerate_Step1(layer_id: int, H: int, N: int,
+    #                            kv_dim,xx,r,k,v,v_first,state,
+    #                            w0, w1, w2, a0, a1, a2,
+    #                             v0, v1, v2, 
+    #                            ):
+    #     dtype = xx.dtype
+    #     B, T, HN = xx.shape  # B, T, H*N
+
+    #     w = -F.softplus(-(w0 + torch.tanh(xx @ w1) @ w2)) - 0.5
+
+    #     k = k.view(B, T, int(kv_dim//N), N)
+    #     v = v.view(B, T, int(kv_dim//N), N)
+
+    #     #modified repeat_kv B,T,H_kv,D) -> B,T,H,D -> B,T,C
+    #     k = repeat_kv(k, int(HN//kv_dim))#reshape(B,T,-1) #(B,T,C)
+    #     v = repeat_kv(v, int(HN//kv_dim))#reshape(B,T,-1) #(B,T,C)
+
+    #     k = k.view(B, T, -1)
+    #     v = v.view(B, T, -1)
+
+    #     a = torch.sigmoid(a0 + (xx @ a1) @ a2)
+        
+    #     kk = torch.nn.functional.normalize((k).view(B,T,H,N), dim=-1, p=2.0).view(B,T,H*N)
+
+    #     k = k * (1.0 - w + a)
+
+    #     if layer_id == 0: v_first = v
+    #     else: v = v + (v_first - v) * torch.sigmoid(v0 + (xx @ v1) @ v2)
+     
+    #     B,T,HC = w.shape
+    #     C = state.shape[3]#64
+    #     H = int(HC//C)
+        
+    #     aa=-kk
+    #     bb=kk*a
+
+    #     return r,w,k,v,aa,bb,v_first
+    
+    @torch.compile()
+    def cxa076_TimeMix_fla_Step1_fpx(layer_id: int, H: int, N: int,
+                        x, x_prev, v_first, state,
+                        w0, w1, w2, a0, a1, a2,
+                        v0, v1, v2, 
+                        r_k, R_, K_, V_, O_,
+                        R_state,K_state,V_state,O_state,
+                        R_bias, K_bias, V_bias, O_bias,
+                        ebits:int, mbits:int
+                        ):
+        dtype = x.dtype
+        B, T, HN = x.shape  # B, T, H*N
+        kv_dim = K_.shape[0]
+        xx = x #xr = xw = xk = xv = xa = xg = x
+
+
+
+        r = fpx_matmul(xx,R_,R_state,ebits,mbits) + R_bias
+        k = fpx_matmul(xx,K_,K_state,ebits,mbits) + K_bias
+        v = fpx_matmul(xx,V_,V_state,ebits,mbits) + V_bias
 
         w = -F.softplus(-(w0 + torch.tanh(xx @ w1) @ w2)) - 0.5
 
@@ -450,13 +562,14 @@ class PRWKV_7(nn.Module):
         return r,w,k,v,aa,bb,v_first
     
     @torch.compile()
-    def cxa076_TimeMix_fla_Step1_fpx(layer_id: int, H: int, N: int,
+    def cxa076r_TimeMix_fla_Step1_fpx(layer_id: int, H: int, N: int,
                         x, x_prev, v_first, state,
                         w0, w1, w2, a0, a1, a2,
                         v0, v1, v2, 
                         r_k, R_, K_, V_, O_,
                         R_state,K_state,V_state,O_state,
                         R_bias, K_bias, V_bias, O_bias,
+                        ln_r,ln_k,rmsnorm_epsilon:float,
                         ebits:int, mbits:int
                         ):
         dtype = x.dtype
@@ -469,6 +582,11 @@ class PRWKV_7(nn.Module):
         r = fpx_matmul(xx,R_,R_state,ebits,mbits) + R_bias
         k = fpx_matmul(xx,K_,K_state,ebits,mbits) + K_bias
         v = fpx_matmul(xx,V_,V_state,ebits,mbits) + V_bias
+
+        r = Qwen2RMSNorm.independent_forward(r.view(B,T,-1,N),ln_r,variance_epsilon=rmsnorm_epsilon)
+        k = Qwen2RMSNorm.independent_forward(k.view(B,T,-1,N),ln_k,variance_epsilon=rmsnorm_epsilon)
+
+
 
         w = -F.softplus(-(w0 + torch.tanh(xx @ w1) @ w2)) - 0.5
 
@@ -792,6 +910,7 @@ class PRWKV_7(nn.Module):
                                                                             z[att+'receptance.weight'], z[att+'key.weight'], z[att+'value.weight'], z[att+'output.weight'],
                                                                             z[att+'receptance.weight.qstate'], z[att+'key.weight.qstate'], z[att+'value.weight.qstate'], z[att+'output.weight.qstate'],
                                                                             z.get(att+'receptance.bias',dummytensor), z.get(att+'key.bias',dummytensor), z.get(att+'value.bias',dummytensor), dummytensor,
+                                                                            
                                                                             self.ebits,self.mbits
                                                                             )
                 
@@ -877,6 +996,11 @@ class PRWKV_7(nn.Module):
                 channel_mix_state = last_shift_states[i*2+1]
                 time_mix_state = last_wkv_states[i]
 
+                ln_r =  z.get(f'blocks.{i}.att.ln_r.weight',None)
+                rk_normmode = False
+                if ln_r is not None:
+                    rk_normmode = True
+
 
 
                 xx = Qwen2RMSNorm.independent_forward(x,z[bbb+'ln1.weight'],variance_epsilon=1e-6)
@@ -886,15 +1010,26 @@ class PRWKV_7(nn.Module):
 
 
                 if StrategyMode == 0: 
-                        r,w,k,v,aa,bb,xx_step1,v_first = PRWKV_7.cxa076_TimeMix_fla_Step1(i, self.n_head, self.head_size, xx, time_mix_shift, v_first, time_mix_state,
-                                                                      
-                                                                            #z[att+'x_r'], z[att+'x_w'], z[att+'x_k'], z[att+'x_v'], z[att+'x_a'], z[att+'x_g'],
-                                                                            z[att+'w0'], z[att+'w1'], z[att+'w2'], z[att+'a0'], z[att+'a1'], z[att+'a2'], z[att+'v0'], z[att+'v1'], z[att+'v2'],
-                                                                            z[att+'r_k'],
-                                                                            z[att+'receptance.weight'], z[att+'key.weight'], z[att+'value.weight'], z[att+'output.weight'],
-                                                                            z.get(att+'receptance.bias',dummytensor), z.get(att+'key.bias',dummytensor), z.get(att+'value.bias',dummytensor), dummytensor,
-                                                                            self.gate_enable
-                                                                            )
+                        if rk_normmode:
+                            r,w,k,v,aa,bb,xx_step1,v_first = PRWKV_7.cxa076r_TimeMix_fla_Step1(i, self.n_head, self.head_size, xx, time_mix_shift, v_first, time_mix_state,
+                                                                        
+                                                                                #z[att+'x_r'], z[att+'x_w'], z[att+'x_k'], z[att+'x_v'], z[att+'x_a'], z[att+'x_g'],
+                                                                                z[att+'w0'], z[att+'w1'], z[att+'w2'], z[att+'a0'], z[att+'a1'], z[att+'a2'], z[att+'v0'], z[att+'v1'], z[att+'v2'],
+                                                                                z[att+'r_k'],
+                                                                                z[att+'receptance.weight'], z[att+'key.weight'], z[att+'value.weight'], z[att+'output.weight'],
+                                                                                z.get(att+'receptance.bias',dummytensor), z.get(att+'key.bias',dummytensor), z.get(att+'value.bias',dummytensor), dummytensor,
+                                                                                z[att+'ln_r.weight'],z[att+'ln_k.weight'],1e-6
+                                                                                )
+                        else:
+                            r,w,k,v,aa,bb,xx_step1,v_first = PRWKV_7.cxa076_TimeMix_fla_Step1(i, self.n_head, self.head_size, xx, time_mix_shift, v_first, time_mix_state,
+                                                                        
+                                                                                #z[att+'x_r'], z[att+'x_w'], z[att+'x_k'], z[att+'x_v'], z[att+'x_a'], z[att+'x_g'],
+                                                                                z[att+'w0'], z[att+'w1'], z[att+'w2'], z[att+'a0'], z[att+'a1'], z[att+'a2'], z[att+'v0'], z[att+'v1'], z[att+'v2'],
+                                                                                z[att+'r_k'],
+                                                                                z[att+'receptance.weight'], z[att+'key.weight'], z[att+'value.weight'], z[att+'output.weight'],
+                                                                                z.get(att+'receptance.bias',dummytensor), z.get(att+'key.bias',dummytensor), z.get(att+'value.bias',dummytensor), dummytensor,
+                                                                                self.gate_enable
+                                                                                )
                 
                         xx_step2, time_mix_state = PRWKV_7.cxa073_TimeMix_fla_Step2(r,w,k,v,aa,bb,time_mix_state,self.fully_fusedrecurrent)
 
@@ -902,16 +1037,29 @@ class PRWKV_7(nn.Module):
                                                                                                     xx,xx_step2,time_mix_state,v_first,z[att+'g1'],z[att+'g2'])
                         
                 if StrategyMode == 3:
-                        r,w,k,v,aa,bb,v_first = PRWKV_7.cxa076_TimeMix_fla_Step1_fpx(i, self.n_head, self.head_size, xx, time_mix_shift, v_first, time_mix_state,
-                                                                      
-                                                                           # z[att+'x_r'], z[att+'x_w'], z[att+'x_k'], z[att+'x_v'], z[att+'x_a'], z[att+'x_g'],
-                                                                            z[att+'w0'], z[att+'w1'], z[att+'w2'], z[att+'a0'], z[att+'a1'], z[att+'a2'], z[att+'v0'], z[att+'v1'], z[att+'v2'],
-                                                                            z[att+'r_k'],
-                                                                            z[att+'receptance.weight'], z[att+'key.weight'], z[att+'value.weight'], z[att+'output.weight'],
-                                                                            z[att+'receptance.weight.qstate'], z[att+'key.weight.qstate'], z[att+'value.weight.qstate'], z[att+'output.weight.qstate'],
-                                                                            z.get(att+'receptance.bias',dummytensor), z.get(att+'key.bias',dummytensor), z.get(att+'value.bias',dummytensor), dummytensor,
-                                                                            self.ebits,self.mbits
-                                                                            )
+                        if rk_normmode:
+                            r,w,k,v,aa,bb,v_first = PRWKV_7.cxa076r_TimeMix_fla_Step1_fpx(i, self.n_head, self.head_size, xx, time_mix_shift, v_first, time_mix_state,
+                                                                        
+                                                                            # z[att+'x_r'], z[att+'x_w'], z[att+'x_k'], z[att+'x_v'], z[att+'x_a'], z[att+'x_g'],
+                                                                                z[att+'w0'], z[att+'w1'], z[att+'w2'], z[att+'a0'], z[att+'a1'], z[att+'a2'], z[att+'v0'], z[att+'v1'], z[att+'v2'],
+                                                                                z[att+'r_k'],
+                                                                                z[att+'receptance.weight'], z[att+'key.weight'], z[att+'value.weight'], z[att+'output.weight'],
+                                                                                z[att+'receptance.weight.qstate'], z[att+'key.weight.qstate'], z[att+'value.weight.qstate'], z[att+'output.weight.qstate'],
+                                                                                z.get(att+'receptance.bias',dummytensor), z.get(att+'key.bias',dummytensor), z.get(att+'value.bias',dummytensor), dummytensor,
+                                                                                z[att+'ln_r.weight'],z[att+'ln_k.weight'],1e-6,
+                                                                                self.ebits,self.mbits
+                                                                                )
+                        else:
+                            r,w,k,v,aa,bb,v_first = PRWKV_7.cxa076_TimeMix_fla_Step1_fpx(i, self.n_head, self.head_size, xx, time_mix_shift, v_first, time_mix_state,
+                                                                        
+                                                                            # z[att+'x_r'], z[att+'x_w'], z[att+'x_k'], z[att+'x_v'], z[att+'x_a'], z[att+'x_g'],
+                                                                                z[att+'w0'], z[att+'w1'], z[att+'w2'], z[att+'a0'], z[att+'a1'], z[att+'a2'], z[att+'v0'], z[att+'v1'], z[att+'v2'],
+                                                                                z[att+'r_k'],
+                                                                                z[att+'receptance.weight'], z[att+'key.weight'], z[att+'value.weight'], z[att+'output.weight'],
+                                                                                z[att+'receptance.weight.qstate'], z[att+'key.weight.qstate'], z[att+'value.weight.qstate'], z[att+'output.weight.qstate'],
+                                                                                z.get(att+'receptance.bias',dummytensor), z.get(att+'key.bias',dummytensor), z.get(att+'value.bias',dummytensor), dummytensor,
+                                                                                self.ebits,self.mbits
+                                                                                )
                 
                         xx_step2, time_mix_state = PRWKV_7.cxa073_TimeMix_fla_Step2(r,w,k,v,aa,bb,time_mix_state,self.fully_fusedrecurrent)
 
