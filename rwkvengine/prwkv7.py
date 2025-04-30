@@ -173,7 +173,13 @@ def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
     hidden_states = hidden_states[:, :, :, None, :]  # (B, T, H_kv, 1, D)
     hidden_states = hidden_states.expand(B, T, H_kv, n_rep, D)  # (B, T, H_kv, n_rep, D)
     return hidden_states.reshape(B, T, H_kv * n_rep, D).contiguous()
-
+@MyStatic
+def T5RMSNorm(hidden_states,weight,variance_epsilon:float=1e-6):
+    input_dtype = hidden_states.dtype
+    hidden_states = hidden_states.to(torch.float32)
+    variance = hidden_states.pow(2).mean(-1, keepdim=True)
+    hidden_states = hidden_states * torch.rsqrt(variance + variance_epsilon)
+    return (weight * hidden_states).to(input_dtype)
 class PRWKV_7(nn.Module):
     # x070 Multi batch Implementation
     # modified from RWKV-LM v7 demo_fast code @ BlinkDL
@@ -298,7 +304,7 @@ class PRWKV_7(nn.Module):
                         w0, w1, w2, a0, a1, a2,
                         v0, v1, v2,
                         r_k, R_, K_, V_, O_,  R_bias, K_bias, V_bias, O_bias,
-                        ln_r,ln_k,rmsnorm_epsilon
+                        ln_r,ln_k,rmsnorm_epsilon:float
                         ):
         dtype = x.dtype
         B, T, HN = x.shape  # B, T, H*N
@@ -315,8 +321,8 @@ class PRWKV_7(nn.Module):
         k = hybrid_matmul(xk,K_) + K_bias
         v = hybrid_matmul(xv,V_) + V_bias
 
-        r = Qwen2RMSNorm.independent_forward(r.view(B,T,-1,N),ln_r,variance_epsilon=rmsnorm_epsilon)
-        k = Qwen2RMSNorm.independent_forward(k.view(B,T,-1,N),ln_k,variance_epsilon=rmsnorm_epsilon)
+        r = T5RMSNorm(r.view(B,T,-1,N),ln_r,variance_epsilon=rmsnorm_epsilon)
+        k = T5RMSNorm(k.view(B,T,-1,N),ln_k,variance_epsilon=rmsnorm_epsilon)
 
 
 
@@ -583,8 +589,8 @@ class PRWKV_7(nn.Module):
         k = fpx_matmul(xx,K_,K_state,ebits,mbits) + K_bias
         v = fpx_matmul(xx,V_,V_state,ebits,mbits) + V_bias
 
-        r = Qwen2RMSNorm.independent_forward(r.view(B,T,-1,N),ln_r,variance_epsilon=rmsnorm_epsilon)
-        k = Qwen2RMSNorm.independent_forward(k.view(B,T,-1,N),ln_k,variance_epsilon=rmsnorm_epsilon)
+        r = T5RMSNorm(r.view(B,T,-1,N),ln_r,variance_epsilon=rmsnorm_epsilon)
+        k = T5RMSNorm(k.view(B,T,-1,N),ln_k,variance_epsilon=rmsnorm_epsilon)
 
 
 
