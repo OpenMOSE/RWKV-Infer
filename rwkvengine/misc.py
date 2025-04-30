@@ -140,6 +140,12 @@ class PIPELINE():
             self.tokenizer = AutoTokenizer.from_pretrained(os.path.dirname(os.path.abspath(__file__)) + "/qwen")
             self.modeltemplate = self.load_tokenizer_config(os.path.dirname(os.path.abspath(__file__)) + "/qwen")
             self.default_eos_token = self.modeltemplate.get("eos_token", "<|endoftext|>")
+        elif mode == 'qwen3':
+            print(f'Qwen3 Tokenizer')
+            from transformers import AutoTokenizer
+            self.tokenizer = AutoTokenizer.from_pretrained(os.path.dirname(os.path.abspath(__file__)) + "/qwen3")
+            self.modeltemplate = self.load_tokenizer_config(os.path.dirname(os.path.abspath(__file__)) + "/qwen3")
+            self.default_eos_token = self.modeltemplate.get("eos_token", "<|endoftext|>")
         elif mode == 'llmjp':
             print(f'llmjp llama Tokenizer')
             from transformers import AutoTokenizer
@@ -224,7 +230,9 @@ class PIPELINE():
         rendered_text = template.render(
             messages=messages,
             add_generation_prompt=add_generation_prompt,
-            eos_token=eos_token
+            eos_token=eos_token,
+            enable_thinking = False,
+
         )
         return rendered_text
 
