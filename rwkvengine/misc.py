@@ -416,29 +416,12 @@ class PIPELINE():
         #print(samples)
         
         return samples.tolist()
-    @MyStatic
-    def improved_nucleus_sampling_multi_static(logits, temperature, top_p):
-        #batch_size = logits.size(0)
+    @torch.compile
+    def improved_nucleus_sampling_multi_static(self,logits, temperature, top_p):
         device = logits.device
-        #vocab_size = logits.size(-1)
-        
-        # temperature をテンソルに変換し、バッチサイズに対応
-        # if isinstance(temperature, (int, float)):
-        #     temperature = torch.full((batch_size, 1), fill_value=temperature, device=device, dtype=logits.dtype)
-        # else:
-        #     #temperature = torch.tensor(temperature, device=device, dtype=logits.dtype).view(-1, 1)
-        #     temperature = temperature.view(-1, 1).to(device=device,dtype=logits.dtype)
 
         temperature = temperature.view(-1, 1).to(device=device,dtype=logits.dtype)
-        #temperature = temperature.clone()
         temperature[temperature == 0.0] = 1.0
-
-        # top_p をテンソルに変換し、バッチサイズに対応
-        # if isinstance(top_p, (int, float)):
-        #     p = torch.full((batch_size, 1), fill_value=top_p, device=device, dtype=logits.dtype)
-        # else:
-        #     #p = torch.tensor(top_p, device=device, dtype=logits.dtype).view(-1, 1)
-        #     p = top_p.view(-1, 1).to(device=device,dtype=logits.dtype)
 
         p = top_p.view(-1, 1).to(device=device,dtype=logits.dtype)
 
@@ -468,10 +451,60 @@ class PIPELINE():
         
         # サンプリングを実行
         samples = torch.multinomial(probs, num_samples=1).squeeze(-1)
-
-        #print(samples)
         
         return samples#
+    @torch.compile
+    def nucleous_sample(
+        self,
+        logits: torch.Tensor,        # (B, V)
+        temperature: torch.Tensor,   # (B,) または (B,1)
+        top_p: torch.Tensor          # (B,) または (B,1)
+    ) -> torch.Tensor:
+        B, V = logits.shape
+        device = logits.device
+        dtype = logits.dtype
+
+        # 温度と p を整形／転送
+        temperature = temperature.view(-1, 1).to(device, dtype)
+        # 0 は無効扱い → 1.0 にリセット
+        temperature.masked_fill_(temperature == 0.0, 1.0)
+
+        p = top_p.view(-1, 1).to(device, dtype)
+
+        # ソフトマックス（float16 のほうが高速になる GPU も多い）
+        probs = F.softmax(logits.to(torch.bfloat16), dim=-1)
+        self.max_k = 1024
+        # 部分ソート（top-k）
+        k = min(self.max_k, V)
+        topk_probs, topk_indices = torch.topk(probs, k, dim=-1, largest=True, sorted=True)
+
+        # 累積確率を計算
+        cum_probs = torch.cumsum(topk_probs, dim=-1)
+
+        # top-p を超えたトークンはマスク
+        # まず超過箇所を True に
+        mask = cum_probs > p
+        # いちばん確率の高い単語は常に残す
+        mask[..., 0] = False
+        # 最初の True の位置以降を消すためにシフト
+        mask[..., 1:] = mask[..., :-1].clone()
+
+        # マスクされた確率を 0 に（in-place）
+        topk_probs.masked_fill_(mask, 0.0)
+
+        # 温度スケーリング＆リノーマライズ
+        if not torch.all(temperature == 1.0):
+            # float16→元 dtype に戻してからべき乗
+            topk_probs = topk_probs.to(dtype)
+            topk_probs.pow_(1.0 / temperature)
+        topk_probs.div_(topk_probs.sum(dim=-1, keepdim=True))
+
+        # 最終サンプリング
+        # (B, k) → (B, 1) → (B,)
+        idx_in_topk = torch.multinomial(topk_probs, num_samples=1).squeeze(-1)
+        samples = topk_indices.gather(1, idx_in_topk.unsqueeze(-1)).squeeze(-1)
+
+        return samples
     
     def improved_nucleus_sampling_multi_static_topk(self, logits, temperature, top_p, top_k=5):
         """

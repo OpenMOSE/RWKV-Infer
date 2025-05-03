@@ -21,8 +21,8 @@ from rwkvengine.fla.utils import contiguous
         # for BV in [32, 64]
         # for num_warps in [2, 4, 8, 16]
         # for num_stages in [2, 3, 4]
-        for BV in [32]
-        for num_warps in [2, 4]
+        for BV in [8]
+        for num_warps in [2, 4, 8]
         for num_stages in [2]
     ],
     key=["BK"],

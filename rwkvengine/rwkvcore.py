@@ -21,6 +21,8 @@ import bitsandbytes as bnb
 import functools
 from einops import rearrange
 
+from rwkvengine.matmulhell import quantize_weight, fused_dequant_gemm
+
 
 #from rwkvengine.misc import PIPELINE
 from rwkvengine.misc import PIPELINE, TimeMixState, ChannelMixState,BlockState,BlockStateList
@@ -78,15 +80,15 @@ class RWKV_x(nn.Module):
             if base_precision == 'fp16':
                 self.base_precision = torch.half
             elif base_precision == 'int8':
-                print('int8 Duplicated Automatic Change to NF4')
-                self.base_precision = torch.bfloat16
-                self.bit8quant = False
-                self.bit4quant = True
-            elif base_precision == 'fp16int8':
-                print('int8 Duplicated Automatic Change to NF4')
-                self.base_precision = torch.bfloat16
-                self.bit8quant = False
-                self.bit4quant = True
+                print('This is experimental fused matmul mode. HOSHOUSHIMASENN. ')
+                self.base_precision = torch.float16
+                self.bit8quant = True
+                #self.bit4quant = True
+            # elif base_precision == 'fp16int8':
+            #     print('int8 Duplicated Automatic Change to NF4')
+            #     self.base_precision = torch.bfloat16
+            #     self.bit8quant = False
+            #     self.bit4quant = True
             elif base_precision == 'nf4':
                 self.base_precision = torch.bfloat16
                 self.bit8quant = False
@@ -459,7 +461,8 @@ class RWKV_x(nn.Module):
             
 
             # FP8 Transformer Engine Quantize Mode 
-            if self.bitfp8quant == True:
+            # or Int8 FusedMatmul Engine
+            if self.bitfp8quant == True or self.bit8quant:
                 emboncpu = False
                 self.ebits, self.mbits = 4, 3
                 for k in keys:
@@ -491,12 +494,15 @@ class RWKV_x(nn.Module):
 
                     for QuantKey in QuantListFP8:
                         if k.endswith(QuantKey):
-                            print(f'Quant {k} to torch.float8_e4m3fn')
+                            
                             QuantKeyFound = True
-                            z[k], z[k+'.qstate'] = bf16_to_fp8(z[k])
-                            #amax = z[k].abs().max()
-                            #print(f'amax = {float(amax)}')
-                            #z[k] = z[k].to(device='cuda',dtype=torch.float8_e4m3fn).contiguous() 
+                            if self.bitfp8quant:
+                                print(f'Quant {k} to torch.float8_e4m3fn')
+                                z[k], z[k+'.qstate'] = bf16_to_fp8(z[k])
+                            else:
+                                print(f'Quant {k} to torch.int8 OpenMOSE SillyMatmul')
+                                z[k], z[k+'.qstate'] = quantize_weight(z[k].to(device='cuda',dtype = torch.float16).t()) # quant to int8
+              
                         
                     if QuantKeyFound == False:
                         for QuantKey in QuantList:
@@ -569,7 +575,7 @@ class RWKV_x(nn.Module):
                             # pre-process the weight. this will quantize the weight to FP6 and pack it in a special
                             # layout for tensor cores. refer to paper for more details.
                             if 'head' in k:
-                                z[k], z[k+'.qstate'] = to_scaled_tc_floatx(z[k].cpu(), self.ebits, self.mbits)
+                                z[k], z[k+'.qstate'] = to_scaled_tc_floatx(z[k].cpu(), self.ebits, self.mbits) 
                                 z[k]=z[k].to(device='cuda')
                                 z[k+'.qstate']=z[k+'.qstate'].to(device='cuda')
                                 gc.collect()
@@ -672,6 +678,8 @@ class RWKV_x(nn.Module):
             self.z = z
             self.device = z['blocks.0.att.receptance.weight'].device
             self.dtype = z['emb.weight'].dtype
+
+            self.dummytensor = torch.tensor(0).to(dtype=self.dtype,device=self.device)
 
             if self.ModeMode != 'standard':
                 del z_adapter

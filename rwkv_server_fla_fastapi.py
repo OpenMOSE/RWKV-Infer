@@ -221,7 +221,7 @@ async def loadmodel(request: Request):
             precision = 'int8'
         elif model_strategy == 'int8':
             Quant = False
-            precision = 'fp16int8'
+            precision = 'int8'
         elif model_strategy == 'fp8':
             Quant = False
             precision = 'fp8'

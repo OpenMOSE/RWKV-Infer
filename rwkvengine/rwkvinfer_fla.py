@@ -307,17 +307,17 @@ class LLMWorker:
                         #if len(currenttoken) < len(output):
                             #splittext = output[len(currenttoken):]
                             splittext = output
-                            splittext, tag = Artifact.process_text(splittext)
-                            splittext, tag2 = Artifact2.process_text(splittext)
-                            #print(f'tag = {tag}')
-                            if tag is not None:
-                                print('Artifact Detected. Analyzing')
-                                typestyle = Artifact.get_type_from_artifact(tag)
-                                print(f'gettype = {typestyle}')
-                                splittext = f'```{typestyle}' + splittext
-                            if tag2 is not None:
-                                splittext = f'\n```' + splittext
-                            #currenttoken = output
+                            # splittext, tag = Artifact.process_text(splittext)
+                            # splittext, tag2 = Artifact2.process_text(splittext)
+                            # #print(f'tag = {tag}')
+                            # if tag is not None:
+                            #     print('Artifact Detected. Analyzing')
+                            #     typestyle = Artifact.get_type_from_artifact(tag)
+                            #     print(f'gettype = {typestyle}')
+                            #     splittext = f'```{typestyle}' + splittext
+                            # if tag2 is not None:
+                            #     splittext = f'\n```' + splittext
+                            # #currenttoken = output
                             if len(output.strip()) == 0 and beforecount == 0:
                                 print('space skipped.')
                                 yield "", None, None
@@ -768,7 +768,7 @@ class LLMWorker:
                         #BatchProbs[:, 0] -= 1e10
                         BatchProbs = torch.stack(BatchProbs)
                         #print(temperature)
-                        otokens = self.pipeline.improved_nucleus_sampling_multi_static(BatchProbs, temperature=torch.stack(temperature), top_p=torch.stack(top_p)).tolist()
+                        otokens = self.pipeline.nucleous_sample(BatchProbs, temperature=torch.stack(temperature), top_p=torch.stack(top_p)).tolist()
 
                         for j in range(len(token_ids)):
                             for xxx in occurrence[j]:
