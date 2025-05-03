@@ -131,7 +131,7 @@ def fused_dequant_gemm_kernel(
 def fused_dequant_gemm(A: torch.Tensor,
                        W_int8: torch.Tensor,
                        scale: torch.Tensor,
-                       BLOCK_M=16, BLOCK_N=32, BLOCK_K=512):
+                       BLOCK_M=16, BLOCK_N=16, BLOCK_K=256):
     """
     A:       (B, T, K) float16
     W_int8:  (K, N)     int8
@@ -145,7 +145,7 @@ def fused_dequant_gemm(A: torch.Tensor,
 
     C_out = torch.zeros((B, T, N), device=A.device, dtype=torch.float16)
 
-    if T <= 4:
+    if T <= 4 and B <= 16:
         A_flat = A.view(B * T, K).to(dtype=torch.float16)
         C_flat = C_out.view(B * T, N)
 
@@ -161,8 +161,12 @@ def fused_dequant_gemm(A: torch.Tensor,
             scale.stride(0),
             C_flat.stride(0), C_flat.stride(1),
             BLOCK_N=BLOCK_N, BLOCK_K=BLOCK_K,
+            num_warps=8, 
         )
         return C_out.to(dtype=A.dtype)
+    
+    else:
+        return reference_dequant_gemm(A.to(dtype=torch.float16),W_int8,scale).to(dtype=A.dtype)
    
 
     

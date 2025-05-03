@@ -77,6 +77,10 @@ class RWKV_x(nn.Module):
 
         with torch.no_grad(): 
 
+
+            emboncpu = False
+            head8bit = False
+
             if base_precision == 'fp16':
                 self.base_precision = torch.half
             elif base_precision == 'int8':
@@ -112,6 +116,23 @@ class RWKV_x(nn.Module):
                 self.bitfp8quant = False
                 self.bitfp6quant = True
                 self.bitfp5quant = True
+            elif base_precision == 'fp5c':
+                self.base_precision = torch.bfloat16
+                self.bit8quant = False
+                self.bit4quant = False
+                self.bitfp8quant = False
+                self.bitfp6quant = True
+                self.bitfp5quant = True
+                emboncpu = True
+            elif base_precision == 'fp5x':
+                self.base_precision = torch.bfloat16
+                self.bit8quant = False
+                self.bit4quant = False
+                self.bitfp8quant = False
+                self.bitfp6quant = True
+                self.bitfp5quant = True
+                emboncpu = True
+                head8bit = True
             else:
                 self.base_precision = torch.bfloat16
             
@@ -463,7 +484,7 @@ class RWKV_x(nn.Module):
             # FP8 Transformer Engine Quantize Mode 
             # or Int8 FusedMatmul Engine
             if self.bitfp8quant == True or self.bit8quant:
-                emboncpu = False
+                
                 self.ebits, self.mbits = 4, 3
                 for k in keys:
                     print(f' k = {k} shape = {z[k].shape}' )
@@ -539,7 +560,7 @@ class RWKV_x(nn.Module):
 
             # FP6 Quantize Mode via Torch.AO
             elif self.bitfp6quant == True:
-                emboncpu = False
+                #emboncpu = False
                 if self.bitfp5quant:
                     self.ebits, self.mbits = 2, 2
                 else:
@@ -562,6 +583,14 @@ class RWKV_x(nn.Module):
                         torch.cuda.empty_cache() 
                         self.emboncpu = True
 
+                    if 'head' in k and head8bit:
+                        z['head.weight'], z['head.weight.qstate'] = quantize_weight(z['head.weight'].to(device='cuda',dtype = torch.float16).t()) # quant to int8
+                        #z['head.weight'] = z['head.weight'].to(dtype=torch.float32).cpu().t()
+                        QuantKeyFound = True 
+                        gc.collect()
+                        torch.cuda.empty_cache() 
+                        self.head8bit = True
+
 
                     for QuantKey in QuantListFP6:
                         if k.endswith(QuantKey):
@@ -574,20 +603,20 @@ class RWKV_x(nn.Module):
 
                             # pre-process the weight. this will quantize the weight to FP6 and pack it in a special
                             # layout for tensor cores. refer to paper for more details.
-                            if 'head' in k:
-                                z[k], z[k+'.qstate'] = to_scaled_tc_floatx(z[k].cpu(), self.ebits, self.mbits) 
-                                z[k]=z[k].to(device='cuda')
-                                z[k+'.qstate']=z[k+'.qstate'].to(device='cuda')
-                                gc.collect()
-                                torch.cuda.empty_cache() 
-                            # elif 'gate.weight' in k or  'up.weight' in k:
-                            #     z[k], z[k+'.qstate'] = to_scaled_tc_floatx(z[k].cpu(), self.ebits, self.mbits)
+                            # if  emboncpu:
+                            #     z[k], z[k+'.qstate'] = to_scaled_tc_floatx(z[k].cpu(), self.ebits, self.mbits) 
                             #     z[k]=z[k].to(device='cuda')
                             #     z[k+'.qstate']=z[k+'.qstate'].to(device='cuda')
                             #     gc.collect()
                             #     torch.cuda.empty_cache() 
-                            else:
-                                z[k], z[k+'.qstate'] = to_scaled_tc_floatx(z[k], self.ebits, self.mbits)
+                            # # elif 'gate.weight' in k or  'up.weight' in k:
+                            # #     z[k], z[k+'.qstate'] = to_scaled_tc_floatx(z[k].cpu(), self.ebits, self.mbits)
+                            # #     z[k]=z[k].to(device='cuda')
+                            # #     z[k+'.qstate']=z[k+'.qstate'].to(device='cuda')
+                            # #     gc.collect()
+                            # #     torch.cuda.empty_cache() 
+                            # else:
+                            z[k], z[k+'.qstate'] = to_scaled_tc_floatx(z[k], self.ebits, self.mbits)
 
                             if self.ExtremeCPUOffload:
                                 z[k] = z[k].to(device='cpu')

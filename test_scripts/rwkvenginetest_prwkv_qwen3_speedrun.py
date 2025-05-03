@@ -53,7 +53,7 @@ if __name__ == '__main__':
 
     #exit()
 
-    model = RWKV_x('models/PRWKV-7-Qwen3-14B-Preview-stage2final-ctx3072.pth','int8',
+    model = RWKV_x('models/PRWKV-7-Qwen3-14B-Preview-stage2final-ctx3072.pth','fp5c',
                    adapter_model='/home/client/Projects/RWKV-LM-RLHF/main/myfolder/Outputs/prwkvtest/rwkv-0.pth',
                    adapter_mode='',
                    fully_fusedrecurrent=args.fully_fused)
@@ -87,14 +87,14 @@ if __name__ == '__main__':
         context = pipeline.generate_prompt_from_config(pipeline.modeltemplate,messages,True)
 
         del States
-        del States2
+        #del States2
         del shift_states
         del wkv_states
         gc.collect()
         torch.cuda.empty_cache() 
 
         States = model.new_state(Target_batch)#state_empty(32, 1, 2560, 2560 // 32)
-        States2 = model.new_state(Target_batch)#state_empty(32, 1, 2560, 2560 // 32)
+        #States2 = model.new_state(Target_batch)#state_empty(32, 1, 2560, 2560 // 32)
 
         
 
@@ -105,8 +105,8 @@ if __name__ == '__main__':
         shift_states = States.shift_states
         wkv_states = States.wkv_states
 
-        shift_states2 = States2.shift_states
-        wkv_states2 = States2.wkv_states
+        #shift_states2 = States2.shift_states
+        #wkv_states2 = States2.wkv_states
 
         def print_tensor_shapes(tensor_list):
             for i, tensor in enumerate(tensor_list):
@@ -233,13 +233,13 @@ if __name__ == '__main__':
 
         occurrence = [{} for _ in range(Target_batch)]
 
-        ProfileMode = 0
+        ProfileMode = 0 
 
         
 
-        from torch.utils.tensorboard import SummaryWriter
+        #from torch.utils.tensorboard import SummaryWriter
 
-        writer = SummaryWriter(log_dir="./log")
+        #writer = SummaryWriter(log_dir="./log")
 
         # with torch.profiler.profile(
         #     activities=[

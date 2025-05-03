@@ -231,6 +231,9 @@ async def loadmodel(request: Request):
         elif model_strategy == 'fp5':
             Quant = False
             precision = 'fp5'
+        elif model_strategy == 'fp5c':
+            Quant = False
+            precision = 'fp5c'
         elif model_strategy == 'nf4':
             Quant = False
             precision = 'nf4'

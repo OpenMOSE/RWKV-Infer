@@ -6,6 +6,10 @@ import torchao
 from torchao.dtypes.floatx import to_scaled_tc_floatx
 from torchao.ops import quant_llm_linear
 
+import torch._dynamo
+
+torch._dynamo.config.cache_size_limit = 32  # 例えば32に拡張
+
 
 import torch
 import torch.nn as nn
@@ -172,7 +176,13 @@ def fpx_matmul(x,weight,weight_state,ebits:int=3,mbits:int=2):
     elif weight.dtype == torch.float8_e4m3fn: 
         return fp8_matmul(x,weight,weight_state)
     else:
-        return x @ weight.t()
+        if weight.device == torch.device('cpu'):
+            xdtype = x.dtype
+            xdevice = x.device
+            return (x.to(device=torch.device('cpu'),dtype=weight.dtype) @ weight).to(device=xdevice,dtype=xdtype)
+            #return x @ weight.to(device=x.device).t()
+        else:
+            return x @ weight.t()
 @torch.compile
 def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
     """
@@ -1571,10 +1581,10 @@ class PRWKV_7(nn.Module):
        
 
             x = T5RMSNorm(x,z['ln_out.weight'],variance_epsilon=1e-6)
-            if StrategyMode == 0:
-                x = hybrid_matmul(x , z['head.weight'])
-            if StrategyMode == 3:
-                x = fpx_matmul(x , z['head.weight'],z['head.weight.qstate'],self.ebits,self.mbits)
+            # if StrategyMode == 0:
+            #     x = hybrid_matmul(x , z['head.weight'])
+            # if StrategyMode == 3:
+            x = fpx_matmul(x , z['head.weight'],z.get('head.weight.qstate',None),self.ebits,self.mbits)
             if not full_output: x = x[:, -1, :]  # 最後のタイムステップだけを選択し、バッチ次元を保持
 
             return x, last_shift_states, last_wkv_states

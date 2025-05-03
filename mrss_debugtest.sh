@@ -1,7 +1,7 @@
 #!/bin/bash
 curl http://127.0.0.1:9000/healthcheck
 
-curl http://127.0.0.1:9000/loadmodel -X POST -H "Content-Type: application/json" -d '{"model_filename":"models/PRWKV-7-Qwen3-14B-Preview-stage2final-ctx3072.pth","model_viewname":"PRWKV7-cxa076 Qwen3-14B Stage2 Final","model_strategy":"int8","adapter_filename":"/home/client/Projects/RWKV-LM-RLHF/main/myfolder/Outputs/PRWKV7-cxa076-qwen3b-hiroshima/rwkv-92.pth","adapter_mode":"", "template":"qwen3", "endtoken":"<|im_end|>","default_temperature":"1.0", "default_top_p":"0.3"}'
+curl http://127.0.0.1:9000/loadmodel -X POST -H "Content-Type: application/json" -d '{"model_filename":"models/PRWKV-7-Qwen3-8B-Preview-stage2final-ctx2048.pth","model_viewname":"PRWKV7-cxa076 Qwen3-8B Stage2 Final","model_strategy":"fp5","adapter_filename":"/home/client/Projects/RWKV-LM-RLHF/main/myfolder/Outputs/PRWKV7-cxa076-qwen3b-hiroshima/rwkv-92.pth","adapter_mode":"", "template":"qwen3", "endtoken":"<|im_end|>","default_temperature":"1.0", "default_top_p":"0.3"}'
 
 #curl http://127.0.0.1:9000/loadmodel -X POST -H "Content-Type: application/json" -d '{"model_filename":"models/PRWKV7-cxa076-qwen14b-stage2-ctx2048.pth","model_viewname":"PRWKV7-cxa076 Qwen 2.5 14B Stage2Final FP8","model_strategy":"fp8","adapter_filename":"adapters/testlora7.pth","adapter_mode":"", "template":"qwen", "endtoken":"<|im_end|>","default_temperature":"1.0", "default_top_p":"0.3"}'
 #
