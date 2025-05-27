@@ -1,3 +1,10 @@
+import time
+import sys
+import os
+# 1階層上のディレクトリのパスを取得
+parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+sys.path.append(parent_dir)
+import torch.profiler
 import torch
 from rwkvengine.rwkvcore import RWKV_x, PIPELINE
 import time
@@ -28,7 +35,7 @@ if __name__ == '__main__':
 
    #exit()
 
-    model = RWKV_x('/home/client/Projects/RWKV-LM-RLHF/main/myfolder/models/RWKV-x070-World-1.5B-v3-20250127-ctx4096.pth','bf16',
+    model = RWKV_x('/home/client/Projects/RWKV-LM-RLHF/main/myfolder/models/rwkv7-g1-2.9b-20250519-ctx4096.pth','bf16',
                    adapter_model='',
                    adapter_mode='',
                    fully_fusedrecurrent=args.fully_fused)
@@ -49,7 +56,7 @@ if __name__ == '__main__':
     # ]
     #context = phi3formatter.format_chat([{'role':'system', 'content':'You are a helpful AI assistant.'},{'role':'user', 'content':'Large Language　Modelとはどんなものですか？'}],add_generation_prompt=True)
     #context = pipeline.generate_prompt_from_config(pipeline.modeltemplate,messages,True)
-    context = "User: 元気している？ \n\nAssistant:"
+    context = "User: そっと、おまんこに手を置く。 \n\nAssistant:"
     print(context)
     #exit()
 
@@ -76,7 +83,7 @@ if __name__ == '__main__':
 
     #Apply State-tuned wkv to InitialState
     #if no state-tuned commentout
-    state_tuned_wkv, state_offset = model.load_state('/home/client/Projects/RWKV-LM-RLHF/main/myfolder/Outputs/x070-1b5-prefix-suffix/rwkv-0-state.pth',EnableOffset=True)
+    state_tuned_wkv, state_offset = model.load_state('/home/client/Projects/RWKV-LM-RLHF/main/myfolder/Outputs/x070-2b9-pre/rwkv-2-state.pth',EnableOffset=True)
     wkv_states = state_tuned_wkv.view(state_tuned_wkv.shape[0],1,state_tuned_wkv.shape[1],state_tuned_wkv.shape[2],state_tuned_wkv.shape[3]).to('cuda')
 
     # print(f'state_offset {state_offset}')

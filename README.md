@@ -8,6 +8,25 @@
 A lightweight RWKV inference platform that operates in Cuda and Rocm environments, supporting multi-batch inference.(RWKV v6,v7)
 </div>
 
+## 🔄 Hybrid RWKV + Transformer Support(BETA)
+
+I'm so excited to announce that RWKV-Infer now supports a **hybrid architecture combining RWKV and Transformer** layers.
+
+This design brings together the best of both worlds:
+
+- 🌊 **RWKV layers**  
+  Efficient long-context modeling with linear time complexity and minimal memory usage. Ideal for early-stage token mixing and maintaining global coherence.
+
+- ⚡ **Transformer (GQA) layers**  
+  Powerful attention mechanisms retained in later layers for precise reasoning, structured generation, and knowledge retention.
+
+### 🚀 Key Benefits
+
+- **Improved long-context capability** without increasing memory usage.
+- **Reduced KV cache size** — up to 90% smaller by replacing early Transformer blocks with RWKV.
+- **Balanced performance**: RWKV handles sequence length, while Transformer ensures generation quality.
+
+
 ## Key Features
 
 - **Multi Recurrent State Sampling**: 
@@ -36,7 +55,7 @@ By combining multiple states, MRSS integrates knowledge from different "experts,
   - FP6 (Early Experiment. slightly degradation. toachao fpx e3m2)
   - FP5 (Early Experiment. ppl 10% degradation. toachao fpx e2m2)
 - **Multi Batch Generation**:
-  - True multi batch generation with Flash-Linear-Attention(x060, x070)
+  - multi batch generation with Flash-Linear-Attention(x060, x070)
   - multi batch sampling
   - On an RTX4090, a 7B parameter model can run over 256 batches of inference.
 - **Inference Speed examples(RTX4090)**:
@@ -61,7 +80,6 @@ x060 inference speed
 
 > Accelerate your RWKV model inference with RWKV-Infer!
 
-> Now Support for CXA075,CXA076, specialized for attention conversion models!
 
 
 ## How To Use

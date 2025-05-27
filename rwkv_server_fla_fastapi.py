@@ -501,7 +501,29 @@ async def verify_keys(request: Request):
         return {"message": "Keys verified successfully", "status_code": 200}
     else:
         raise HTTPException(status_code=400, detail="Invalid keys")
+def normalize_messages(messages):
+    """
+    messages内の各'turn'で、contentがlist形式（type='text'の複数要素）であれば、
+    すべての'text'を連結し、contentを単一の文字列に変換する。
+    """
+    new_messages = []
+    for m in messages:
+        role = m.get("role", "")
+        content = m.get("content", "")
 
+        # contentがlistで、すべてのtypeが"text"のときだけ結合
+        if isinstance(content, list):
+            try:
+                content = "".join([item["text"] for item in content if item.get("type") == "text"])
+            except Exception as e:
+                raise ValueError(f"Unexpected content format: {content}") from e
+
+        new_messages.append({
+            "role": role,
+            "content": content
+        })
+    
+    return new_messages
 
 
 @app.post("/v1/chat/completions")
@@ -509,6 +531,8 @@ async def verify_keys(request: Request):
 async def rwkv_completions(request: Request):
     global engine1
     data = await request.json()
+
+    print(data)
 
     if args.debug:
         print(data)
@@ -528,7 +552,16 @@ async def rwkv_completions(request: Request):
     minimum_gen_count = data.get('minimum_gen_count',1)
 
 
-    messages = data.get('messages')
+    CompletionMode = 'chat'
+    messages = data.get('messages',None)
+    #prompts = data.get('messages',None)
+
+    messages = normalize_messages(messages)
+
+    
+
+
+
     params = data.get('params', params_base)
     system_name = params.get('system_name', 'system')
     rag_name = params.get('rag_name', 'rag')
@@ -558,23 +591,8 @@ async def rwkv_completions(request: Request):
 
     input_prompt.append(engine1.pipeline.generate_prompt_from_config(engine1.pipeline.modeltemplate,messages,True))
 
-    # if engine1.templatemode == 'llmjp':
-    #     input_prompt.append(llmjpformatter.format_chat(messages,add_generation_prompt=True))
-    #     #exit()
-    # elif engine1.templatemode == 'phi3.5' or engine1.templatemode == 'phi4mini':
-    #     input_prompt.append(phi3formatter.format_chat(messages,add_generation_prompt=True))
-    #     #exit()
-    # elif engine1.templatemode == 'phi4':
-    #     input_prompt.append(engine1.pipeline.generate_prompt_from_config(engine1.pipeline.modeltemplate,messages,True))
-    # else:
-    #     for element in messages:
-    #         input_prompt.append(GetTemplate(len(input_prompt),element["role"],element["content"],Endtoken,engine1.templatemode))
-    #     input_prompt.append(GetTemplate(len(input_prompt),'assistant',None,Endtoken,engine1.templatemode))
 
     print(input_prompt)
-
-    #exit()
-  
 
     models2 = [ModelList[0]]
     models2[0]['filename'] = ""
@@ -648,12 +666,9 @@ async def rwkv_completions(request: Request):
         searchtext += tx
 
 
-    wkv_state,shift_state = search_dynamic_state_list(searchtext,target_state_filename)
+    wkv_state,shift_state = None,None#search_dynamic_state_list(searchtext,target_state_filename)
 
 
-    
-
- 
     if wkv_state is not None and shift_state is not None:
         if args.debug:
             print('resume state detected.')
@@ -746,12 +761,12 @@ async def rwkv_completions(request: Request):
             if args.debug:
                 print('Stop Async Iteration detected.')
           
-            output_prompt = ''
-            for tx in input_prompt[:-1]:
-                output_prompt += tx
-            output_prompt += GetTemplate(999,'assistant',totaltext,Endtoken,engine1.templatemode)
+            # output_prompt = ''
+            # for tx in input_prompt[:-1]:
+            #     output_prompt += tx
+            # output_prompt += GetTemplate(999,'assistant',totaltext,Endtoken,engine1.templatemode)
 
-            add_to_dynamic_state_list(output_prompt,target_state_filename,wkv_state,shift_state)
+            # add_to_dynamic_state_list(output_prompt,target_state_filename,wkv_state,shift_state)
             response_data = [
                 "[DONE]"
             ]
@@ -764,17 +779,18 @@ async def rwkv_completions(request: Request):
             if args.debug:
                 print('Stop Async Iteration detected.')
    
-            output_prompt = ''
-            for tx in input_prompt[:-1]:
-                output_prompt += tx
-            output_prompt += GetTemplate(999,'assistant',totaltext,Endtoken,engine1.templatemode)
+            # output_prompt = ''
+            # for tx in input_prompt[:-1]:
+            #     output_prompt += tx
+            # output_prompt += GetTemplate(999,'assistant',totaltext,Endtoken,engine1.templatemode)
 
-            if wkv_state is not None and shift_state is not None:
-                add_to_dynamic_state_list(output_prompt,target_state_filename,wkv_state,shift_state)
+            # if wkv_state is not None and shift_state is not None:
+            #     add_to_dynamic_state_list(output_prompt,target_state_filename,wkv_state,shift_state)
             response_data = [
                 "[DONE]"
             ]
-            yield f'data: {json.dumps(response_data)}\n\n'
+            #yield f'data: {json.dumps(response_data)}\n\n'
+            yield "data: [DONE]\n\n"
             pass
 
     if stream:
@@ -801,17 +817,17 @@ async def rwkv_completions(request: Request):
         if args.debug:
             print(f'Non Stream: {OutputText}')
 
-        # if StateCacheMode:
-        #     output_prompt = input_prompt_stm_b + input_prompt_stm + OutputText
-        # else:
-        #     output_prompt = input_prompt_stm + OutputText
-        output_prompt = ''
-        for tx in input_prompt[:-1]:
-            output_prompt += tx
-        output_prompt += GetTemplate(999,'assistant',OutputText,Endtoken,engine1.templatemode)
+        # # if StateCacheMode:
+        # #     output_prompt = input_prompt_stm_b + input_prompt_stm + OutputText
+        # # else:
+        # #     output_prompt = input_prompt_stm + OutputText
+        # output_prompt = ''
+        # for tx in input_prompt[:-1]:
+        #     output_prompt += tx
+        # output_prompt += GetTemplate(999,'assistant',OutputText,Endtoken,engine1.templatemode)
 
-        if wkv_state is not None and shift_state is not None:
-                add_to_dynamic_state_list(output_prompt,target_state_filename,wkv_state,shift_state)
+        # if wkv_state is not None and shift_state is not None:
+        #         add_to_dynamic_state_list(output_prompt,target_state_filename,wkv_state,shift_state)
 
         jsonResponse = {
                     "object": "chat.completion",

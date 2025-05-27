@@ -48,6 +48,7 @@ from rwkvengine.rwkv6 import RWKV_6, fused_recurrent_rwkv6_torch
 from rwkvengine.rwkv7 import RWKV_7
 from rwkvengine.arwkv7 import ARWKV_7
 from rwkvengine.prwkv7 import PRWKV_7
+from rwkvengine.hrwkv7 import HRWKV_7
 
 
 
@@ -412,6 +413,46 @@ class RWKV_x(nn.Module):
 
             self.dim_hidden = z['emb.weight'].shape[1]
 
+
+
+            self.HRWKV_Mode = 0
+            self.HRWKV_StartLayers = 0
+
+            for i in range(n_layer):
+                t = f'blocks.{i}.'
+                Found = False
+                for key in keys:
+                    if t in key and 'q_proj' in key:
+                        self.HRWKV_Mode = 1
+                        self.HRWKV_StartLayers = i
+                        print(i)
+                        Found = True
+                        break
+                if Found == True:
+                    break
+            
+
+            if self.HRWKV_Mode:
+                print('HRWKV-7 Mode. Hybrid RWKV Mode. hxa078r')
+                self.GQALayers = n_layer - self.HRWKV_StartLayers
+                self.RWKVLayers = n_layer - self.GQALayers
+                print(f'GQALayers = {self.GQALayers}')
+                #exit()
+
+                for key in keys:
+                    if 'k_proj' in key:
+                        k_shape = z[key].shape
+                        print(k_shape)
+                        self.n_kv = k_shape[0]//self.head_size
+                        print(self.n_kv)
+                        break
+
+                #exit()
+
+
+            
+                
+
             
             self.n_layer = n_layer
 
@@ -476,8 +517,8 @@ class RWKV_x(nn.Module):
 
 
             QuantList = ['.receptance.weight','.key.weight','.value.weight','.gate.weight','.output.weight','head.weight','.down.weight','up.weight','gate_up.weight']
-            QuantListFP8 = ['att.receptance.weight','att.key.weight','att.value.weight','att.gate.weight','att.output.weight','ffn.key.weight','ffn.receptance.weight','ffn.value.weight','head.weight','ffn.down.weight','ffn.up.weight','ffn.gate.weight','gate_up.weight'] #, ,
-            QuantListFP6 = ['att.receptance.weight','att.key.weight','att.value.weight','att.gate.weight','att.output.weight','ffn.key.weight','ffn.receptance.weight','ffn.value.weight','ffn.down.weight','ffn.up.weight','ffn.gate.weight','gate_up.weight'] #, ,
+            QuantListFP8 = ['q_proj.weight','k_proj.weight','v_proj.weight','o_proj.weight','att.receptance.weight','att.key.weight','att.value.weight','att.gate.weight','att.output.weight','ffn.key.weight','ffn.receptance.weight','ffn.value.weight','head.weight','ffn.down.weight','ffn.up.weight','ffn.gate.weight','gate_up.weight'] #, ,
+            QuantListFP6 = ['q_proj.weight','k_proj.weight','v_proj.weight','o_proj.weight','att.receptance.weight','att.key.weight','att.value.weight','att.gate.weight','att.output.weight','ffn.key.weight','ffn.receptance.weight','ffn.value.weight','ffn.down.weight','ffn.up.weight','ffn.gate.weight','gate_up.weight'] #, ,
     
             
 
@@ -727,7 +768,7 @@ class RWKV_x(nn.Module):
             torch.cuda.empty_cache()
 
 
-    def new_state(self, B):
+    def new_state(self, B, max_token=4096):
          if self.RWKVMode == 6:
             return BlockStateList.create(
                     self.n_layer,
@@ -736,6 +777,16 @@ class RWKV_x(nn.Module):
                     self.n_head,
                     self.device, self.dtype
                 )
+         elif self.RWKVMode == 7 and self.ARWKVMode == 1 and self.HRWKV_Mode == 1:
+             return BlockStateList.hx078_create(self.RWKVLayers,self.GQALayers,
+                                                B,
+                                                self.n_embd,
+                                                self.n_kv,
+                                                self.head_size,
+                                                max_token,
+                                                self.device,
+                                                self.dtype                                                
+                                                )
          elif self.RWKVMode == 7:
             return BlockStateList.x070_create(self.n_layer,
                                               B,
@@ -853,18 +904,20 @@ class RWKV_x(nn.Module):
     
     
 
-    def forward(self, idx, last_shift_states , last_wkv_states, one_mode = False, KernelMode = 0,time_offset_state:torch.Tensor=None):
+    def forward(self, idx, last_shift_states , last_wkv_states,kv_cache=None,pos_cache=None,full_output=False, one_mode = False, KernelMode = 0,time_offset_state:torch.Tensor=None):
         if self.RWKVMode == 6:
             return RWKV_6.x060_forward(self,idx,last_shift_states,last_wkv_states)
         elif self.RWKVMode == 7 and self.ARWKVMode == 0:
-            return RWKV_7.x070_forward(self,idx,last_shift_states,last_wkv_states,one_mode=one_mode,KernelMode=KernelMode,full_output=False,time_offset_state=time_offset_state)
+            return RWKV_7.x070_forward(self,idx,last_shift_states,last_wkv_states,one_mode=one_mode,KernelMode=KernelMode,full_output=full_output,time_offset_state=time_offset_state)
+        elif self.RWKVMode == 7 and self.HRWKV_Mode == 1:
+            return HRWKV_7.hxa078r_forward(self,idx,last_wkv_states,kv_cache,pos_cache,full_output)
         elif self.RWKVMode == 7 and self.ARWKVMode == 1 and self.TokenshiftMode == 0:
             #print('ARWKV')
-            return ARWKV_7.ax070_forward(self,idx,last_shift_states,last_wkv_states,one_mode=one_mode,KernelMode=KernelMode,full_output=False )
+            return ARWKV_7.ax070_forward(self,idx,last_shift_states,last_wkv_states,one_mode=one_mode,KernelMode=KernelMode,full_output=full_output )
         
         elif self.RWKVMode == 7 and self.ARWKVMode == 1 and self.TokenshiftMode == 1:
             #print('PRWKV')
-            return PRWKV_7.PRWKV7_forward(self,idx,last_shift_states,last_wkv_states,one_mode=one_mode,KernelMode=KernelMode,full_output=False,time_offset_state=time_offset_state)
+            return PRWKV_7.PRWKV7_forward(self,idx,last_shift_states,last_wkv_states,one_mode=one_mode,KernelMode=KernelMode,full_output=full_output,time_offset_state=time_offset_state)
     
 
 

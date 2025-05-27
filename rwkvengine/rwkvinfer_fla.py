@@ -45,6 +45,8 @@ class Prompt:
     base_state_tuned: str = "None"
     use_exist_state_wkv: Optional[torch.Tensor] = None
     use_exist_state_shift: Optional[torch.Tensor] = None
+    use_exist_kv_cache: Optional[torch.Tensor] = None
+    use_exist_pos_cache: Optional[torch.Tensor] = None
     use_exist_state_wkv_offset: Optional[torch.Tensor] = None
     use_mrss: bool = False
     fixed_state_count: int = 0
@@ -181,7 +183,7 @@ class TextProcessor:
         #    return "text/markdown"
 
 class LLMWorker:
-    def __init__(self,max_batch_size = 16):
+    def __init__(self,max_batch_size = 16,max_ctxlen=8192):
         print('Initializing LLM Worker')
         
         self.llm_batch_chunk = 1024 #FLA Preprocess Prompt chunks
@@ -190,6 +192,7 @@ class LLMWorker:
         self.llm_work_cycle = 0
 
         self.llm_max_batch_count = max_batch_size#16
+        self.max_ctxlen = max_ctxlen
 
         self.llm_last_batch_info = []
         self.llm_last_batch_count = 0
@@ -241,26 +244,7 @@ class LLMWorker:
         if self.model.ARWKVMode:
             self.pipeline = PIPELINE(template_mode)
             self.templatemode = template_mode
-            # if self.model.ARWKVMLPMode == 1 and template_mode == 'phi3.5':
-            #     #Phi3.5 mode
-            #     self.pipeline = PIPELINE('phi3.5')
-            #     self.templatemode = 'phi3.5'
-            # elif self.model.ARWKVMLPMode == 1 and template_mode == 'phi4mini':
-            #     #Phi3.5 mode
-            #     self.pipeline = PIPELINE('phi4mini')
-            #     self.templatemode = 'phi4mini'
-            # elif self.model.ARWKVMLPMode == 1 and template_mode == 'phi4':
-            #     #Phi3.5 mode
-            #     self.pipeline = PIPELINE('phi4')
-            #     self.templatemode = 'phi4'
-            # else:
-            #     if template_mode == 'llmjp':
-            #         self.pipeline = PIPELINE('llmjp')
-            #         self.templatemode = 'llmjp'
-                
-            #     else:
-            #         self.pipeline = PIPELINE('qwen')
-            #         self.templatemode = 'qwen'
+            
         else:
             self.pipeline = PIPELINE('world')
             self.templatemode = 'world'
@@ -347,6 +331,7 @@ class LLMWorker:
     async def QueueManage(self):
         global prompt_queue
         print('Start Queue Management')
+        
         while True:
             if self.ForceExit:
                 print('Queue Exit')
@@ -379,6 +364,8 @@ class LLMWorker:
                                 'use_state-tuned':prompt.base_state_tuned,
                                 'wkv_states' : prompt.use_exist_state_wkv,
                                 'shift_states' : prompt.use_exist_state_shift,
+                                'kv_cache' : prompt.use_exist_kv_cache,
+                                'pos_cache' : prompt.use_exist_pos_cache,
                                 'wkv_states_offset':prompt.use_exist_state_wkv_offset,
                                 'current_prob' : None,
                                 'input_logits' : [],
@@ -414,10 +401,11 @@ class LLMWorker:
             
             await asyncio.sleep(0.01) # Everyone 10ms loop
 
-
+    @torch.compile()
     async def RunLLM(self):
         print('Start LLM Engine')
         global prompt_queue
+        BeforeBatchCount = 0
         while True:
             if self.ForceExit:
                 print('LLM Exit')
@@ -440,6 +428,8 @@ class LLMWorker:
                     prompts_ids = [] 
                     b_wkv_states = []
                     b_shift_states = []
+                    b_kv_cache = []
+                    b_pos_cache = []
                     b_wkv_states_offset = []
                     mrss_info = []
                     input_logits = []
@@ -471,6 +461,9 @@ class LLMWorker:
                                 b_wkv_states.append(work['wkv_states'])
                                 b_shift_states.append(work['shift_states'])
                                 b_wkv_states_offset.append(work['wkv_states_offset'])
+
+                                b_kv_cache.append(work['kv_cache'])
+                                b_pos_cache.append(work['pos_cache'])
 
                                 input_logits.append(work['input_logits'])
                                 input_logits_record.append(work['input_logits_record'])
@@ -515,8 +508,13 @@ class LLMWorker:
 
                         idx = torch.cat(prompts_tensor, dim=0) # same realbatchcount
         
-                        self.States = self.model.new_state(realbatchcount)
-
+                        
+                        self.States = self.model.new_state(realbatchcount,max_token=self.max_ctxlen) #support hybrid
+                        # else:
+                        #     print('skip create new memory')
+                        # BeforeBatchCount = realbatchcount
+                        BeforeBatchCount = -1
+ 
 
                         #2025.03.17 Implement State-Offset
                         BatchCount = realbatchcount#len(prompts)
@@ -527,10 +525,12 @@ class LLMWorker:
                         else:
                             offset_tensor = None
 
+                        
+
                         print(f'{len(prompts)}')
                         #print(prompts)
                         for j in range(len(prompts)):
-                            for k in range(len(prompts[0])):
+                            for k in range(len(prompts[j])):
                                 tk = prompts[j][k]
                                 occurrence[j][tk] = 0.1 + (occurrence[j][tk] if tk in occurrence[j] else 0)
 
@@ -540,8 +540,17 @@ class LLMWorker:
                             shift_states = self.States.shift_states.permute(1, 0, 2, 3)
                             wkv_states = self.States.wkv_states.permute(1, 0, 2, 3, 4)
                         elif self.model.RWKVMode == 7:
-                            shift_states = self.States.shift_states.permute(1, 0, 2)
+                            shift_states = self.States.shift_states.permute(1, 0, 2, 3)
                             wkv_states = self.States.wkv_states.permute(1, 0, 2, 3, 4)
+
+                        if self.model.HRWKV_Mode == 1:
+                            #Hybrid Mode
+                            kv_caches = self.States.kv_cache.permute(1 ,0 ,2 ,3 ,4)
+                            pos_caches = self.States.pos_cache.permute(1, 0, 2)
+
+                        #print(f'{kv_caches.shape}')
+
+                        
 
                         NowTensorPosition = 0
                         for i in range(len(prompts)):
@@ -580,6 +589,8 @@ class LLMWorker:
                                         b_wkv_states[i] = torch.stack(b_wkv_states[i],dim=0)
                                     wkv_states[NowTensorPosition] = b_wkv_states[i]
 
+                                
+
                                 if b_wkv_states_offset[i] is not None:
                                     if type(b_wkv_states_offset[i])==list:
                                         b_wkv_states_offset[i] = torch.stack(b_wkv_states_offset[i],dim=0)
@@ -590,6 +601,19 @@ class LLMWorker:
                                     if type(b_shift_states[i])==list:
                                         b_shift_states[i] = torch.stack(b_shift_states[i],dim=0)
                                     shift_states[NowTensorPosition] = b_shift_states[i]
+
+                                if self.model.HRWKV_Mode == 1:
+                                    if b_kv_cache[i] is not None:
+                                        if type(b_kv_cache[i])==list:
+                                            b_kv_cache[i] = torch.stack(b_kv_cache[i],dim=0)
+                                        kv_caches[NowTensorPosition] = b_kv_cache[i]
+                                        #print(kv_caches[NowTensorPosition].shape)
+                                        #exit()
+
+                                    if b_pos_cache[i] is not None:
+                                        if type(b_pos_cache[i])==list:
+                                            b_pos_cache[i] = torch.stack(b_pos_cache[i],dim=0)
+                                        pos_caches[NowTensorPosition] = b_pos_cache[i]
                                 
                                 NowTensorPosition = NowTensorPosition + 1
 
@@ -598,8 +622,13 @@ class LLMWorker:
                             shift_states = shift_states.permute(1,0,2,3) 
                             wkv_states = wkv_states.permute(1, 0, 2, 3, 4) 
                         elif self.model.RWKVMode == 7:
-                            shift_states = shift_states.permute(1,0,2) 
+                            shift_states = shift_states.permute(1,0,2,3) 
                             wkv_states = wkv_states.permute(1, 0, 2, 3, 4) 
+
+                        if self.model.HRWKV_Mode == 1:
+                            #Hybrid Mode
+                            kv_caches = kv_caches.permute(1 ,0 ,2 ,3 ,4)
+                            pos_caches = pos_caches.permute(1, 0, 2)
 
 
                         if token_max < self.llm_minimum_chunk:
@@ -607,7 +636,13 @@ class LLMWorker:
                         else:
                             KernelMode = 0
 
-                        x, shift_states, wkv_states = self.model.forward(idx, shift_states, wkv_states,KernelMode=KernelMode,time_offset_state=offset_tensor)
+                        
+
+                        if self.model.HRWKV_Mode == 1:
+                            print(f'KVCache = {kv_caches.shape}')
+                            x, _, wkv_states, kv_caches,pos_caches = self.model.forward(idx, shift_states, wkv_states,kv_caches,pos_caches)
+                        else:
+                            x, shift_states, wkv_states = self.model.forward(idx, shift_states, wkv_states,KernelMode=KernelMode,time_offset_state=offset_tensor)
 
                         
 
@@ -622,8 +657,13 @@ class LLMWorker:
                             shift_states = shift_states.permute(1,0,2,3) 
                             wkv_states = wkv_states.permute(1, 0, 2, 3, 4) 
                         elif self.model.RWKVMode == 7:
-                            shift_states = shift_states.permute(1,0,2) 
+                            shift_states = shift_states.permute(1,0,2,3) 
                             wkv_states = wkv_states.permute(1, 0, 2, 3, 4) 
+
+                        if self.model.HRWKV_Mode == 1:
+                            #Hybrid Mode
+                            kv_caches = kv_caches.permute(1 ,0 ,2 ,3 ,4)
+                            pos_caches = pos_caches.permute(1, 0, 2)
 
                         j = -1
                         NowTensorPosition = 0
@@ -642,6 +682,9 @@ class LLMWorker:
                                     else:
                                         self.llM_current_batch_info[i]['wkv_states'] = wkv_states[NowTensorPosition]
                                         self.llM_current_batch_info[i]['shift_states'] = shift_states[NowTensorPosition]
+                                        if self.model.HRWKV_Mode == 1:
+                                            self.llM_current_batch_info[i]['kv_cache'] = kv_caches[NowTensorPosition]
+                                            self.llM_current_batch_info[i]['pos_cache'] = pos_caches[NowTensorPosition]
                                         self.llM_current_batch_info[i]['current_prob'] = x[NowTensorPosition]
                                         self.llM_current_batch_info[i]['proceedtokens'] = self.llM_current_batch_info[i]['proceedtokens'] + token_max
                                         self.llM_current_batch_info[i]['occurrence'] = occurrence[NowTensorPosition]
@@ -656,6 +699,11 @@ class LLMWorker:
                     token_ids = [] 
                     b_wkv_states = []
                     b_shift_states = []
+                    b_kv_cache = []
+                    b_pos_cache = []
+
+
+
                     current_prob = []
                     temperature = []
                     top_p = []
@@ -686,6 +734,10 @@ class LLMWorker:
                     b_wkv_states = [work['wkv_states'] for work in valid_works]
                     b_wkv_states_offset = [work['wkv_states_offset'] for work in valid_works]
                     b_shift_states = [work['shift_states'] for work in valid_works]
+
+                    b_kv_cache = [work['kv_cache'] for work in valid_works]
+                    b_pos_cache = [work['pos_cache'] for work in valid_works]
+
                     current_prob = [work['current_prob'] for work in valid_works]
                     temperature = [torch.Tensor([float(work['temperature'])]) for work in valid_works]
                     top_p = [torch.Tensor([float(work['top_p'])]) for work in valid_works]
@@ -879,15 +931,25 @@ class LLMWorker:
 
                         idx = torch.cat(tokens, dim=0).to('cuda')
 
-                        self.States = self.model.new_state((realbatchcount))
+                        #self.States = self.model.new_state(realbatchcount,max_token=self.max_ctxlen) #support hybrid
+                        if BeforeBatchCount != realbatchcount:
+                            self.States = self.model.new_state(realbatchcount,max_token=self.max_ctxlen) #support hybrid
+                        # else:
+                        #     print('skip create new memory')
+                        BeforeBatchCount = realbatchcount
 
                         #print(f'realbatchcount={realbatchcount}')
                         if self.model.RWKVMode == 6:
                             shift_states = self.States.shift_states.permute(1, 0, 2, 3) 
                             wkv_states = self.States.wkv_states.permute(1, 0, 2, 3, 4) 
                         elif self.model.RWKVMode == 7:
-                            shift_states = self.States.shift_states.permute(1, 0, 2) 
+                            shift_states = self.States.shift_states.permute(1, 0, 2,3) 
                             wkv_states = self.States.wkv_states.permute(1, 0, 2, 3, 4) 
+
+                        if self.model.HRWKV_Mode == 1:
+                            #Hybrid Mode
+                            kv_caches = self.States.kv_cache.permute(1 ,0 ,2 ,3 ,4)
+                            pos_caches = self.States.pos_cache.permute(1, 0, 2)
 
                         
                         #2025.03.17 Implement State-Offset
@@ -951,16 +1013,36 @@ class LLMWorker:
                                     if type(b_shift_states[i])==list:
                                         b_shift_states[i] = torch.stack(b_shift_states[i],dim=0)
                                     shift_states[NowTensorPosition] = b_shift_states[i]
+
+                                if self.model.HRWKV_Mode == 1:
+                                    if b_kv_cache[i] is not None:
+                                        if type(b_kv_cache[i])==list:
+                                            b_kv_cache[i] = torch.stack(b_kv_cache[i],dim=0)
+                                        #print(f'kv_caches = {kv_caches.shape}')# b_kv_cache = {b_kv_cache.shape}')
+                                        kv_caches[NowTensorPosition] = b_kv_cache[i]
+
+                                    if b_pos_cache[i] is not None:
+                                        if type(b_pos_cache[i])==list:
+                                            b_pos_cache[i] = torch.stack(b_pos_cache[i],dim=0)
+                                        pos_caches[NowTensorPosition] = b_pos_cache[i]
                                 
                                 NowTensorPosition = NowTensorPosition + 1
                         if self.model.RWKVMode == 6:
                             shift_states = shift_states.permute(1,0,2,3)
                             wkv_states = wkv_states.permute(1, 0, 2, 3, 4)
                         elif self.model.RWKVMode == 7:
-                            shift_states = shift_states.permute(1,0,2)
+                            shift_states = shift_states.permute(1,0,2,3)
                             wkv_states = wkv_states.permute(1, 0, 2, 3, 4)
+                        if self.model.HRWKV_Mode == 1:
+                            #Hybrid Mode
+                            kv_caches = kv_caches.permute(1 ,0 ,2 ,3 ,4)
+                            pos_caches = pos_caches.permute(1, 0, 2)
 
-                        x, shift_states, wkv_states = self.model.forward(idx, shift_states, wkv_states,one_mode=True,time_offset_state=offset_tensor)
+                            
+                        if self.model.HRWKV_Mode == 1:
+                            x, _, wkv_states, kv_caches,pos_caches = self.model.forward(idx, shift_states, wkv_states,kv_caches,pos_caches)
+                        else:
+                            x, shift_states, wkv_states = self.model.forward(idx, shift_states, wkv_states,one_mode=True,time_offset_state=offset_tensor)
 
                         if x.dim() == 2:
                             x = x.view(x.shape[0],1,x.shape[1])
@@ -974,8 +1056,13 @@ class LLMWorker:
                             shift_states = shift_states.permute(1,0,2,3)
                             wkv_states = wkv_states.permute(1, 0, 2, 3, 4)
                         elif self.model.RWKVMode == 7:
-                            shift_states = shift_states.permute(1,0,2)
+                            shift_states = shift_states.permute(1,0,2,3)
                             wkv_states = wkv_states.permute(1, 0, 2, 3, 4)
+
+                        if self.model.HRWKV_Mode == 1:
+                            #Hybrid Mode
+                            kv_caches = kv_caches.permute(1 ,0 ,2 ,3 ,4)
+                            pos_caches = pos_caches.permute(1, 0, 2)
 
                         j = -1
                         NowTensorPosition = 0
@@ -1024,6 +1111,9 @@ class LLMWorker:
                                             self.llM_current_batch_info[i]['shift_states'] = shift_states[NowTensorPosition]
                                             self.llM_current_batch_info[i]['current_prob'] = x[NowTensorPosition]
                                             self.llM_current_batch_info[i]['occurrence'] = occurrence[j]
+                                            if self.model.HRWKV_Mode == 1:
+                                                self.llM_current_batch_info[i]['kv_cache'] = kv_caches[NowTensorPosition]
+                                                self.llM_current_batch_info[i]['pos_cache'] = pos_caches[NowTensorPosition]
                                         else:
                                             if end_times[j] is None:
                                                 end_times[j] = time.time()
@@ -1032,6 +1122,8 @@ class LLMWorker:
                                                 token_performance = tokencount / duration
                                                 print(f'batch{i} : finished. {token_performance:0.2f} t/s')
 
+                                            #ToDo me save KV_cache and pos_cache in cpu
+
                                             prompt_queue.update_prompt(id,PromptStatus.COMPLETED,result=outputs[j],wkv_state=wkv_states[NowTensorPosition].to('cpu'),shift_state=shift_states[NowTensorPosition].to('cpu'))
                                             statuss[j] == 'idle'
 
@@ -1039,6 +1131,12 @@ class LLMWorker:
                                             self.llM_current_batch_info[i]['shift_states'] = None
                                             self.llM_current_batch_info[i]['current_prob'] = None
                                             self.llM_current_batch_info[i]['occurrence'] = None
+                                            if self.model.HRWKV_Mode == 1:
+                                                self.llM_current_batch_info[i]['kv_cache'] = None
+                                                self.llM_current_batch_info[i]['pos_cache'] = None
+
+                                            gc.collect()
+                                            torch.cuda.empty_cache() 
 
                                         NowTensorPosition = NowTensorPosition + 1
 
