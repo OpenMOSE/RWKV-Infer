@@ -154,7 +154,7 @@ def fused_2gemm(xx, a0, a1, a2):
     out = F.linear(tmp, a2.t(), a0)
     return out
 
-def compute_rope_cache_range_(cache_pos, seq_len, rotary_dim, device, dtype, rope_theta):
+def compute_rope_cache_range(cache_pos, seq_len, rotary_dim, device, dtype, rope_theta):
     """
     RoPEのcos/sinをバッチごとに cache_pos から始まる Tトークン分生成
 
@@ -232,7 +232,7 @@ def compute_rope_cache_range_ntk(cache_pos, seq_len, rotary_dim, device, dtype, 
     return cos, sin, inv_freq
 
 #Yarn Version
-def compute_rope_cache_range(cache_pos, seq_len, rotary_dim, device, dtype, rope_theta,
+def compute_rope_cache_range_YaRN(cache_pos, seq_len, rotary_dim, device, dtype, rope_theta,
                                   ntk_alpha=10.0, yarn_interp_max_pos=4096.0):
     """
     YaRN: 短距離RoPEと長距離RoPEの補間によるRoPE安定化。
