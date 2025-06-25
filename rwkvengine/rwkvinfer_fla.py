@@ -183,7 +183,7 @@ class TextProcessor:
         #    return "text/markdown"
 
 class LLMWorker:
-    def __init__(self,max_batch_size = 16,max_ctxlen=8192):
+    def __init__(self,max_batch_size = 32,max_ctxlen=8192):
         print('Initializing LLM Worker')
         
         self.llm_batch_chunk = 1024 #FLA Preprocess Prompt chunks
@@ -546,7 +546,7 @@ class LLMWorker:
                         if self.model.HRWKV_Mode == 1:
                             #Hybrid Mode
                             kv_caches = self.States.kv_cache.permute(1 ,0 ,2 ,3 ,4)
-                            pos_caches = self.States.pos_cache.permute(1, 0, 2)
+                            pos_caches = self.States.pos_cache#.permute(1, 0, 2)
 
                         #print(f'{kv_caches.shape}')
 
@@ -628,7 +628,7 @@ class LLMWorker:
                         if self.model.HRWKV_Mode == 1:
                             #Hybrid Mode
                             kv_caches = kv_caches.permute(1 ,0 ,2 ,3 ,4)
-                            pos_caches = pos_caches.permute(1, 0, 2)
+                            #pos_caches = pos_caches.permute(1, 0, 2)
 
 
                         if token_max < self.llm_minimum_chunk:
@@ -663,7 +663,7 @@ class LLMWorker:
                         if self.model.HRWKV_Mode == 1:
                             #Hybrid Mode
                             kv_caches = kv_caches.permute(1 ,0 ,2 ,3 ,4)
-                            pos_caches = pos_caches.permute(1, 0, 2)
+                            #pos_caches = pos_caches.permute(1, 0, 2)
 
                         j = -1
                         NowTensorPosition = 0
@@ -949,7 +949,7 @@ class LLMWorker:
                         if self.model.HRWKV_Mode == 1:
                             #Hybrid Mode
                             kv_caches = self.States.kv_cache.permute(1 ,0 ,2 ,3 ,4)
-                            pos_caches = self.States.pos_cache.permute(1, 0, 2)
+                            pos_caches = self.States.pos_cache#.permute(1, 0, 2)
 
                         
                         #2025.03.17 Implement State-Offset
@@ -1036,7 +1036,7 @@ class LLMWorker:
                         if self.model.HRWKV_Mode == 1:
                             #Hybrid Mode
                             kv_caches = kv_caches.permute(1 ,0 ,2 ,3 ,4)
-                            pos_caches = pos_caches.permute(1, 0, 2)
+                            #pos_caches = pos_caches.permute(1, 0, 2)
 
                             
                         if self.model.HRWKV_Mode == 1:
@@ -1062,7 +1062,7 @@ class LLMWorker:
                         if self.model.HRWKV_Mode == 1:
                             #Hybrid Mode
                             kv_caches = kv_caches.permute(1 ,0 ,2 ,3 ,4)
-                            pos_caches = pos_caches.permute(1, 0, 2)
+                            #pos_caches = pos_caches.permute(1, 0, 2)
 
                         j = -1
                         NowTensorPosition = 0

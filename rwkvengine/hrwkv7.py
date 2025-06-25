@@ -154,6 +154,52 @@ def fused_2gemm(xx, a0, a1, a2):
     out = F.linear(tmp, a2.t(), a0)
     return out
 
+def get_batch_rope_cache(cos_cache, sin_cache, batch_pos, seq_len):
+    """
+    事前計算されたcos/sin cacheから、バッチごとの開始位置に基づいて
+    必要な長さ分のcos/sinを取得する
+    
+    Args:
+        cos_cache: [1, max_seq_len, rotary_dim] - 事前計算されたcos値
+        sin_cache: [1, max_seq_len, rotary_dim] - 事前計算されたsin値
+        batch_pos: [B, 1] - 各バッチの開始位置
+        seq_len: int - 処理する系列長 T
+    
+    Returns:
+        cos: [B, T, rotary_dim] - バッチごとのcos値
+        sin: [B, T, rotary_dim] - バッチごとのsin値
+    """
+    B = batch_pos.shape[0]
+    rotary_dim = cos_cache.shape[-1]
+    device = cos_cache.device
+    dtype = cos_cache.dtype
+    
+    # 各バッチの位置インデックスを作成 [B, T]
+    positions = batch_pos + torch.arange(seq_len, device=device, dtype=torch.long)
+    
+    # cos_cache と sin_cache から必要な部分を取得
+    # cos_cache/sin_cache の shape は [1, max_seq_len, rotary_dim]
+    # positions を使ってインデックシング
+    cos_cache_squeezed = cos_cache.squeeze(0)  # [max_seq_len, rotary_dim]
+    sin_cache_squeezed = sin_cache.squeeze(0)  # [max_seq_len, rotary_dim]
+    
+    # バッチごとに異なる位置から取得
+    cos = cos_cache_squeezed[positions]  # [B, T, rotary_dim]
+    sin = sin_cache_squeezed[positions]  # [B, T, rotary_dim]
+    
+    return cos, sin
+
+def compute_qwen3_rope_cache(seq_len, rotary_dim, device, dtype, rope_theta):
+            half_dim = rotary_dim // 2
+            freq_seq = torch.arange(half_dim, dtype=dtype, device=device)
+            inv_freq = 1.0 / (rope_theta ** (freq_seq / half_dim))
+            positions = torch.arange(seq_len, dtype=dtype, device=device)
+            freqs = torch.einsum("i,j->ij", positions, inv_freq)
+            emb = torch.cat([freqs, freqs], dim=-1)
+            cos = emb.cos()
+            sin = emb.sin()
+            return cos.unsqueeze(0), sin.unsqueeze(0), inv_freq
+
 def compute_rope_cache_range(cache_pos, seq_len, rotary_dim, device, dtype, rope_theta):
     """
     RoPEのcos/sinをバッチごとに cache_pos から始まる Tトークン分生成
@@ -474,158 +520,112 @@ class HRWKV_7(nn.Module):
         output = T5RMSNorm(x_in,ln2,variance_epsilon=rmsnorm_epsilon)
 
         return  output, x[:,-1], state, v_first, x_in
-    
-    
+
+
     @torch.compile
-    def GQA_Attention_(layer_id: int, gqa_layer_id: int, H: int, N: int,
-                  x_in, past_key_value, cache_position,
-                  Q_, K_, V_, O_,
-                  Q_state, K_state, V_state, O_state,
-                  Q_bias, K_bias, V_bias, O_bias,
-                  ln_r, ln_k, rmsnorm_epsilon: float,
-                  ln1, ln2, rope_theta,
-                  ebits: int, mbits: int):
-        B, T, C = x_in.size()
-        x = T5RMSNorm(x_in, ln1, rmsnorm_epsilon)
+    def hxa079_TimeMix(layer_id: int, H: int, N: int,
+                        x_in, x_prev, v_first,k_first,state,cache_position,
+                        calc_cos,calc_sin,
+                        w0, w1, w2, a0, a1, a2,
+                        v0, v1, v2, g1, g2,
+                        k0, k1, k2,
+                        r_k, R_, K_, V_, O_,
+                        R_state,K_state,V_state,O_state,
+                        R_bias, K_bias, V_bias, O_bias,
+                        ln_r,ln_k,rmsnorm_epsilon:float,
+                        ln1,ln2,rope_theta,
+                        ebits:int, mbits:int
+                        ):
+        
+        x = T5RMSNorm(x_in,ln1,variance_epsilon=rmsnorm_epsilon)
 
-        HN = H * N
-        kv_dim = K_.shape[0] if K_.dtype != torch.int8 else K_.shape[1]
-        kv_per_head = kv_dim // N
+        B, T, HN = x.shape
+        if K_.dtype == torch.int8:
+            kv_dim = K_.shape[1]
+        else:
+            kv_dim = K_.shape[0]
         kv_repeat = HN // kv_dim
+        kv_per_head = kv_dim // N
 
-        # Projections
-        q = fpx_matmul(x, Q_, Q_state, ebits, mbits).add_(Q_bias).view(B, T, H, N)
-        k = fpx_matmul(x, K_, K_state, ebits, mbits).add_(K_bias).view(B, T, kv_per_head, N)
-        v = fpx_matmul(x, V_, V_state, ebits, mbits).add_(V_bias).view(B, T, kv_per_head, N)#.transpose(1, 2)
+        r = fpx_matmul(x, R_, R_state, ebits, mbits).add_(R_bias)
+        k = fpx_matmul(x, K_, K_state, ebits, mbits).add_(K_bias)
+        v = fpx_matmul(x, V_, V_state, ebits, mbits).add_(V_bias)
 
-        # Norm
-        q = T5RMSNorm(q, ln_r, rmsnorm_epsilon).view(B, T, H, N)#.transpose(1, 2)
-        k = T5RMSNorm(k, ln_k, rmsnorm_epsilon).view(B, T, kv_per_head, N)#.transpose(1, 2)
+        r = T5RMSNorm(r.view(B,T,H,N), ln_r, variance_epsilon=rmsnorm_epsilon)
+        k = T5RMSNorm(k.view(B,T,kv_per_head,N), ln_k, variance_epsilon=rmsnorm_epsilon)
 
         # Rotary embedding
-        cos, sin, _ = compute_rope_cache_range(cache_position, T, N, k.device, torch.float32, rope_theta)
-        cos, sin = cos.to(k.dtype), sin.to(k.dtype)
-        q, k = apply_rotary_pos_emb(q, k, cos, sin,unsqueeze_dim=2)
-
-        # === KVCache更新 ===
-        insert_pos = cache_position.view(B, 1) + torch.arange(T, device=q.device).view(1, T)
-        assert insert_pos.max() < past_key_value.shape[2], f"Cache overflow at pos {insert_pos.max()}"
+        #cos, sin, _ = compute_rope_cache_range(cache_position, T, N, k.device, torch.float32, rope_theta)
+        cos, sin = calc_cos.to(k.dtype), calc_sin.to(k.dtype)
+        r, k = apply_rotary_pos_emb(r, k, cos, sin,unsqueeze_dim=2)
 
 
-        k_write = k.view(B,T,kv_per_head * N)
-        v_write = v.view(B,T,kv_per_head * N)
+        k = k.view(B, T, kv_per_head, N)
+        v = v.view(B, T, kv_per_head, N)
 
-        B_idx = torch.arange(B, device=q.device).view(B, 1).expand(-1, T)  # (B, T)
-        KV_idx = insert_pos  # (B, T)
-        past_key_value[gqa_layer_id, B_idx, KV_idx, 0] = k_write
-        past_key_value[gqa_layer_id, B_idx, KV_idx, 1] = v_write
+        if layer_id == 0:
+            v_first = v
+            k_first = k 
+        else:
+            tmp = x @ v1
+            tmp = F.linear(tmp, v2.t(), v0)
+            gate = torch.sigmoid(tmp).view(B, T, kv_per_head, N)
+            v = v + (v_first - v) * gate
 
-        # === 読み出し処理 ===
-        max_seq_len = (cache_position.view(B) + T).max().item()
-        k_all = past_key_value[gqa_layer_id, :, :max_seq_len, 0].view(B, max_seq_len, kv_per_head, N).transpose(1, 2)
-        v_all = past_key_value[gqa_layer_id, :, :max_seq_len, 1].view(B, max_seq_len, kv_per_head, N).transpose(1, 2)
+            tmp2 = x @ k1
+            tmp2 = F.linear(tmp2, k2.t(), k0)
+            gate2 = torch.sigmoid(tmp2).view(B, T, kv_per_head, N)
+            k = k + (k_first - k) * gate2
 
-        k = repeat_kv_original(k_all, kv_repeat)
-        v = repeat_kv_original(v_all, kv_repeat)
-
-        # Attention mask と SDPA: 過去全トークンを含める
-        S = k.shape[2]
-        attn_mask = torch.full((B, 1, T, S), float('-inf'), dtype=q.dtype, device=q.device)
-        for b in range(B):
-            valid_len = cache_position[b, 0].item() + T
-            attn_mask[b, 0, :, :valid_len] = 0.0
+        tmp = x @ w1             # → [B, T, H2]
+        tmp = torch.tanh(tmp)
+        w = F.linear(tmp, w2.t(), w0)  # → [B, T, O]
+        w = -F.softplus(-w) - 0.5
 
         
 
-        attn_output = F.scaled_dot_product_attention(q.transpose(1, 2), k, v, attn_mask, is_causal=False)
-        attn_output = attn_output.transpose(1, 2).reshape(B, T, H * N)
+        k = repeat_kv(k, kv_repeat)
+        v = repeat_kv(v, kv_repeat)
 
-        out = fpx_matmul(attn_output, O_, O_state, ebits, mbits)
-        x_out = x_in + out
+        k = k.view(B, T, -1)
+        v = v.view(B, T, -1)
 
-        return T5RMSNorm(x_out, ln2, rmsnorm_epsilon), x_out, past_key_value
+        tmp = x @ a1
+        tmp = F.linear(tmp, a2.t(), a0)
+        a = torch.sigmoid(tmp)
+        g = torch.sigmoid(x @ g1) @ g2
+
+        kk = F.normalize(k.view(B, T, H, N), p=2.0, dim=-1).view(B, T, H*N)
+        k = k * (1.0 - w + a)
+
+        aa = -kk
+        bb = kk * a
+
+        
+
+
+        w = -w.to(dtype=torch.float32).exp()
+        r_,w_,k_,v_,aa_,bb_ = [i.view(B,T,H,N) for i in [r,w,k,v,aa,bb]]
+        B,T,_,_ = r_.shape
+        xx, state = fused_recurrent_rwkv7(r_, w_, k_, v_, aa_, bb_, scale=1.0, initial_state=state, output_final_state=True, head_first=False)
+
+        
+        xx = xx.view(B,T,-1)
+        xx = xx * (float(N) ** -0.5)
+
+        xx = xx.to(dtype=r.dtype) + ((r.view(B,T,H,N)*k.view(B,T,H,N)*r_k.view(H,N)).sum(dim=-1, keepdim=True) * v.view(B,T,H,N)).view(B,T,HN)
+        output = fpx_matmul((xx * g), O_, O_state,ebits,mbits)
+
+        x_in = x_in + output
+        output = T5RMSNorm(x_in,ln2,variance_epsilon=rmsnorm_epsilon)
+
+        return  output, x[:,-1], state, v_first, k_first, x_in
     
-
-    @torch.compile
-    def GQA_Attention__(layer_id: int, gqa_layer_id: int, H: int, N: int,
-                    x_in, past_key_value, cache_position,
-                    Q_, K_, V_, O_,
-                    Q_state, K_state, V_state, O_state,
-                    Q_bias, K_bias, V_bias, O_bias,
-                    ln_r, ln_k, rmsnorm_epsilon: float,
-                    ln1, ln2, rope_theta,
-                    ebits: int, mbits: int):
-
-        B, T, C = x_in.size()
-        x = T5RMSNorm(x_in, ln1, rmsnorm_epsilon)
-
-        HN = H * N
-        kv_dim = K_.shape[0] if K_.dtype != torch.int8 else K_.shape[1]
-        kv_per_head = kv_dim // N
-        kv_repeat = HN // kv_dim
-        kv_cache_size = past_key_value.shape[2]  # 最大長
-
-        # Projections
-        q = fpx_matmul(x, Q_, Q_state, ebits, mbits).add_(Q_bias).view(B, T, H, N)
-        k = fpx_matmul(x, K_, K_state, ebits, mbits).add_(K_bias).view(B, T, kv_per_head, N)
-        v = fpx_matmul(x, V_, V_state, ebits, mbits).add_(V_bias).view(B, T, kv_per_head, N)
-
-        # Norm
-        q = T5RMSNorm(q, ln_r, rmsnorm_epsilon).view(B, T, H, N)
-        k = T5RMSNorm(k, ln_k, rmsnorm_epsilon).view(B, T, kv_per_head, N)
-
-        # Rotary embedding
-        cos, sin, _ = compute_rope_cache_range(cache_position, T, N, k.device, torch.float32, rope_theta)
-        cos, sin = cos.to(k.dtype), sin.to(k.dtype)
-        q, k = apply_rotary_pos_emb(q, k, cos, sin, unsqueeze_dim=2)
-
-        # === KVCache圧縮処理（Truncation） ===
-        current_max_pos = (cache_position.view(B) + T).max().item()
-        if current_max_pos > kv_cache_size:
-            shift = current_max_pos - kv_cache_size
-            past_key_value[gqa_layer_id] = torch.roll(past_key_value[gqa_layer_id], shifts=-shift, dims=1)
-            cache_position -= shift  # 注意: in-place更新しても呼び出し元には反映されない可能性がある
-
-        # === KVCache更新 ===
-        insert_pos = cache_position.view(B, 1) + torch.arange(T, device=q.device).view(1, T)
-        k_write = k.view(B, T, kv_per_head * N)
-        v_write = v.view(B, T, kv_per_head * N)
-
-        B_idx = torch.arange(B, device=q.device).view(B, 1).expand(-1, T)
-        KV_idx = insert_pos
-        # past_key_value[gqa_layer_id, B_idx, KV_idx, 0] = k_write
-        # past_key_value[gqa_layer_id, B_idx, KV_idx, 1] = v_write
-
-        start = cache_position[b, 0].item()
-        past_key_value[gqa_layer_id, b, start:start+T, 0].copy_(k_write[b])
-        past_key_value[gqa_layer_id, b, start:start+T, 1].copy_(v_write[b])
-
-        # === 読み出し処理 ===
-        max_seq_len = (cache_position.view(B) + T).max().item()
-        k_all = past_key_value[gqa_layer_id, :, :max_seq_len, 0].view(B, max_seq_len, kv_per_head, N).transpose(1, 2)
-        v_all = past_key_value[gqa_layer_id, :, :max_seq_len, 1].view(B, max_seq_len, kv_per_head, N).transpose(1, 2)
-
-        k = repeat_kv_original(k_all, kv_repeat)
-        v = repeat_kv_original(v_all, kv_repeat)
-
-        # Attention mask
-        S = k.shape[2]
-        attn_mask = torch.full((B, 1, T, S), float('-inf'), dtype=q.dtype, device=q.device)
-        for b in range(B):
-            valid_len = cache_position[b, 0].item() + T
-            attn_mask[b, 0, :, :valid_len] = 0.0
-
-        attn_output = F.scaled_dot_product_attention(q.transpose(1, 2), k, v, attn_mask, is_causal=False)
-        attn_output = attn_output.transpose(1, 2).reshape(B, T, H * N)
-
-        out = fpx_matmul(attn_output, O_, O_state, ebits, mbits)
-        x_out = x_in + out
-
-        return T5RMSNorm(x_out, ln2, rmsnorm_epsilon), x_out, past_key_value
     
     @torch.compile
     def GQA_Attention(layer_id: int, gqa_layer_id: int, H: int, N: int,
                   x_in, past_key_value, cache_position,
+                  calc_cos,calc_sin,
                   Q_, K_, V_, O_,
                   Q_state, K_state, V_state, O_state,
                   Q_bias, K_bias, V_bias, O_bias,
@@ -651,9 +651,9 @@ class HRWKV_7(nn.Module):
         k = T5RMSNorm(k, ln_k, rmsnorm_epsilon)
 
         # Rotary embedding
-        cos, sin, _ = compute_rope_cache_range(cache_position, T, N, k.device, torch.float32, rope_theta)
-        cos, sin = cos.to(k.dtype, non_blocking=True), sin.to(k.dtype, non_blocking=True)
-        q, k = apply_rotary_pos_emb(q, k, cos, sin, unsqueeze_dim=2)
+        #cos, sin, _ = compute_rope_cache_range(cache_position, T, N, k.device, torch.float32, rope_theta)
+        cos, sin = calc_cos.to(k.dtype), calc_sin.to(k.dtype)
+        #q, k = apply_rotary_pos_emb(q, k, cos, sin, unsqueeze_dim=2)
 
         # === KV write準備 ===
         k_write = k.view(B, T, kv_per_head * N)
@@ -663,18 +663,20 @@ class HRWKV_7(nn.Module):
             start = cache_position[b, 0].item()
             end = start + T
 
-            if end > kv_cache_size:
-                # 溢れる分だけ左詰め（truncate）
-                shift = end - kv_cache_size
-                past_key_value[gqa_layer_id, b, :-shift] = past_key_value[gqa_layer_id, b, shift:].clone()
-                start -= shift
-                end = start + T
-                cache_position[b, 0] = kv_cache_size
+            # if end > kv_cache_size:
+            #     # 溢れる分だけ左詰め（truncate）
+            #     shift = end - kv_cache_size
+            #     past_key_value[gqa_layer_id, b, :-shift] = past_key_value[gqa_layer_id, b, shift:].clone()
+            #     start -= shift
+            #     end = start + T
+            #     #cache_position[b, 0] = kv_cache_size
+
+            #print(f'start {start} end {end} k_write[b] {k_write[b].shape}')
 
             # 連続領域に安全にcopy_
             past_key_value[gqa_layer_id, b, start:end, 0].copy_(k_write[b])
             past_key_value[gqa_layer_id, b, start:end, 1].copy_(v_write[b])
-            cache_position[b, 0] = end
+            #cache_position[b, 0] = end
 
         # === 読み出し ===
         max_seq_len = cache_position.max().item()
@@ -753,9 +755,9 @@ class HRWKV_7(nn.Module):
                 cache_pos = pos_cache[i]
                 
 
-                if i < self.n_layer - self.GQALayers:
+                if self.HRWKV_Block_Mode[i][0] == 0:
                     time_mix_state = last_wkv_states[i]
-                    xx, time_mix_shift, time_mix_state, v_first, x = HRWKV_7.hxa078_TimeMix(i, self.n_head, self.head_size, x, time_mix_shift, v_first, time_mix_state,cache_pos,
+                    xx, time_mix_shift, time_mix_state, v_first, x = HRWKV_7.hxa078_TimeMix(self.HRWKV_Block_Mode[i][2], self.n_head, self.head_size, x, time_mix_shift, v_first, time_mix_state,cache_pos,
                                                                 
                                                                     # z[att+'x_r'], z[att+'x_w'], z[att+'x_k'], z[att+'x_v'], z[att+'x_a'], z[att+'x_g'],
                                                                         z[att+'w0'], z[att+'w1'], z[att+'w2'], z[att+'a0'], z[att+'a1'], z[att+'a2'], z[att+'v0'], z[att+'v1'], z[att+'v2'], z[att+'g1'], z[att+'g2'],
@@ -769,12 +771,12 @@ class HRWKV_7(nn.Module):
                                                                         )
                     last_wkv_states[i] = time_mix_state
                 else:
-                    GQALayer_i = i - (self.n_layer-self.GQALayers) # e 0 --- 3
+                    #GQALayer_i = i - (self.n_layer-self.GQALayers) # e 0 --- 3
 
                     #kv = kv_cache[GQALayer_i]
                     
 
-                    xx, x, kv_cache= HRWKV_7.GQA_Attention(i,GQALayer_i,self.n_head,self.head_size,x,kv_cache,cache_pos,
+                    xx, x, kv_cache= HRWKV_7.GQA_Attention(i,self.HRWKV_Block_Mode[i][2],self.n_head,self.head_size,x,kv_cache,cache_pos,
                                           z[att+'q_proj.weight'], z[att+'k_proj.weight'], z[att+'v_proj.weight'], z[att+'o_proj.weight'],
                                                                         z[att+'q_proj.weight.qstate'], z[att+'k_proj.weight.qstate'], z[att+'v_proj.weight.qstate'], z[att+'o_proj.weight.qstate'],
                                                                         z.get(att+'q_proj.bias',dummytensor), z.get(att+'k_proj.bias',dummytensor), z.get(att+'v_proj.bias',dummytensor), dummytensor,
@@ -814,6 +816,132 @@ class HRWKV_7(nn.Module):
             if not full_output: x = x[:, -1, :]  # 最後のタイムステップだけを選択し、バッチ次元を保持
 
             pos_cache += T
+
+            return x, None, last_wkv_states, kv_cache, pos_cache
+
+
+
+    def hxa079r_forward(self, idx, 
+                last_wkv_states: List[torch.Tensor], kv_cache,pos_cache,  full_output:bool=False):
+        
+        with torch.no_grad(): 
+            z = self.z
+
+            if self.emboncpu:
+                x = z['emb.weight'][idx.cpu()].to(device=self.device,dtype=self.dtype)
+            else:
+                x = z['emb.weight'][idx]
+
+            
+
+            v_first = torch.empty_like(x)
+            k_first = torch.empty_like(x)
+
+            cache_pos = pos_cache#[i]
+            #print(f'before = {cache_pos}')
+
+            B, T, C = x.shape
+
+            cos,sin,_ = compute_qwen3_rope_cache(16384,self.head_size,self.device,torch.float32,1000000)
+
+            calc_cos, calc_sin = get_batch_rope_cache(cos, sin, cache_pos, T)
+
+            StrategyMode = 0 # 0 is Fully BF16 or FP16 or FP8
+            if self.bitfp6quant == True or self.bitfp8quant == True or self.bit8quant:
+                StrategyMode = 3
+
+            dummytensor = self.dummytensor
+
+            ln_r =  z.get(f'blocks.{0}.att.ln_r.weight',None)
+            rk_normmode = False
+            if ln_r is not None:
+                rk_normmode = True
+
+                        
+
+            for i in range(self.n_layer):
+                bbb = f'blocks.{i}.'
+                att = f'blocks.{i}.att.'
+                ffn = f'blocks.{i}.ffn.'
+
+                time_mix_shift = dummytensor#last_shift_states[i*2]
+                channel_mix_state = dummytensor#last_shift_states[i*2+1]
+                
+
+
+                #xx = T5RMSNorm(x,z[bbb+'ln1.weight'],variance_epsilon=1e-6)
+                
+                
+
+                if self.HRWKV_Block_Mode[i][0] == 0:
+                    time_mix_state = last_wkv_states[self.HRWKV_Block_Mode[i][2]]
+                    xx, time_mix_shift, time_mix_state, v_first,k_first, x = HRWKV_7.hxa079_TimeMix(self.HRWKV_Block_Mode[i][2], self.n_head, self.head_size, x, time_mix_shift, v_first,k_first, time_mix_state,cache_pos,
+                                                                        calc_cos,calc_sin,
+                                                                        # z[att+'x_r'], z[att+'x_w'], z[att+'x_k'], z[att+'x_v'], z[att+'x_a'], z[att+'x_g'],
+                                                                        z[att+'w0'], z[att+'w1'], z[att+'w2'], z[att+'a0'], z[att+'a1'], z[att+'a2'], z[att+'v0'], z[att+'v1'], z[att+'v2'], z[att+'g1'], z[att+'g2'],
+                                                                        z[att+'k0'], z[att+'k1'], z[att+'k2'], #key residual
+                                                                        z[att+'r_k'],
+                                                                        z[att+'receptance.weight'], z[att+'key.weight'], z[att+'value.weight'], z[att+'output.weight'],
+                                                                        z[att+'receptance.weight.qstate'], z[att+'key.weight.qstate'], z[att+'value.weight.qstate'], z[att+'output.weight.qstate'],
+                                                                        z.get(att+'receptance.bias',dummytensor), z.get(att+'key.bias',dummytensor), z.get(att+'value.bias',dummytensor), dummytensor,
+                                                                        z[att+'ln_r.weight'],z[att+'ln_k.weight'],1e-6,
+                                                                        z[bbb+'ln1.weight'],z[bbb+'ln2.weight'],1000000,
+                                                                        self.ebits,self.mbits
+                                                                        )
+                    last_wkv_states[self.HRWKV_Block_Mode[i][2]] = time_mix_state
+                else:
+                    #GQALayer_i = i - (self.n_layer-self.GQALayers) # e 0 --- 3
+
+                    #kv = kv_cache[GQALayer_i]
+                    
+
+                    xx, x, kv_cache= HRWKV_7.GQA_Attention(i,self.HRWKV_Block_Mode[i][2],self.n_head,self.head_size,x,kv_cache,cache_pos,
+                                          calc_cos,calc_sin,
+                                          z[att+'q_proj.weight'], z[att+'k_proj.weight'], z[att+'v_proj.weight'], z[att+'o_proj.weight'],
+                                                                        z[att+'q_proj.weight.qstate'], z[att+'k_proj.weight.qstate'], z[att+'v_proj.weight.qstate'], z[att+'o_proj.weight.qstate'],
+                                                                        z.get(att+'q_proj.bias',dummytensor), z.get(att+'k_proj.bias',dummytensor), z.get(att+'v_proj.bias',dummytensor), dummytensor,
+                                                                        z[att+'ln_r.weight'],z[att+'ln_k.weight'],1e-6,
+                                                                        z[bbb+'ln1.weight'],z[bbb+'ln2.weight'],1000000,
+                                                                        self.ebits,self.mbits )
+
+                    #print(kv_cache)
+                                          
+                                          
+                                          
+                    #kv_cache[GQALayer_i]=kv
+                
+
+
+                xx,x = HRWKV_7.SwiGLU_MLP_forward_fpx_w_add(xx,z[ffn+'gate.weight'],z[ffn+'down.weight'],z[ffn+'up.weight'],
+                                                z[ffn+'gate.weight.qstate'],z[ffn+'down.weight.qstate'],z[ffn+'up.weight.qstate'],
+                                                self.ebits,self.mbits,
+                                                x
+                                                )
+      
+
+                #x = x + xx
+
+                #last_shift_states[i*2] = time_mix_shift
+                #last_shift_states[i*2+1] = channel_mix_state
+                
+                
+
+       
+
+            x = T5RMSNorm(x,z['ln_out.weight'],variance_epsilon=1e-6)
+            # if StrategyMode == 0:
+            #     x = hybrid_matmul(x , z['head.weight'])
+            # if StrategyMode == 3:
+            x = fpx_matmul(x , z['head.weight'],z.get('head.weight.qstate',None),self.ebits,self.mbits)
+            if not full_output: x = x[:, -1, :]  # 最後のタイムステップだけを選択し、バッチ次元を保持
+
+            #print(f'After = {cache_pos}')
+
+            pos_cache += T
+            #print(f'T = {T}')
+            #print(f'after = {cache_pos}')
+
+            
 
             return x, None, last_wkv_states, kv_cache, pos_cache
 

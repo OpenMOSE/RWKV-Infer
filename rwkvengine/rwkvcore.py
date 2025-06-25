@@ -417,27 +417,57 @@ class RWKV_x(nn.Module):
 
             self.HRWKV_Mode = 0
             self.HRWKV_StartLayers = 0
+            self.HRWKV_Generation=78 # hxa078, hxa079 supported
+
+            self.HRWKV_Block_Mode = [] #0: RWKV, 1: Attention
+
+            self.GQALayers = 0
+            self.RWKVLayers = 0
 
             for i in range(n_layer):
                 t = f'blocks.{i}.'
                 Found = False
                 for key in keys:
                     if t in key and 'q_proj' in key:
-                        self.HRWKV_Mode = 1
-                        self.HRWKV_StartLayers = i
-                        print(i)
                         Found = True
+                        self.HRWKV_Block_Mode.append([1,i,self.GQALayers])
+                        self.GQALayers = self.GQALayers + 1
+                        if self.HRWKV_Mode == 0:
+                            self.HRWKV_Mode = 1
                         break
-                if Found == True:
-                    break
+                        # self.HRWKV_Mode = 1
+                        # self.HRWKV_StartLayers = i
+                        # print(i)
+                        # Found = True
+                        # break
+                # if Found == True:
+                #     break
+                if Found == False:
+                    self.HRWKV_Block_Mode.append([0,i,self.RWKVLayers])
+                    self.RWKVLayers = self.RWKVLayers + 1
+
+            for key in keys:
+                if 'k0' in key:
+                    self.HRWKV_Generation=79
+                    if self.HRWKV_Mode == 0:
+                        self.HRWKV_Mode = 1
+                        #self.HRWKV_StartLayers=n_layer
             
 
             if self.HRWKV_Mode:
-                print('HRWKV-7 Mode. Hybrid RWKV Mode. hxa078r')
-                self.GQALayers = n_layer - self.HRWKV_StartLayers
-                self.RWKVLayers = n_layer - self.GQALayers
+                print('HRWKV-7 Mode. Hybrid RWKV Mode. hxa078r, hxa079r')
+
+                
+                # for mode in self.HRWKV_Block_Mode:
+                #     if mode == 0:
+                #         self.RWKVLayers = self.RWKVLayers + 1
+                #     else:
+                #         self.GQALayers = self.GQALayers + 1
+                print(f'RWKVLayers = {self.RWKVLayers}')
                 print(f'GQALayers = {self.GQALayers}')
                 #exit()
+
+                self.n_kv = 1
 
                 for key in keys:
                     if 'k_proj' in key:
@@ -910,7 +940,10 @@ class RWKV_x(nn.Module):
         elif self.RWKVMode == 7 and self.ARWKVMode == 0:
             return RWKV_7.x070_forward(self,idx,last_shift_states,last_wkv_states,one_mode=one_mode,KernelMode=KernelMode,full_output=full_output,time_offset_state=time_offset_state)
         elif self.RWKVMode == 7 and self.HRWKV_Mode == 1:
-            return HRWKV_7.hxa078r_forward(self,idx,last_wkv_states,kv_cache,pos_cache,full_output)
+            if self.HRWKV_Generation == 79:
+                return HRWKV_7.hxa079r_forward(self,idx,last_wkv_states,kv_cache,pos_cache,full_output)
+            else:
+                return HRWKV_7.hxa078r_forward(self,idx,last_wkv_states,kv_cache,pos_cache,full_output)
         elif self.RWKVMode == 7 and self.ARWKVMode == 1 and self.TokenshiftMode == 0:
             #print('ARWKV')
             return ARWKV_7.ax070_forward(self,idx,last_shift_states,last_wkv_states,one_mode=one_mode,KernelMode=KernelMode,full_output=full_output )
