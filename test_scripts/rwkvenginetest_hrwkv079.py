@@ -23,9 +23,9 @@ if __name__ == '__main__':
     pipeline = PIPELINE("qwen3")
 
 
-    model = RWKV_x('/home/client/Projects/output/Qwen3-8B/hxa079-stage2-merged.pth','int8',
-                   adapter_model='',
-                   adapter_mode='',
+    model = RWKV_x('/home/client/Projects/llm/HRWKV7-hxa079-qwen3-14b-stage2-e1.pth','int8',
+                   adapter_model='/home/client/Projects/llm/rwkv-4.pth',
+                   adapter_mode='lora',
                    fully_fusedrecurrent=args.fully_fused)
 
     Target_batch = args.tb

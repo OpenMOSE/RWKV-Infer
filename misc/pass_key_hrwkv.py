@@ -31,7 +31,7 @@ import seaborn as sns
 #RWKV Infer
 from rwkvengine.rwkvcore import RWKV_x, PIPELINE
 
-model_path = "/home/client/Projects/output/Qwen3-8B/hxa079-stage2-pls-hybrid.pth"
+model_path = "/home/client/Projects/llm/HRWKV7-hxa079-qwen3-14b-stage2-e1.pth"
 model_adapter_path = "" # can realtime merge LoRA,Bone,DoRA
 model_adapter_mode = "" # set lora,bone,dora
 quant_mode = "int8" # int8, OpenMOSE Silly 8bit matmul kernel(triton)
@@ -55,7 +55,7 @@ def parse_config():
     #parser.add_argument('hf_model', type=str)
     parser.add_argument('--cache_dir', type=str, default="./cache")
     parser.add_argument('--min_tokens', type=int, default=1024, help='minimum token length to start evaluation')
-    parser.add_argument('--max_tokens', type=int, default=16384, help='maximum token length for evaluation')
+    parser.add_argument('--max_tokens', type=int, default=8192, help='maximum token length for evaluation')
     parser.add_argument('--interval', type=int, default=1024, help='interval for evaluation')
     parser.add_argument('--num_tests', type=int, default=3, help='number of repeat testing for each length')
     parser.add_argument('--max_depth', type=float, default=1.0, help='max depth ratio to test')
@@ -133,15 +133,15 @@ def passkey_retrieval_test(model, tokenizer, device, context_length, depth, seed
 
     #answer_ids = tokenizer(answer).input_ids # Get token IDs for answer length
     answer_ids = tokenizer.encode(answer)#.input_ids
-    max_new_tokens = len(answer_ids) + 64
+    max_new_tokens = len(answer_ids) + 16
 
     past_key_values = None
     processed_len = 0
     prefill_ids = input_ids[:, :-1]
     prefill_len = prefill_ids.shape[1]
-    chunk_size = 2048
+    chunk_size = 8192
 
-    States = model.new_state(1,32768)
+    States = model.new_state(1,65536)
     shift_states = States.shift_states
     wkv_states = States.wkv_states
     kv_caches = States.kv_cache

@@ -131,7 +131,7 @@ def fused_dequant_gemm_kernel(
 def fused_dequant_gemm(A: torch.Tensor,
                        W_int8: torch.Tensor,
                        scale: torch.Tensor,
-                       BLOCK_M=16, BLOCK_N=16, BLOCK_K=256):
+                       BLOCK_M=16, BLOCK_N=16, BLOCK_K=1024):
     """
     A:       (B, T, K) float16
     W_int8:  (K, N)     int8
@@ -161,7 +161,7 @@ def fused_dequant_gemm(A: torch.Tensor,
             scale.stride(0),
             C_flat.stride(0), C_flat.stride(1),
             BLOCK_N=BLOCK_N, BLOCK_K=BLOCK_K,
-            num_warps=8, 
+            num_warps=16, 
         )
         return C_out.to(dtype=A.dtype)
     
@@ -210,6 +210,7 @@ def quantize_weight(W_fp16: torch.Tensor, qmax: int = 127):
 # --------------------------------
 # Reference implementation & test
 # --------------------------------
+@torch.compile
 def reference_dequant_gemm(A, W_int8, scale):
     """
     A:      (B, T, K)

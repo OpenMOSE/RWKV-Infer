@@ -842,7 +842,7 @@ class HRWKV_7(nn.Module):
 
             B, T, C = x.shape
 
-            cos,sin,_ = compute_qwen3_rope_cache(16384,self.head_size,self.device,torch.float32,1000000)
+            cos,sin,_ = compute_qwen3_rope_cache(32768,self.head_size,self.device,torch.float32,1000000)
 
             calc_cos, calc_sin = get_batch_rope_cache(cos, sin, cache_pos, T)
 
@@ -882,7 +882,7 @@ class HRWKV_7(nn.Module):
                                                                         z[att+'k0'], z[att+'k1'], z[att+'k2'], #key residual
                                                                         z[att+'r_k'],
                                                                         z[att+'receptance.weight'], z[att+'key.weight'], z[att+'value.weight'], z[att+'output.weight'],
-                                                                        z[att+'receptance.weight.qstate'], z[att+'key.weight.qstate'], z[att+'value.weight.qstate'], z[att+'output.weight.qstate'],
+                                                                        z.get(att+'receptance.weight.qstate',dummytensor), z.get(att+'key.weight.qstate',dummytensor), z.get(att+'value.weight.qstate',dummytensor), z.get(att+'output.weight.qstate',dummytensor),
                                                                         z.get(att+'receptance.bias',dummytensor), z.get(att+'key.bias',dummytensor), z.get(att+'value.bias',dummytensor), dummytensor,
                                                                         z[att+'ln_r.weight'],z[att+'ln_k.weight'],1e-6,
                                                                         z[bbb+'ln1.weight'],z[bbb+'ln2.weight'],1000000,
@@ -898,7 +898,7 @@ class HRWKV_7(nn.Module):
                     xx, x, kv_cache= HRWKV_7.GQA_Attention(i,self.HRWKV_Block_Mode[i][2],self.n_head,self.head_size,x,kv_cache,cache_pos,
                                           calc_cos,calc_sin,
                                           z[att+'q_proj.weight'], z[att+'k_proj.weight'], z[att+'v_proj.weight'], z[att+'o_proj.weight'],
-                                                                        z[att+'q_proj.weight.qstate'], z[att+'k_proj.weight.qstate'], z[att+'v_proj.weight.qstate'], z[att+'o_proj.weight.qstate'],
+                                                                        z.get(att+'q_proj.weight.qstate',dummytensor), z.get(att+'k_proj.weight.qstate',dummytensor), z.get(att+'v_proj.weight.qstate',dummytensor), z.get(att+'o_proj.weight.qstate',dummytensor),
                                                                         z.get(att+'q_proj.bias',dummytensor), z.get(att+'k_proj.bias',dummytensor), z.get(att+'v_proj.bias',dummytensor), dummytensor,
                                                                         z[att+'ln_r.weight'],z[att+'ln_k.weight'],1e-6,
                                                                         z[bbb+'ln1.weight'],z[bbb+'ln2.weight'],1000000,
@@ -913,7 +913,7 @@ class HRWKV_7(nn.Module):
 
 
                 xx,x = HRWKV_7.SwiGLU_MLP_forward_fpx_w_add(xx,z[ffn+'gate.weight'],z[ffn+'down.weight'],z[ffn+'up.weight'],
-                                                z[ffn+'gate.weight.qstate'],z[ffn+'down.weight.qstate'],z[ffn+'up.weight.qstate'],
+                                                z.get(ffn+'gate.weight.qstate',dummytensor),z.get(ffn+'down.weight.qstate',dummytensor),z.get(ffn+'up.weight.qstate',dummytensor),
                                                 self.ebits,self.mbits,
                                                 x
                                                 )

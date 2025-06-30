@@ -76,6 +76,9 @@ class RWKV_x(nn.Module):
 
         self.eval()
 
+        #Dummy
+        self.ebits, self.mbits = 4, 3
+
         with torch.no_grad(): 
 
 
