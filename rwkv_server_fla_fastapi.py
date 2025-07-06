@@ -185,6 +185,9 @@ async def loadmodel(request: Request):
         model_viewname = data.get('model_viewname','default model')
         model_strategy = data.get('model_strategy','None')
 
+        rope_theta = float(data.get('rope_theta','1000000'))
+        rms_norm_eps = float(data.get('rms_norm_eps','1e-6'))
+
 
 
         
@@ -245,7 +248,7 @@ async def loadmodel(request: Request):
         StateList = []
         DynamicStateList = []
         
-        engine1.LoadModel(model_filename,Quant,precision,adapter_model=adapter_filename,adapter_mode=adapter_mode,adapter_scale=adapter_scaling,fully_fusedrecurrent=args.fully_fusedrecurrent,template_mode=template_mode)
+        engine1.LoadModel(model_filename,Quant,precision,adapter_model=adapter_filename,adapter_mode=adapter_mode,adapter_scale=adapter_scaling,fully_fusedrecurrent=args.fully_fusedrecurrent,template_mode=template_mode,rope_theta=rope_theta,rms_norm_eps=rms_norm_eps)
         model_endtoken = data.get('endtoken',engine1.pipeline.default_eos_token)
         # if engine1.templatemode == 'world':
         #     model_endtoken = data.get('endtoken',DefaultEndtoken)

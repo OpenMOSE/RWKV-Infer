@@ -183,7 +183,7 @@ class TextProcessor:
         #    return "text/markdown"
 
 class LLMWorker:
-    def __init__(self,max_batch_size = 32,max_ctxlen=8192):
+    def __init__(self,max_batch_size = 32,max_ctxlen=65536):
         print('Initializing LLM Worker')
         
         self.llm_batch_chunk = 1024 #FLA Preprocess Prompt chunks
@@ -235,11 +235,11 @@ class LLMWorker:
 
         
 
-    def LoadModel(self,modelpath,quantize=False,precision='bf16',adapter_model = '',adapter_mode = '',adapter_scale=2.0, fully_fusedrecurrent = True,template_mode=''):
+    def LoadModel(self,modelpath,quantize=False,precision='bf16',adapter_model = '',adapter_mode = '',adapter_scale=2.0, fully_fusedrecurrent = True,template_mode='',rope_theta=1000000.0,rms_norm_eps=1e-6,max_ctxlen=65536):
         self.model = None
         gc.collect()
         torch.cuda.empty_cache()
-        self.model = RWKV_x(modelpath,base_precision=precision,adapter_model=adapter_model,adapter_mode=adapter_mode,adapter_scale=adapter_scale,fully_fusedrecurrent=fully_fusedrecurrent)
+        self.model = RWKV_x(modelpath,base_precision=precision,adapter_model=adapter_model,adapter_mode=adapter_mode,adapter_scale=adapter_scale,fully_fusedrecurrent=fully_fusedrecurrent,rope_theta=rope_theta,rms_norm_eps=rms_norm_eps,max_ctxlen=max_ctxlen)
         
         if self.model.ARWKVMode:
             self.pipeline = PIPELINE(template_mode)
@@ -263,8 +263,86 @@ class LLMWorker:
         torch.cuda.empty_cache()
 
 
-
-    async def FLAGenerate(self,Queues:Prompt):
+    async def FLAGenerate(self, Queues: Prompt):
+        global prompt_queue
+        queue_id = await prompt_queue.add_prompt(Queues)
+        currentoutputcount = 0
+        beforecount = 0
+        
+        endtoken = "\n <sep>"
+        buffer = ""
+        
+        def process_buffer(buffer, is_final=False):
+            """バッファを処理して安全な出力を返す"""
+            if not buffer:
+                return "", ""
+            
+            # 完全なエンドトークンを削除
+            while endtoken in buffer:
+                buffer = buffer.replace(endtoken, "", 1)
+            
+            if is_final:
+                # 最終処理：不完全なエンドトークンもチェック
+                # バッファがエンドトークンの接頭辞である場合は出力しない
+                for i in range(1, len(endtoken) + 1):
+                    if buffer == endtoken[:i]:
+                        # 不完全なエンドトークンなので出力しない
+                        return "", ""
+                # エンドトークンの接頭辞でない場合のみ出力
+                return buffer, ""
+            
+            # 通常処理：エンドトークンの可能な接頭辞をチェック
+            max_prefix_len = min(len(buffer), len(endtoken) - 1)
+            for i in range(max_prefix_len, 0, -1):
+                if buffer[-i:] == endtoken[:i]:
+                    # 接頭辞を保持、残りを出力
+                    return buffer[:-i], buffer[-i:]
+            
+            # 接頭辞なし：全て出力
+            return buffer, ""
+        
+        while True:
+            output = prompt_queue.prompts[queue_id].result
+            
+            if output is not None:
+                if currentoutputcount < len(output):
+                    nextcount = len(output)
+                    new_text = ''.join(output[currentoutputcount:])
+                    currentoutputcount = nextcount
+                    
+                    if beforecount == 0:
+                        new_text = new_text.lstrip(' ')
+                    
+                    if new_text:
+                        buffer += new_text
+                        safe_output, buffer = process_buffer(buffer)
+                        
+                        if safe_output:
+                            if beforecount == 0 and not safe_output.strip():
+                                print('space skipped.')
+                                yield "", None, None
+                            else:
+                                yield safe_output, None, None
+                        
+                    beforecount = nextcount
+            
+            # 完了チェック
+            if prompt_queue.prompts[queue_id].status in [PromptStatus.COMPLETED, PromptStatus.FAILED]:
+                # 残りのバッファを処理（不完全なエンドトークンは出力しない）
+                if buffer:
+                    final_output, _ = process_buffer(buffer, is_final=True)
+                    if final_output:
+                        yield final_output, None, None
+                
+                # 状態を返して終了
+                yield "", \
+                    copy.deepcopy(prompt_queue.prompts[queue_id].use_exist_state_wkv.to('cpu')), \
+                    copy.deepcopy(prompt_queue.prompts[queue_id].use_exist_state_shift.to('cpu'))
+                prompt_queue.prompts[queue_id] = None
+                break
+            
+            await asyncio.sleep(0.01)
+    async def FLAGenerate_(self,Queues:Prompt):
         global prompt_queue
         queue_id = await prompt_queue.add_prompt(Queues)
         currenttoken = ''
@@ -288,20 +366,9 @@ class LLMWorker:
                     if beforecount == 0:
                         output = output.lstrip(' ')
                     if len(output) > 0:
-                        #if len(currenttoken) < len(output):
-                            #splittext = output[len(currenttoken):]
+            
                             splittext = output
-                            # splittext, tag = Artifact.process_text(splittext)
-                            # splittext, tag2 = Artifact2.process_text(splittext)
-                            # #print(f'tag = {tag}')
-                            # if tag is not None:
-                            #     print('Artifact Detected. Analyzing')
-                            #     typestyle = Artifact.get_type_from_artifact(tag)
-                            #     print(f'gettype = {typestyle}')
-                            #     splittext = f'```{typestyle}' + splittext
-                            # if tag2 is not None:
-                            #     splittext = f'\n```' + splittext
-                            # #currenttoken = output
+                            
                             if len(output.strip()) == 0 and beforecount == 0:
                                 print('space skipped.')
                                 yield "", None, None

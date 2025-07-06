@@ -551,8 +551,12 @@ class HRWKV_7(nn.Module):
         k = fpx_matmul(x, K_, K_state, ebits, mbits).add_(K_bias)
         v = fpx_matmul(x, V_, V_state, ebits, mbits).add_(V_bias)
 
-        r = T5RMSNorm(r.view(B,T,H,N), ln_r, variance_epsilon=rmsnorm_epsilon)
-        k = T5RMSNorm(k.view(B,T,kv_per_head,N), ln_k, variance_epsilon=rmsnorm_epsilon)
+        if ln_r == None:
+            r = r.view(B,T,H,N)
+            k = k.view(B,T,kv_per_head,N)
+        else:
+            r = T5RMSNorm(r.view(B,T,H,N), ln_r, variance_epsilon=rmsnorm_epsilon)
+            k = T5RMSNorm(k.view(B,T,kv_per_head,N), ln_k, variance_epsilon=rmsnorm_epsilon)
 
         # Rotary embedding
         #cos, sin, _ = compute_rope_cache_range(cache_position, T, N, k.device, torch.float32, rope_theta)
@@ -647,8 +651,9 @@ class HRWKV_7(nn.Module):
         k = fpx_matmul(x, K_, K_state, ebits, mbits).add_(K_bias).view(B, T, kv_per_head, N)
         v = fpx_matmul(x, V_, V_state, ebits, mbits).add_(V_bias).view(B, T, kv_per_head, N)
 
-        q = T5RMSNorm(q, ln_r, rmsnorm_epsilon)
-        k = T5RMSNorm(k, ln_k, rmsnorm_epsilon)
+        if ln_r is not None:
+            q = T5RMSNorm(q, ln_r, rmsnorm_epsilon)
+            k = T5RMSNorm(k, ln_k, rmsnorm_epsilon)
 
         # Rotary embedding
         #cos, sin, _ = compute_rope_cache_range(cache_position, T, N, k.device, torch.float32, rope_theta)
@@ -842,7 +847,7 @@ class HRWKV_7(nn.Module):
 
             B, T, C = x.shape
 
-            cos,sin,_ = compute_qwen3_rope_cache(32768,self.head_size,self.device,torch.float32,1000000)
+            cos,sin,_ = compute_qwen3_rope_cache(self.max_ctxlen,self.head_size,self.device,torch.float32,self.rope_theta)
 
             calc_cos, calc_sin = get_batch_rope_cache(cos, sin, cache_pos, T)
 
@@ -866,12 +871,7 @@ class HRWKV_7(nn.Module):
 
                 time_mix_shift = dummytensor#last_shift_states[i*2]
                 channel_mix_state = dummytensor#last_shift_states[i*2+1]
-                
 
-
-                #xx = T5RMSNorm(x,z[bbb+'ln1.weight'],variance_epsilon=1e-6)
-                
-                
 
                 if self.HRWKV_Block_Mode[i][0] == 0:
                     time_mix_state = last_wkv_states[self.HRWKV_Block_Mode[i][2]]
@@ -884,32 +884,21 @@ class HRWKV_7(nn.Module):
                                                                         z[att+'receptance.weight'], z[att+'key.weight'], z[att+'value.weight'], z[att+'output.weight'],
                                                                         z.get(att+'receptance.weight.qstate',dummytensor), z.get(att+'key.weight.qstate',dummytensor), z.get(att+'value.weight.qstate',dummytensor), z.get(att+'output.weight.qstate',dummytensor),
                                                                         z.get(att+'receptance.bias',dummytensor), z.get(att+'key.bias',dummytensor), z.get(att+'value.bias',dummytensor), dummytensor,
-                                                                        z[att+'ln_r.weight'],z[att+'ln_k.weight'],1e-6,
-                                                                        z[bbb+'ln1.weight'],z[bbb+'ln2.weight'],1000000,
+                                                                        z.get(att+'ln_r.weight',None),z.get(att+'ln_k.weight',None),self.rms_norm_eps,
+                                                                        z[bbb+'ln1.weight'],z[bbb+'ln2.weight'],self.rope_theta,
                                                                         self.ebits,self.mbits
                                                                         )
                     last_wkv_states[self.HRWKV_Block_Mode[i][2]] = time_mix_state
                 else:
-                    #GQALayer_i = i - (self.n_layer-self.GQALayers) # e 0 --- 3
-
-                    #kv = kv_cache[GQALayer_i]
-                    
 
                     xx, x, kv_cache= HRWKV_7.GQA_Attention(i,self.HRWKV_Block_Mode[i][2],self.n_head,self.head_size,x,kv_cache,cache_pos,
                                           calc_cos,calc_sin,
                                           z[att+'q_proj.weight'], z[att+'k_proj.weight'], z[att+'v_proj.weight'], z[att+'o_proj.weight'],
                                                                         z.get(att+'q_proj.weight.qstate',dummytensor), z.get(att+'k_proj.weight.qstate',dummytensor), z.get(att+'v_proj.weight.qstate',dummytensor), z.get(att+'o_proj.weight.qstate',dummytensor),
                                                                         z.get(att+'q_proj.bias',dummytensor), z.get(att+'k_proj.bias',dummytensor), z.get(att+'v_proj.bias',dummytensor), dummytensor,
-                                                                        z[att+'ln_r.weight'],z[att+'ln_k.weight'],1e-6,
-                                                                        z[bbb+'ln1.weight'],z[bbb+'ln2.weight'],1000000,
+                                                                        z.get(att+'ln_r.weight',None),z.get(att+'ln_k.weight',None),self.rms_norm_eps,
+                                                                        z[bbb+'ln1.weight'],z[bbb+'ln2.weight'],self.rope_theta,
                                                                         self.ebits,self.mbits )
-
-                    #print(kv_cache)
-                                          
-                                          
-                                          
-                    #kv_cache[GQALayer_i]=kv
-                
 
 
                 xx,x = HRWKV_7.SwiGLU_MLP_forward_fpx_w_add(xx,z[ffn+'gate.weight'],z[ffn+'down.weight'],z[ffn+'up.weight'],
@@ -928,20 +917,9 @@ class HRWKV_7(nn.Module):
 
        
 
-            x = T5RMSNorm(x,z['ln_out.weight'],variance_epsilon=1e-6)
-            # if StrategyMode == 0:
-            #     x = hybrid_matmul(x , z['head.weight'])
-            # if StrategyMode == 3:
+            x = T5RMSNorm(x,z['ln_out.weight'],variance_epsilon=self.rms_norm_eps)
             x = fpx_matmul(x , z['head.weight'],z.get('head.weight.qstate',None),self.ebits,self.mbits)
             if not full_output: x = x[:, -1, :]  # 最後のタイムステップだけを選択し、バッチ次元を保持
-
-            #print(f'After = {cache_pos}')
-
             pos_cache += T
-            #print(f'T = {T}')
-            #print(f'after = {cache_pos}')
-
-            
-
             return x, None, last_wkv_states, kv_cache, pos_cache
 

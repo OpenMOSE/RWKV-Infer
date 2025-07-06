@@ -54,13 +54,17 @@ from rwkvengine.hrwkv7 import HRWKV_7
 
 class RWKV_x(nn.Module):
 
-    def __init__(self,load_model: str,base_precision: str = 'int8',adapter_model:str = '', adapter_mode:str = '', adapter_scale:float=2.0,fully_fusedrecurrent:bool=True, tokenizer=''):
+    def __init__(self,load_model: str,base_precision: str = 'int8',adapter_model:str = '', adapter_mode:str = '', adapter_scale:float=2.0,fully_fusedrecurrent:bool=True, tokenizer='',rope_theta=1000000.0,rms_norm_eps=1e-6,max_ctxlen=8192):
 
         #print('Helloworld RWKV v060 :) Initializing')
         print('RWKV-Infer RWKVCore Initializing')
+        self.max_ctxlen = max_ctxlen
 
         super().__init__()
         self.transfer_stream = torch.cuda.Stream()
+
+        self.rms_norm_eps = rms_norm_eps
+        self.rope_theta = rope_theta
 
         #GANBATTE CODE KAKOU
         self.bit8quant = False
