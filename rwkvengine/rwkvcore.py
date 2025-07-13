@@ -6,6 +6,7 @@
 
 from safetensors import safe_open
 from safetensors.torch import load_file
+import torch
 #Test Torchao
 
 try:
@@ -25,6 +26,157 @@ except ImportError:
     print('Bitsandbytes not found')
     HAS_BITSANDBYTES = False
     bnb = None
+try:
+    from hqq.core.quantize import BaseQuantizeConfig, HQQLinear
+    from gemlite.core import GemLiteLinearTriton, DType, TORCH_TO_DTYPE
+    HAS_HQQ = True
+except ImportError:
+    print('hqq not found')
+    HAS_HQQ = False
+    HQQLinear = None
+
+
+def create_hqq_module_from_weight(
+    weight: torch.Tensor,
+    bias: torch.Tensor = None,
+    nbits: int = 4,
+    group_size: int = 64,
+    compute_dtype: torch.dtype = torch.float16,
+    device: str = 'cuda',
+    initialize: bool = True
+) -> HQQLinear:
+    """
+    Linear Weightテンソルから直接HQQ Quant Moduleを作成する関数
+    
+    Args:
+        weight: Linear layerのweightテンソル (shape: [out_features, in_features])
+        bias: Linear layerのbiasテンソル (optional)
+        nbits: 量子化ビット数 (default: 4)
+        group_size: グループサイズ (default: 64)
+        compute_dtype: 計算時のデータ型 (default: torch.float16)
+        device: デバイス (default: 'cuda')
+        initialize: 初期化フラグ (default: True)
+    
+    Returns:
+        HQQLinear: 量子化されたLinear module
+    """
+    # Weightの形状から入出力の特徴量を取得
+    out_features, in_features = weight.shape
+    
+    # ダミーのLinear layerを作成
+    dummy_linear = torch.nn.Linear(in_features, out_features, bias=(bias is not None))
+    
+    # Weightとbiasをコピー
+    with torch.no_grad():
+        dummy_linear.weight.copy_(weight)
+        if bias is not None:
+            dummy_linear.bias.copy_(bias)
+    
+    # 量子化設定
+    quant_config = BaseQuantizeConfig(nbits=nbits, group_size=group_size)
+    
+    # HQQLinearを作成
+    hqq_layer = HQQLinear(
+        dummy_linear,
+        quant_config=quant_config,
+        compute_dtype=compute_dtype,
+        device=device,
+        initialize=initialize,
+        del_orig=False  # ダミーレイヤーは削除
+    )
+
+    
+    gemlite_dtype = TORCH_TO_DTYPE[compute_dtype]
+    gemlite_linear = GemLiteLinearTriton(nbits, 
+                                        group_size=group_size, 
+                                        in_features=in_features, 
+                                        out_features=out_features, 
+                                        input_dtype=gemlite_dtype, 
+                                        output_dtype=gemlite_dtype)
+
+    orig_shape   = (out_features, in_features)
+
+    W_q           = hqq_layer.unpack(dtype=torch.uint8).view(orig_shape)
+    scales        = hqq_layer.meta['scale']
+    zeros         = hqq_layer.meta['zero']
+    gemlite_linear.pack(W_q, scales, zeros, None)
+    
+    return gemlite_linear
+
+
+# 使用例1: weightのみの場合
+def example_usage_weight_only():
+    # サンプルのweight tensor
+    weight = torch.randn(512, 1024, dtype=torch.float32)
+    
+    # HQQ moduleを作成
+    hqq_module = create_hqq_module_from_weight(weight)
+    
+    # テスト入力
+    x = torch.randn(1, 1024, dtype=torch.float16).cuda()
+    output = hqq_module(x)
+    print(f"Output shape: {output.shape}")
+    
+    return hqq_module
+
+
+# 使用例2: weightとbiasがある場合
+def example_usage_with_bias():
+    # サンプルのweight/bias tensors
+    weight = torch.randn(512, 1024, dtype=torch.float32)
+    bias = torch.randn(512, dtype=torch.float32)
+    
+    # カスタム設定でHQQ moduleを作成
+    hqq_module = create_hqq_module_from_weight(
+        weight=weight,
+        bias=bias,
+        nbits=8,  # 8ビット量子化
+        group_size=128,  # より大きなグループサイズ
+        compute_dtype=torch.bfloat16  # bfloat16を使用
+    )
+    
+    return hqq_module
+
+
+# 使用例3: 既存のLinear layerからweightを抽出して使用
+def example_from_existing_linear():
+    # 既存のLinear layer
+    original_linear = torch.nn.Linear(1024, 512)
+    
+    # Weightを抽出
+    weight = original_linear.weight.data
+    bias = original_linear.bias.data if original_linear.bias is not None else None
+    
+    # HQQ moduleを作成
+    hqq_module = create_hqq_module_from_weight(weight, bias)
+    
+    # デクォンタイズして確認
+    W_r = hqq_module.dequantize()
+    print(f"Original weight shape: {weight.shape}")
+    print(f"Dequantized weight shape: {W_r.shape}")
+    
+    return hqq_module
+
+
+# より高度な使用例: バッチ処理
+def batch_quantize_weights(weights_dict: dict, **kwargs) -> dict:
+    """
+    複数のweightを一括で量子化
+    
+    Args:
+        weights_dict: {layer_name: weight_tensor} の辞書
+        **kwargs: create_hqq_module_from_weightに渡す追加引数
+    
+    Returns:
+        dict: {layer_name: hqq_module} の辞書
+    """
+    hqq_modules = {}
+    
+    for name, weight in weights_dict.items():
+        hqq_modules[name] = create_hqq_module_from_weight(weight, **kwargs)
+        print(f"Quantized layer: {name}, shape: {weight.shape}")
+    
+    return hqq_modules
 
 
 import torch
@@ -49,14 +201,16 @@ from rwkvengine.fla.ops.rwkv6.chunk import chunk_rwkv6,ChunkRWKV6Function
 from rwkvengine.fla.ops.rwkv6.fused_recurrent import fused_recurrent_rwkv6
 from rwkvengine.fla.ops.rwkv7 import chunk_rwkv7
 from rwkvengine.cuda.wkv7triton import rwkv7_attn_triton
-
+os.environ["NVIDIA_TF32_OVERRIDE"] = "0"
 torch.backends.cudnn.benchmark = True
-torch.backends.cudnn.benchmark = True
-torch.backends.cudnn.allow_tf32 = True
-torch.backends.cuda.matmul.allow_tf32 = True
-#torch.backends.cuda.matmul.allow_fp16_reduced_precision_reduction = True
-#torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction = True
-torch._C._jit_set_autocast_mode(False)
+torch.backends.cuda.matmul.allow_tf32 = False
+torch.backends.cudnn.allow_tf32 = False
+#torch.backends.cudnn.benchmark = True
+#torch.backends.cudnn.allow_tf32 = True
+#torch.backends.cuda.matmul.allow_tf32 = True
+torch.backends.cuda.matmul.allow_fp16_reduced_precision_reduction = True
+torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction = True
+#torch._C._jit_set_autocast_mode(False)
 
 
 MyStatic = torch.jit.script
@@ -148,6 +302,8 @@ class RWKV_x(nn.Module):
                 self.bit8quant = True
             elif base_precision == 'nf4':
                 self.base_precision = torch.bfloat16
+                if HAS_HQQ:
+                    self.base_precision = torch.float16
                 self.bit8quant = False
                 self.bit4quant = True
             elif base_precision == 'fp8':
@@ -776,8 +932,11 @@ class RWKV_x(nn.Module):
             # BNB 4bit
             elif self.bit4quant == True:
                 #emboncpu = False
+
                 self.ebits, self.mbits = -4, -4
-             
+                if HAS_HQQ:
+                    self.ebits, self.mbits = -44, -44
+
                 count = 0
                 for k in keys:
                     count = count + 1
@@ -805,14 +964,20 @@ class RWKV_x(nn.Module):
 
                     for QuantKey in QuantListBNB:
                         if k.endswith(QuantKey):
-                            print(f'Quant {k} to BNB NF4 shape = {z[k].shape}' )
+                            if HAS_HQQ:
+                                print(f'Quant {k} to HQQ 4bit shape = {z[k].shape}' )
+                            else:
+                                print(f'Quant {k} to BNB NF4 shape = {z[k].shape}' )
                             QuantKeyFound = True
                             z[k] = z[k].to(device='cuda',dtype=torch.bfloat16)
                             print(f'before size {z[k].shape}')
                             z[k] = pad_weight_tensor_to_256(z[k])
                             print(f'after size {z[k].shape}')
 
-                            z[k], z[k+'.qstate'] = bnb.functional.quantize_nf4((z[k]))
+                            if HAS_HQQ:
+                                z[k], z[k+'.qstate'] = create_hqq_module_from_weight((z[k])), None
+                            else:
+                                z[k], z[k+'.qstate'] = bnb.functional.quantize_nf4((z[k]))
 
 
                     if QuantKeyFound == False:
@@ -908,7 +1073,7 @@ class RWKV_x(nn.Module):
             keys = list(z.keys())
             for key in keys:
                 if z[key] is not None:
-                    print(f'{key} {z[key].shape} {z[key].dtype}')
+                    #print(f'{key} {z[key].shape} {z[key].dtype}')
                     if ('.bone' in key or '.lora' in key) and 'expert' not in key:
                         z[key] = None
                         print(f'{key} deleted')

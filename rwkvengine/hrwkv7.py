@@ -58,7 +58,7 @@ MyStatic = torch.jit.script
 def bnb_nf4_matmul(x,weight,weight_state):
     batch, T, hiddensize = x.shape
     if T == 1:
-        #x = x.view(batch,hiddensize)
+        x = x.view(batch,hiddensize)
         print(f'trying {x.shape}' )
         o = bnb.functional.gemv_4bit(A=x,
                                     B=weight,
@@ -67,7 +67,7 @@ def bnb_nf4_matmul(x,weight,weight_state):
                                    # transposed_B = True
                                     )
         print(o.shape)
-        #o = o.view(batch,T,-1)
+        o = o.view(batch,T,-1)
         return o
 
     else:
@@ -126,6 +126,14 @@ def fp8_matmul(x,weight,weight_state):
 def fpx_matmul(x,weight,weight_state,ebits:int=3,mbits:int=2):
     if ebits == -4 and mbits == -4:
         return bnb_nf4_matmul(x,weight,weight_state)
+    elif ebits == -44 and mbits == -44: #hqq
+        S0=x.shape[0]
+        S1=x.shape[1]
+        dtype = x.dtype
+        x = x.to(dtype=torch.float16).view(-1,x.shape[2])  
+        out = weight(x).view(S0,S1,-1).to(dtype=dtype)
+        return out
+
     elif weight.dtype == torch.uint8:
         S0=x.shape[0]
         S1=x.shape[1]
@@ -920,7 +928,7 @@ class HRWKV_7(nn.Module):
 
                 if self.HRWKV_Block_Mode[i][0] == 0:
                     time_mix_state = last_wkv_states[self.HRWKV_Block_Mode[i][2]]
-                    print('rwkv')
+                    #print('rwkv')
                     xx, time_mix_shift, time_mix_state, v_first,k_first, x = HRWKV_7.hxa079_TimeMix(self.HRWKV_Block_Mode[i][2], self.n_head, self.head_size, x, time_mix_shift, v_first,k_first, time_mix_state,cache_pos,
                                                                         calc_cos,calc_sin,
                                                                         # z[att+'x_r'], z[att+'x_w'], z[att+'x_k'], z[att+'x_v'], z[att+'x_a'], z[att+'x_g'],
@@ -936,7 +944,7 @@ class HRWKV_7(nn.Module):
                                                                         )
                     last_wkv_states[self.HRWKV_Block_Mode[i][2]] = time_mix_state
                 else:
-                    print('gqa')
+                    #print('gqa')
                     xx, x, kv_cache= HRWKV_7.GQA_Attention(i,self.HRWKV_Block_Mode[i][2],self.n_head,self.head_size,x,kv_cache,cache_pos,
                                           calc_cos,calc_sin,
                                           z[att+'q_proj.weight'], z[att+'k_proj.weight'], z[att+'v_proj.weight'], z[att+'o_proj.weight'],

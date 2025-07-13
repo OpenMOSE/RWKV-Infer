@@ -262,7 +262,7 @@ if __name__ == '__main__':
             for j in range(Target_batch):
                 out_tokens[j] += [otokens[j]]
                 try:
-                    print('(TRY)')
+                    #print('(TRY)')
                     tmp = pipeline.decode(out_tokens[j][out_last[j]:])
                     if ("\ufffd" not in tmp) and (not tmp.endswith("\n")):
                             #if j == Target_batch - 1:
