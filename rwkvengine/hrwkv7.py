@@ -8,6 +8,15 @@ import torch._dynamo
 torch._dynamo.config.cache_size_limit = 32  # 例えば32に拡張
 
 
+try:
+    import bitsandbytes as bnb
+    HAS_BITSANDBYTES = True
+except ImportError:
+    print('Bitsandbytes not found')
+    HAS_BITSANDBYTES = False
+    bnb = None
+
+
 import torch
 import torch.nn as nn
 from typing import Optional,List
@@ -43,6 +52,27 @@ torch._C._jit_set_autocast_mode(False)
 
 MyStatic = torch.jit.script
 
+
+
+@torch.compiler.disable
+def bnb_nf4_matmul(x,weight,weight_state):
+    batch, T, hiddensize = x.shape
+    if T == 1:
+        #x = x.view(batch,hiddensize)
+        print(f'trying {x.shape}' )
+        o = bnb.functional.gemv_4bit(A=x,
+                                    B=weight,
+                                    state=weight_state,
+                                    #transposed_A = True,
+                                   # transposed_B = True
+                                    )
+        print(o.shape)
+        #o = o.view(batch,T,-1)
+        return o
+
+    else:
+        w = bnb.functional.dequantize_nf4(weight,quant_state=weight_state).to(torch.bfloat16)
+        return x @ w.t()
 
 @torch.compile
 def fp8_matmul(x,weight,weight_state):
@@ -94,7 +124,9 @@ def fp8_matmul(x,weight,weight_state):
     
 @torch.compile
 def fpx_matmul(x,weight,weight_state,ebits:int=3,mbits:int=2):
-    if weight.dtype == torch.uint8:
+    if ebits == -4 and mbits == -4:
+        return bnb_nf4_matmul(x,weight,weight_state)
+    elif weight.dtype == torch.uint8:
         S0=x.shape[0]
         S1=x.shape[1]
         dtype = x.dtype
@@ -127,6 +159,7 @@ def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
     hidden_states = hidden_states[:, :, :, None, :]  # (B, T, H_kv, 1, D)
     hidden_states = hidden_states.expand(B, T, H_kv, n_rep, D)  # (B, T, H_kv, n_rep, D)
     return hidden_states.reshape(B, T, H_kv * n_rep, D).contiguous()
+@torch.compile
 def repeat_kv_original(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
     """
     This is the equivalent of torch.repeat_interleave(x, dim=1, repeats=n_rep). The hidden states go from (batch,
@@ -137,7 +170,7 @@ def repeat_kv_original(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
         return hidden_states
     hidden_states = hidden_states[:, :, None, :, :].expand(batch, num_key_value_heads, n_rep, slen, head_dim)
     return hidden_states.reshape(batch, num_key_value_heads * n_rep, slen, head_dim)
-#@torch.compile
+@torch.compile
 def T5RMSNorm(hidden_states,weight,variance_epsilon:float=1e-6):
     input_dtype = hidden_states.dtype
     hidden_states = hidden_states.to(torch.float32)
@@ -540,16 +573,19 @@ class HRWKV_7(nn.Module):
         x = T5RMSNorm(x_in,ln1,variance_epsilon=rmsnorm_epsilon)
 
         B, T, HN = x.shape
-        if K_.dtype == torch.int8:
-            kv_dim = K_.shape[1]
-        else:
-            kv_dim = K_.shape[0]
-        kv_repeat = HN // kv_dim
-        kv_per_head = kv_dim // N
+        # if K_.dtype == torch.int8:
+        #     kv_dim = K_.shape[1]
+        # else:
+        #     kv_dim = K_.shape[0]
+        
 
         r = fpx_matmul(x, R_, R_state, ebits, mbits).add_(R_bias)
         k = fpx_matmul(x, K_, K_state, ebits, mbits).add_(K_bias)
         v = fpx_matmul(x, V_, V_state, ebits, mbits).add_(V_bias)
+
+        kv_dim = k.shape[2] # B,T,kv_dim
+        kv_repeat = HN // kv_dim
+        kv_per_head = kv_dim // N
 
         if ln_r == None:
             r = r.view(B,T,H,N)
@@ -641,15 +677,28 @@ class HRWKV_7(nn.Module):
         x = T5RMSNorm(x_in, ln1, rmsnorm_epsilon)
 
         HN = H * N
-        kv_dim = K_.shape[0] if K_.dtype != torch.int8 else K_.shape[1]
+        #kv_dim = K_.shape[0] if K_.dtype != torch.int8 else K_.shape[1]
+        # kv_per_head = kv_dim // N
+        # kv_repeat = HN // kv_dim
+        # kv_cache_size = past_key_value.shape[2]
+
+        # Projections
+        q = fpx_matmul(x, Q_, Q_state, ebits, mbits).add_(Q_bias).view(B, T, H, N)
+        k = fpx_matmul(x, K_, K_state, ebits, mbits).add_(K_bias)
+        v = fpx_matmul(x, V_, V_state, ebits, mbits).add_(V_bias)
+
+        kv_dim = k.shape[2] # B,T,kv_dim
         kv_per_head = kv_dim // N
         kv_repeat = HN // kv_dim
         kv_cache_size = past_key_value.shape[2]
 
-        # Projections
-        q = fpx_matmul(x, Q_, Q_state, ebits, mbits).add_(Q_bias).view(B, T, H, N)
-        k = fpx_matmul(x, K_, K_state, ebits, mbits).add_(K_bias).view(B, T, kv_per_head, N)
-        v = fpx_matmul(x, V_, V_state, ebits, mbits).add_(V_bias).view(B, T, kv_per_head, N)
+        #print(F'GQA VIEW KV')
+
+        k = k.view(B, T, kv_per_head, N)
+        v = v.view(B, T, kv_per_head, N)
+
+        #print(F'GQA VIEW end')
+
 
         if ln_r is not None:
             q = T5RMSNorm(q, ln_r, rmsnorm_epsilon)
@@ -871,6 +920,7 @@ class HRWKV_7(nn.Module):
 
                 if self.HRWKV_Block_Mode[i][0] == 0:
                     time_mix_state = last_wkv_states[self.HRWKV_Block_Mode[i][2]]
+                    print('rwkv')
                     xx, time_mix_shift, time_mix_state, v_first,k_first, x = HRWKV_7.hxa079_TimeMix(self.HRWKV_Block_Mode[i][2], self.n_head, self.head_size, x, time_mix_shift, v_first,k_first, time_mix_state,cache_pos,
                                                                         calc_cos,calc_sin,
                                                                         # z[att+'x_r'], z[att+'x_w'], z[att+'x_k'], z[att+'x_v'], z[att+'x_a'], z[att+'x_g'],
@@ -886,7 +936,7 @@ class HRWKV_7(nn.Module):
                                                                         )
                     last_wkv_states[self.HRWKV_Block_Mode[i][2]] = time_mix_state
                 else:
-
+                    print('gqa')
                     xx, x, kv_cache= HRWKV_7.GQA_Attention(i,self.HRWKV_Block_Mode[i][2],self.n_head,self.head_size,x,kv_cache,cache_pos,
                                           calc_cos,calc_sin,
                                           z[att+'q_proj.weight'], z[att+'k_proj.weight'], z[att+'v_proj.weight'], z[att+'o_proj.weight'],

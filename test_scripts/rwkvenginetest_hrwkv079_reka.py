@@ -23,7 +23,7 @@ if __name__ == '__main__':
     pipeline = PIPELINE("rekaflash3")
 
 
-    model = RWKV_x('/home/client/Projects/llm/hxa079-reka-flash3-stage2-hybrid.pth','int8',
+    model = RWKV_x('/home/client/Projects/llm/hxa079-reka-flash3-stage2-hybrid-final.pth','nf4',
                    adapter_model='',
                    adapter_mode='',
                    fully_fusedrecurrent=args.fully_fused,
@@ -56,8 +56,8 @@ if __name__ == '__main__':
 
         #context = context + "<reasoning>\n\n</reasoning>\n"
 
-        States = model.new_state(Target_batch,16384)#state_empty(32, 1, 2560, 2560 // 32)
-        States2 = model.new_state(Target_batch,16384)#state_empty(32, 1, 2560, 2560 // 32)
+        States = model.new_state(Target_batch,8192)#state_empty(32, 1, 2560, 2560 // 32)
+        States2 = model.new_state(Target_batch,8192)#state_empty(32, 1, 2560, 2560 // 32)
 
         
 
