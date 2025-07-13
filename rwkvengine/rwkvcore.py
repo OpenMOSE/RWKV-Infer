@@ -48,9 +48,42 @@ from rwkvengine.rwkv6 import RWKV_6, fused_recurrent_rwkv6_torch
 from rwkvengine.rwkv7 import RWKV_7
 from rwkvengine.arwkv7 import ARWKV_7
 from rwkvengine.prwkv7 import PRWKV_7
-from rwkvengine.hrwkv7 import HRWKV_7
+from rwkvengine.hrwkv7 import HRWKV_7, compute_qwen3_rope_cache
 
-
+def pad_weight_tensor_to_256(weight_tensor):
+    """重みテンソルを256の倍数にゼロパディング"""
+    # 現在のサイズを取得
+    original_shape = weight_tensor.shape
+    
+    # 各次元を256の倍数に切り上げ
+    padded_shape = []
+    for dim in original_shape:
+        padded_dim = ((dim + 255) // 256) * 256
+        padded_shape.append(padded_dim)
+    
+    # すでに256の倍数の場合はそのまま返す
+    if list(original_shape) == padded_shape:
+        return weight_tensor
+    
+    # 新しいゼロテンソルを作成
+    padded_tensor = torch.zeros(
+        padded_shape,
+        dtype=weight_tensor.dtype,
+        device=weight_tensor.device,
+        requires_grad=weight_tensor.requires_grad
+    )
+    
+    # 元のデータをコピー
+    if len(original_shape) == 2:  # Linear層の重み
+        padded_tensor[:original_shape[0], :original_shape[1]] = weight_tensor
+    elif len(original_shape) == 4:  # Conv2d層の重み
+        padded_tensor[:original_shape[0], :original_shape[1], 
+                     :original_shape[2], :original_shape[3]] = weight_tensor
+    else:  # その他の次元
+        slices = tuple(slice(0, dim) for dim in original_shape)
+        padded_tensor[slices] = weight_tensor
+    
+    return padded_tensor
 
 class RWKV_x(nn.Module):
 
@@ -600,6 +633,9 @@ class RWKV_x(nn.Module):
                                 z[k], z[k+'.qstate'] = bf16_to_fp8(z[k])
                             else:
                                 print(f'Quant {k} to torch.int8 OpenMOSE SillyMatmul')
+                                print(f'before size {z[k].shape}')
+                                z[k] = pad_weight_tensor_to_256(z[k])
+                                print(f'after size {z[k].shape}')
                                 z[k], z[k+'.qstate'] = quantize_weight(z[k].to(device='cuda',dtype = torch.float16).t()) # quant to int8
               
                         
@@ -678,6 +714,9 @@ class RWKV_x(nn.Module):
                                 print(f'Quant {k} to FP6 shape = {z[k].shape}' )
                             QuantKeyFound = True
                             z[k] = z[k].to(device='cuda',dtype=torch.float16)#.t() 
+                            print(f'before size {z[k].shape}')
+                            z[k] = pad_weight_tensor_to_256(z[k])
+                            print(f'after size {z[k].shape}')
 
                             # pre-process the weight. this will quantize the weight to FP6 and pack it in a special
                             # layout for tensor cores. refer to paper for more details.
@@ -803,6 +842,9 @@ class RWKV_x(nn.Module):
         
             gc.collect()
             torch.cuda.empty_cache()
+
+            if self.HRWKV_Generation == 79:
+                self.cos, self.sin, _ = compute_qwen3_rope_cache(self.max_ctxlen,self.head_size,self.device,torch.float32,self.rope_theta)
 
 
     def new_state(self, B, max_token=4096):

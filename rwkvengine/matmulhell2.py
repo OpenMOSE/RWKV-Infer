@@ -58,7 +58,7 @@ def fused_dequant_vecmat_dot_kernel(
 def fused_dequant_gemm(A: torch.Tensor,
                        W_int8: torch.Tensor,
                        scale: torch.Tensor,
-                       BLOCK_N=16, BLOCK_K=512):
+                       BLOCK_N=16, BLOCK_K=32):
     """
     A:      (B, 1, K) float16
     W_int8: (K, N)     int8
@@ -79,7 +79,7 @@ def fused_dequant_gemm(A: torch.Tensor,
         A2.stride(0), A2.stride(1),
         W_int8.stride(0), W_int8.stride(1),
         scale.stride(0),
-        C_out.stride(0), C_out.stride(1),BLOCK_M=64,
+        C_out.stride(0), C_out.stride(1),BLOCK_M=16,
         BLOCK_N=BLOCK_N, BLOCK_K=BLOCK_K
     )
     return C_out.unsqueeze(1)

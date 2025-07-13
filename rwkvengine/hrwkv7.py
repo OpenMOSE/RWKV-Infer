@@ -825,7 +825,7 @@ class HRWKV_7(nn.Module):
             return x, None, last_wkv_states, kv_cache, pos_cache
 
 
-
+    @torch.compile
     def hxa079r_forward(self, idx, 
                 last_wkv_states: List[torch.Tensor], kv_cache,pos_cache,  full_output:bool=False):
         
@@ -847,13 +847,9 @@ class HRWKV_7(nn.Module):
 
             B, T, C = x.shape
 
-            cos,sin,_ = compute_qwen3_rope_cache(self.max_ctxlen,self.head_size,self.device,torch.float32,self.rope_theta)
+            #cos,sin,_ = compute_qwen3_rope_cache(self.max_ctxlen,self.head_size,self.device,torch.float32,self.rope_theta)
 
-            calc_cos, calc_sin = get_batch_rope_cache(cos, sin, cache_pos, T)
-
-            StrategyMode = 0 # 0 is Fully BF16 or FP16 or FP8
-            if self.bitfp6quant == True or self.bitfp8quant == True or self.bit8quant:
-                StrategyMode = 3
+            calc_cos, calc_sin = get_batch_rope_cache(self.cos, self.sin, cache_pos, T)
 
             dummytensor = self.dummytensor
 
