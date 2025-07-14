@@ -201,7 +201,7 @@ from rwkvengine.fla.ops.rwkv6.chunk import chunk_rwkv6,ChunkRWKV6Function
 from rwkvengine.fla.ops.rwkv6.fused_recurrent import fused_recurrent_rwkv6
 from rwkvengine.fla.ops.rwkv7 import chunk_rwkv7
 from rwkvengine.cuda.wkv7triton import rwkv7_attn_triton
-os.environ["NVIDIA_TF32_OVERRIDE"] = "0"
+#os.environ["NVIDIA_TF32_OVERRIDE"] = "0"
 torch.backends.cudnn.benchmark = True
 torch.backends.cuda.matmul.allow_tf32 = False
 torch.backends.cudnn.allow_tf32 = False

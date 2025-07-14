@@ -23,7 +23,7 @@ if __name__ == '__main__':
     pipeline = PIPELINE("rekaflash3")
 
 
-    model = RWKV_x('/home/client/Projects/llm/hxa079-reka-flash3-stage2-hybrid-final.pth','nf4',
+    model = RWKV_x('/home/client/Projects/llm/hxa079-reka-flash3-stage2-hybrid-final.pth','int8',
                    adapter_model='',
                    adapter_mode='',
                    fully_fusedrecurrent=args.fully_fused,

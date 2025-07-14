@@ -183,7 +183,7 @@ class TextProcessor:
         #    return "text/markdown"
 
 class LLMWorker:
-    def __init__(self,max_batch_size = 32,max_ctxlen=32768):
+    def __init__(self,max_batch_size = 32,max_ctxlen=16384):
         print('Initializing LLM Worker')
         
         self.llm_batch_chunk = 1024 #FLA Preprocess Prompt chunks
@@ -235,7 +235,7 @@ class LLMWorker:
 
         
 
-    def LoadModel(self,modelpath,quantize=False,precision='bf16',adapter_model = '',adapter_mode = '',adapter_scale=2.0, fully_fusedrecurrent = True,template_mode='',rope_theta=1000000.0,rms_norm_eps=1e-6,max_ctxlen=32768):
+    def LoadModel(self,modelpath,quantize=False,precision='bf16',adapter_model = '',adapter_mode = '',adapter_scale=2.0, fully_fusedrecurrent = True,template_mode='',rope_theta=1000000.0,rms_norm_eps=1e-6,max_ctxlen=16384):
         self.model = None
         gc.collect()
         torch.cuda.empty_cache()
