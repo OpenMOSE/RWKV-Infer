@@ -6,7 +6,7 @@ import os
 os.environ["FLASH_ATTENTION_TRITON_AMD_ENABLE"] = "True"
 os.environ["FLASH_ATTENTION_TRITON_AMD_AUTOTUNE"] = "True"
 
-from flash_attn import flash_attn_varlen_func, flash_attn_func
+#from flash_attn import flash_attn_varlen_func, flash_attn_func
 
 from torch.nn.attention import SDPBackend, sdpa_kernel
 
@@ -55,7 +55,7 @@ torch.backends.cudnn.allow_tf32 = True
 torch.backends.cuda.matmul.allow_tf32 = True
 # torch.backends.cuda.matmul.allow_fp16_reduced_precision_reduction = True
 # torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction = True
-torch._C._jit_set_autocast_mode(False)
+torch._C._jit_set_autocast_mode(True)
 
 
 MyStatic = torch.jit.script
@@ -65,16 +65,16 @@ MyStatic = torch.jit.script
 @torch.compiler.disable
 def bnb_nf4_matmul(x,weight,weight_state):
     batch, T, hiddensize = x.shape
-    if T == 1:
+    if T == 1 and batch == 1:
         x = x.view(batch,hiddensize)
-        print(f'trying {x.shape}' )
+        #print(f'trying {x.shape}' )
         o = bnb.functional.gemv_4bit(A=x,
                                     B=weight,
                                     state=weight_state,
                                     #transposed_A = True,
                                    # transposed_B = True
                                     )
-        print(o.shape)
+        #print(o.shape)
         o = o.view(batch,T,-1)
         return o
 
@@ -130,7 +130,7 @@ def fp8_matmul(x,weight,weight_state):
         )
         return x.view(S0, S1, -1)
     
-@torch.compile
+@torch.compile()
 def fpx_matmul(x,weight,weight_state,ebits:int=3,mbits:int=2):
     if ebits == -4 and mbits == -4:
         return bnb_nf4_matmul(x,weight,weight_state)
@@ -161,7 +161,7 @@ def fpx_matmul(x,weight,weight_state,ebits:int=3,mbits:int=2):
             #return x @ weight.to(device=x.device).t()
         else:
             return x @ weight.t()
-#@torch.compile
+@torch.compile
 def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
     """
     Repeat KV heads along the head dimension (GQA).
@@ -175,7 +175,7 @@ def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
     hidden_states = hidden_states[:, :, :, None, :]  # (B, T, H_kv, 1, D)
     hidden_states = hidden_states.expand(B, T, H_kv, n_rep, D)  # (B, T, H_kv, n_rep, D)
     return hidden_states.reshape(B, T, H_kv * n_rep, D).contiguous()
-#@torch.compile
+@torch.compile
 def repeat_kv_original(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
     """
     This is the equivalent of torch.repeat_interleave(x, dim=1, repeats=n_rep). The hidden states go from (batch,
@@ -186,7 +186,7 @@ def repeat_kv_original(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
         return hidden_states
     hidden_states = hidden_states[:, :, None, :, :].expand(batch, num_key_value_heads, n_rep, slen, head_dim)
     return hidden_states.reshape(batch, num_key_value_heads * n_rep, slen, head_dim)
-#@torch.compile
+@torch.compile
 def T5RMSNorm(hidden_states,weight,variance_epsilon:float=1e-6):
     input_dtype = hidden_states.dtype
     hidden_states = hidden_states.to(torch.float32)
@@ -486,11 +486,20 @@ class HRWKV_7(nn.Module):
     def hxa079_TimeMix(layer_id: int, H: int, N: int,
                         x_in, x_prev, v_first,k_first,state,cache_position,
                         calc_cos,calc_sin,
-                        w0, w1, w2, a0, a1, a2,
-                        v0, v1, v2, g1, g2,
-                        k0, k1, k2,
-                        r_k, R_, K_, V_, O_,
-                        R_state,K_state,V_state,O_state,
+                        # w0, w1, w2, a0, a1, a2,
+                        # v0, v1, v2, g1, g2,
+                        # k0, k1, k2,
+                        wavgk1,wavgk_split_list,
+                        w0, w2, a0, a2,
+                        v0, v2, g2,
+                        k0, k2,
+                        r_k, 
+                        #R_, K_, V_,
+                        RKV_,rkv_split_list,
+                        O_,
+                        #R_state,K_state,V_state,
+                        RKV_state,
+                        O_state,
                         R_bias, K_bias, V_bias, O_bias,
                         ln_r,ln_k,rmsnorm_epsilon:float,
                         ln1,ln2,rope_theta,
@@ -503,9 +512,19 @@ class HRWKV_7(nn.Module):
 
         
 
-        r = fpx_matmul(x, R_, R_state, ebits, mbits).add_(R_bias)
-        k = fpx_matmul(x, K_, K_state, ebits, mbits).add_(K_bias)
-        v = fpx_matmul(x, V_, V_state, ebits, mbits).add_(V_bias)
+        # r = fpx_matmul(x, R_, R_state, ebits, mbits).add_(R_bias)
+        # k = fpx_matmul(x, K_, K_state, ebits, mbits).add_(K_bias)
+        # v = fpx_matmul(x, V_, V_state, ebits, mbits).add_(V_bias)
+
+        rkv = fpx_matmul(x, RKV_,RKV_state, ebits, mbits)
+        r,k,v = rkv.split(rkv_split_list,dim=-1)
+
+        xw,xa,xv,xg,xk = (x @ wavgk1).split(wavgk_split_list, dim=-1)
+
+
+        r = r.add_(R_bias)
+        k = k.add_(K_bias)
+        v = v.add_(V_bias)
 
         kv_dim = k.shape[2] # B,T,kv_dim
         kv_repeat = HN // kv_dim
@@ -531,18 +550,18 @@ class HRWKV_7(nn.Module):
             v_first = v
             k_first = k 
         else:
-            tmp = x @ v1
-            tmp = F.linear(tmp, v2.t(), v0)
+            #tmp = x @ v1
+            tmp = F.linear(xv, v2.t(), v0)
             gate = torch.sigmoid(tmp).view(B, T, kv_per_head, N)
             v = v + (v_first - v) * gate
 
-            tmp2 = x @ k1
-            tmp2 = F.linear(tmp2, k2.t(), k0)
+            #tmp2 = x @ k1
+            tmp2 = F.linear(xk, k2.t(), k0)
             gate2 = torch.sigmoid(tmp2).view(B, T, kv_per_head, N)
             k = k + (k_first - k) * gate2
 
-        tmp = x @ w1             # → [B, T, H2]
-        tmp = torch.tanh(tmp)
+        #tmp = x @ w1             # → [B, T, H2]
+        tmp = torch.tanh(xw)
         w = F.linear(tmp, w2.t(), w0)  # → [B, T, O]
         w = -F.softplus(-w) - 0.5
 
@@ -554,10 +573,10 @@ class HRWKV_7(nn.Module):
         k = k.view(B, T, -1)
         v = v.view(B, T, -1)
 
-        tmp = x @ a1
-        tmp = F.linear(tmp, a2.t(), a0)
+        #tmp = x @ a1
+        tmp = F.linear(xa, a2.t(), a0)
         a = torch.sigmoid(tmp)
-        g = torch.sigmoid(x @ g1) @ g2
+        g = torch.sigmoid(xg) @ g2
 
         kk = F.normalize(k.view(B, T, H, N), p=2.0, dim=-1).view(B, T, H*N)
         k = k * (1.0 - w + a)
@@ -678,12 +697,16 @@ class HRWKV_7(nn.Module):
     #     x_out = x_in + out
 
     #     return T5RMSNorm(x_out, ln2, rmsnorm_epsilon), x_out, past_key_value
-    @torch.compile
+    #@torch.compile
     def GQA_Attention(layer_id: int, gqa_layer_id: int, H: int, N: int,
               x_in, past_key_value, cache_position,
               calc_cos, calc_sin,
-              Q_, K_, V_, O_,
-              Q_state, K_state, V_state, O_state,
+              #Q_, K_, V_,
+              QKV_,qkv_split_list,
+              O_,
+              #Q_state, K_state, V_state,
+              QKV_state,
+              O_state,
               Q_bias, K_bias, V_bias, O_bias,
               ln_r, ln_k, rmsnorm_epsilon: float,
               ln1, ln2, rope_theta,
@@ -695,9 +718,17 @@ class HRWKV_7(nn.Module):
         HN = H * N
 
         # Projections
-        q = fpx_matmul(x, Q_, Q_state, ebits, mbits).add_(Q_bias).view(B, T, H, N)
-        k = fpx_matmul(x, K_, K_state, ebits, mbits).add_(K_bias)
-        v = fpx_matmul(x, V_, V_state, ebits, mbits).add_(V_bias)
+        # q = fpx_matmul(x, Q_, Q_state, ebits, mbits).add_(Q_bias).view(B, T, H, N)
+        # k = fpx_matmul(x, K_, K_state, ebits, mbits).add_(K_bias)
+        # v = fpx_matmul(x, V_, V_state, ebits, mbits).add_(V_bias)
+        qkv = fpx_matmul(x, QKV_,QKV_state, ebits, mbits)
+        q,k,v = qkv.split(qkv_split_list,dim=-1)
+
+        print(f'q = {q.shape} k = {k.shape} v = {v.shape}')
+
+        q = q.add_(Q_bias).view(B, T, H, N)
+        k = k.add_(K_bias)
+        v = v.add_(V_bias)
 
         kv_dim = k.shape[2]  # B,T,kv_dim
         kv_per_head = kv_dim // N
@@ -803,12 +834,16 @@ class HRWKV_7(nn.Module):
         x_out = x_in + out
 
         return T5RMSNorm(x_out, ln2, rmsnorm_epsilon), x_out, past_key_value
-    @torch.compile(mode="reduce-overhead")
+    @torch.compile
     def GQA_Attention_Nested(layer_id: int, gqa_layer_id: int, H: int, N: int,
                         x_in, past_key_value, cache_position,
                         calc_cos, calc_sin,
-                        Q_, K_, V_, O_,
-                        Q_state, K_state, V_state, O_state,
+                        #Q_, K_, V_,
+                        QKV_,qkv_split_list,
+                        O_,
+                        #Q_state, K_state, V_state, 
+                        QKV_state,
+                        O_state,
                         Q_bias, K_bias, V_bias, O_bias,
                         ln_r, ln_k, rmsnorm_epsilon: float,
                         ln1, ln2, rope_theta,
@@ -820,9 +855,17 @@ class HRWKV_7(nn.Module):
         HN = H * N
 
         # Projections
-        q = fpx_matmul(x, Q_, Q_state, ebits, mbits).add_(Q_bias).view(B, T, H, N)
-        k = fpx_matmul(x, K_, K_state, ebits, mbits).add_(K_bias)
-        v = fpx_matmul(x, V_, V_state, ebits, mbits).add_(V_bias)
+        # q = fpx_matmul(x, Q_, Q_state, ebits, mbits).add_(Q_bias).view(B, T, H, N)
+        # k = fpx_matmul(x, K_, K_state, ebits, mbits).add_(K_bias)
+        # v = fpx_matmul(x, V_, V_state, ebits, mbits).add_(V_bias)
+        qkv = fpx_matmul(x, QKV_,QKV_state, ebits, mbits)
+        q,k,v = qkv.split(qkv_split_list,dim=-1)
+
+        #print(f'q = {q.shape} k = {k.shape} v = {v.shape}')
+
+        q = q.add_(Q_bias).view(B, T, H, N)
+        k = k.add_(K_bias)
+        v = v.add_(V_bias)
 
         kv_dim = k.shape[2]  # B,T,kv_dim
         kv_per_head = kv_dim // N
@@ -841,6 +884,7 @@ class HRWKV_7(nn.Module):
 
         # === Optimized KV Cache Write (same as before) ===
         cache_shape = past_key_value.shape
+        #print(f'cache shape = {cache_shape}')
         is_new_layout = (cache_shape[2] == 2) and (cache_shape[3] != 2)
         
         k_write = k.view(B, T, -1)
@@ -934,7 +978,7 @@ class HRWKV_7(nn.Module):
             ], dim=0)  # (B, T, H, N)
             
         except (AttributeError, RuntimeError):
-            print('fallback :(')
+            #print('fallback :(')
             # Fallback: Use regular tensors with manual padding
             # This handles cases where nested tensors aren't fully supported
             max_len = max(valid_lengths).int()
@@ -976,403 +1020,43 @@ class HRWKV_7(nn.Module):
 
         return T5RMSNorm(x_out, ln2, rmsnorm_epsilon), x_out, past_key_value
 
-    from flash_attn import flash_attn_varlen_func, flash_attn_func
+    #from flash_attn import flash_attn_varlen_func, flash_attn_func
     import torch
     import torch.nn.functional as F
 
-    # def GQA_Attention_FlashAttn2_old(layer_id: int, gqa_layer_id: int, H: int, N: int,
-    #             x_in, past_key_value, cache_position,
-    #             calc_cos, calc_sin,
-    #             Q_, K_, V_, O_,
-    #             Q_state, K_state, V_state, O_state,
-    #             Q_bias, K_bias, V_bias, O_bias,
-    #             ln_r, ln_k, rmsnorm_epsilon: float,
-    #             ln1, ln2, rope_theta,
-    #             ebits: int, mbits: int):
-
-    #         B, T, C = x_in.size()
-    #         x = T5RMSNorm(x_in, ln1, rmsnorm_epsilon)
-
-    #         HN = H * N
-
-    #         # Projections
-    #         q = fpx_matmul(x, Q_, Q_state, ebits, mbits).add_(Q_bias).view(B, T, H, N)
-    #         k = fpx_matmul(x, K_, K_state, ebits, mbits).add_(K_bias)
-    #         v = fpx_matmul(x, V_, V_state, ebits, mbits).add_(V_bias)
-
-    #         kv_dim = k.shape[2]  # B,T,kv_dim
-    #         kv_per_head = kv_dim // N
-    #         kv_repeat = HN // kv_dim
-
-    #         k = k.view(B, T, kv_per_head, N)
-    #         v = v.view(B, T, kv_per_head, N)
-
-    #         if ln_r is not None:
-    #             q = T5RMSNorm(q, ln_r, rmsnorm_epsilon)
-    #             k = T5RMSNorm(k, ln_k, rmsnorm_epsilon)
-
-    #         # Rotary embedding (if needed)
-    #         cos, sin = calc_cos.to(k.dtype), calc_sin.to(k.dtype)
-    #         # q, k = apply_rotary_pos_emb(q, k, cos, sin, unsqueeze_dim=2)
-
-    #         # === Optimized KV Cache Write ===
-    #         cache_shape = past_key_value.shape
-    #         is_new_layout = (cache_shape[2] == 2) and (cache_shape[3] != 2)
-            
-    #         k_write = k.view(B, T, -1)
-    #         v_write = v.view(B, T, -1)
-    #         starts = cache_position[:, 0]
-            
-    #         if is_new_layout:
-    #             # New optimized layout: [layer, B, 2, seq, dim]
-    #             if B == 1 or (starts == starts[0]).all():
-    #                 start = starts[0].int()
-    #                 end = start + T
-    #                 past_key_value[gqa_layer_id, :, 0, start:end] = k_write
-    #                 past_key_value[gqa_layer_id, :, 1, start:end] = v_write
-    #             else:
-    #                 batch_idx = torch.arange(B, device=k.device)[:, None]
-    #                 seq_idx = starts[:, None] + torch.arange(T, device=k.device)
-    #                 past_key_value[gqa_layer_id, batch_idx, 0, seq_idx] = k_write
-    #                 past_key_value[gqa_layer_id, batch_idx, 1, seq_idx] = v_write
-                    
-    #             max_seq_len = cache_position.max().int()
-    #             if max_seq_len == 0:
-    #                 # Empty cache - create zero tensors
-    #                 k_cache = torch.zeros(B, 0, kv_dim, dtype=k.dtype, device=k.device)
-    #                 v_cache = torch.zeros(B, 0, kv_dim, dtype=v.dtype, device=v.device)
-    #             else:
-    #                 k_cache = past_key_value[gqa_layer_id, :, 0, :max_seq_len]
-    #                 v_cache = past_key_value[gqa_layer_id, :, 1, :max_seq_len]
-                
-    #         else:
-    #             # Old layout: [layer, B, seq, 2, dim]
-    #             if B == 1 or (starts == starts[0]).all():
-    #                 start = starts[0].int()
-    #                 end = start + T
-    #                 past_key_value[gqa_layer_id, :, start:end, 0] = k_write
-    #                 past_key_value[gqa_layer_id, :, start:end, 1] = v_write
-    #             else:
-    #                 for b in range(B):
-    #                     start = cache_position[b, 0].int()
-    #                     end = start + T
-    #                     past_key_value[gqa_layer_id, b, start:end, 0] = k_write[b]
-    #                     past_key_value[gqa_layer_id, b, start:end, 1] = v_write[b]
-                        
-    #             # Read with old layout
-    #             max_seq_len = cache_position.max().int()
-    #             if max_seq_len == 0:
-    #                 # Empty cache - create zero tensors
-    #                 k_cache = torch.zeros(B, 0, kv_dim, dtype=k.dtype, device=k.device)
-    #                 v_cache = torch.zeros(B, 0, kv_dim, dtype=v.dtype, device=v.device)
-    #             else:
-    #                 k_cache = past_key_value[gqa_layer_id, :, :max_seq_len, 0]
-    #                 v_cache = past_key_value[gqa_layer_id, :, :max_seq_len, 1]
-
-    #         # === Reshape for Flash Attention ===
-    #         # Flash Attention expects (B, S, H, D) format
-    #         q_flash = q  # Already in correct format (B, T, H, N)
-            
-    #         # For k and v, reshape from cache format to Flash Attention format
-    #         kv_heads = kv_dim // N
-    #         S = k_cache.shape[1]  # Sequence length in cache
-            
-    #         if S == 0:  # Empty cache
-    #             # Create empty tensors with correct shape for Flash Attention
-    #             k_flash = torch.zeros(B, 0, kv_heads, N, dtype=k.dtype, device=k.device)
-    #             v_flash = torch.zeros(B, 0, kv_heads, N, dtype=v.dtype, device=v.device)
-    #         else:
-    #             # Reshape cache to (B, S, kv_heads, N)
-    #             k_flash = k_cache.view(B, S, kv_heads, N)
-    #             v_flash = v_cache.view(B, S, kv_heads, N)
-
-    #         # === Flash Attention 2 Call ===
-    #         # Create cu_seqlens for variable length attention if needed
-    #         if B == 1 or (starts == starts[0]).all():
-    #             # All sequences have same starting position, use regular flash_attn
-    #             valid_len = cache_position[0, 0].int() + T
-                
-    #             # Handle edge case where cache is empty or very small
-    #             if valid_len == 0 or S == 0:
-    #                 # Return zeros if no valid KV cache
-    #                 attn_output = torch.zeros(B, T, H, N, dtype=q_flash.dtype, device=q_flash.device)
-    #             else:
-    #                 # Ensure we don't exceed available cache size
-    #                 valid_len = min(valid_len, S)
-                    
-    #                 # Flash Attention with causal mask
-    #                 # Note: For AMD GPUs, window_size might not be supported
-    #                 try:
-    #                     attn_output = flash_attn_func(
-    #                         q_flash,                    # (B, T, H, D)
-    #                         k_flash[:, :valid_len],     # (B, valid_len, kv_heads, D)
-    #                         v_flash[:, :valid_len],     # (B, valid_len, kv_heads, D)
-    #                         causal=False,               # We handle masking manually
-    #                         window_size=(-1, 0) if valid_len > T else (-1, -1),  # Left-side attention window
-    #                     )
-    #                 except TypeError:
-    #                     # Fallback for implementations that don't support window_size
-    #                     attn_output = flash_attn_func(
-    #                         q_flash,                    # (B, T, H, D)
-    #                         k_flash[:, :valid_len],     # (B, valid_len, kv_heads, D)
-    #                         v_flash[:, :valid_len],     # (B, valid_len, kv_heads, D)
-    #                         causal=False,               # We handle masking manually
-    #                     )
-    #         else:
-    #             # Variable length sequences - use varlen version
-    #             # Compute cumulative sequence lengths
-    #             cu_seqlens_q = torch.arange(0, (B+1)*T, T, dtype=torch.int32, device=q.device)
-                
-    #             # For KV, we need to account for different cache positions
-    #             seqlens_k = cache_position[:, 0] + T
-                
-    #             # Check if any sequence has zero length
-    #             if (seqlens_k <= 0).any() or S == 0:
-    #                 # Return zeros if any sequence has no valid KV cache
-    #                 attn_output = torch.zeros(B, T, H, N, dtype=q_flash.dtype, device=q_flash.device)
-    #             else:
-    #                 # Ensure seqlens don't exceed cache size
-    #                 seqlens_k = torch.minimum(seqlens_k, torch.tensor(S, device=seqlens_k.device))
-                    
-    #                 cu_seqlens_k = torch.zeros(B+1, dtype=torch.int32, device=k.device)
-    #                 cu_seqlens_k[1:] = torch.cumsum(seqlens_k, dim=0)
-                    
-    #                 # Flatten tensors for varlen function
-    #                 q_flat = q_flash.view(-1, H, N)  # (B*T, H, D)
-                    
-    #                 # Gather only valid KV entries
-    #                 k_flat_list = []
-    #                 v_flat_list = []
-    #                 for b in range(B):
-    #                     valid_len = seqlens_k[b].int()
-    #                     if valid_len > 0:  # Only append if there's valid data
-    #                         k_flat_list.append(k_flash[b, :valid_len])
-    #                         v_flat_list.append(v_flash[b, :valid_len])
-                    
-    #                 if len(k_flat_list) == 0:
-    #                     # No valid KV data
-    #                     attn_output = torch.zeros(B, T, H, N, dtype=q_flash.dtype, device=q_flash.device)
-    #                 else:
-    #                     k_flat = torch.cat(k_flat_list, dim=0)  # (sum(seqlens_k), kv_heads, D)
-    #                     v_flat = torch.cat(v_flat_list, dim=0)  # (sum(seqlens_k), kv_heads, D)
-                        
-    #                     # Call varlen flash attention
-    #                     try:
-    #                         attn_output_flat = flash_attn_varlen_func(
-    #                             q_flat,
-    #                             k_flat,
-    #                             v_flat,
-    #                             cu_seqlens_q,
-    #                             cu_seqlens_k,
-    #                             T,  # max_seqlen_q
-    #                             seqlens_k.max().int(),  # max_seqlen_k
-    #                             causal=False,
-    #                             window_size=(-1, 0),  # Attend to all previous tokens
-    #                         )
-    #                     except TypeError:
-    #                         # Fallback for implementations that don't support window_size
-    #                         attn_output_flat = flash_attn_varlen_func(
-    #                             q_flat,
-    #                             k_flat,
-    #                             v_flat,
-    #                             cu_seqlens_q,
-    #                             cu_seqlens_k,
-    #                             T,  # max_seqlen_q
-    #                             seqlens_k.max().int(),  # max_seqlen_k
-    #                             causal=False,
-    #                         )
-                        
-    #                     # Reshape back
-    #                     attn_output = attn_output_flat.view(B, T, H, N)
-
-    #         # Reshape output
-    #         attn_output = attn_output.contiguous().view(B, T, HN)
-
-    #         # Output projection
-    #         out = fpx_matmul(attn_output, O_, O_state, ebits, mbits)
-    #         x_out = x_in + out
-
-    #         return T5RMSNorm(x_out, ln2, rmsnorm_epsilon), x_out, past_key_value
-
-    # def GQA_Attention_FlashAttn2(layer_id: int, gqa_layer_id: int, H: int, N: int,
-    #           x_in, past_key_value, cache_position,
-    #           calc_cos, calc_sin,
-    #           Q_, K_, V_, O_,
-    #           Q_state, K_state, V_state, O_state,
-    #           Q_bias, K_bias, V_bias, O_bias,
-    #           ln_r, ln_k, rmsnorm_epsilon: float,
-    #           ln1, ln2, rope_theta,
-    #           ebits: int, mbits: int):
-
-    #     B, T, C = x_in.size()
-    #     x = T5RMSNorm(x_in, ln1, rmsnorm_epsilon)
-
-    #     HN = H * N
-
-    #     # Projections
-    #     q = fpx_matmul(x, Q_, Q_state, ebits, mbits).add_(Q_bias).view(B, T, H, N)
-    #     k = fpx_matmul(x, K_, K_state, ebits, mbits).add_(K_bias)
-    #     v = fpx_matmul(x, V_, V_state, ebits, mbits).add_(V_bias)
-
-    #     kv_dim = k.shape[2]  # B,T,kv_dim
-    #     kv_per_head = kv_dim // N
-    #     kv_repeat = HN // kv_dim
-    #     kv_heads = kv_dim // N
-
-    #     k = k.view(B, T, kv_per_head, N)
-    #     v = v.view(B, T, kv_per_head, N)
-
-    #     if ln_r is not None:
-    #         q = T5RMSNorm(q, ln_r, rmsnorm_epsilon)
-    #         k = T5RMSNorm(k, ln_k, rmsnorm_epsilon)
-
-    #     # Rotary embedding (if needed)
-    #     cos, sin = calc_cos.to(k.dtype), calc_sin.to(k.dtype)
-    #     # q, k = apply_rotary_pos_emb(q, k, cos, sin, unsqueeze_dim=2)
-
-    #     # === Optimized KV Cache Write ===
-    #     cache_shape = past_key_value.shape
-    #     is_new_layout = (cache_shape[2] == 2) and (cache_shape[3] != 2)
-        
-    #     k_write = k.view(B, T, -1)
-    #     v_write = v.view(B, T, -1)
-    #     starts = cache_position[:, 0]
-        
-    #     if is_new_layout:
-    #         # New optimized layout: [layer, B, 2, seq, dim]
-    #         if B == 1 or (starts == starts[0]).all():
-    #             start = starts[0].int()
-    #             end = start + T
-    #             past_key_value[gqa_layer_id, :, 0, start:end] = k_write
-    #             past_key_value[gqa_layer_id, :, 1, start:end] = v_write
-    #         else:
-    #             batch_idx = torch.arange(B, device=k.device)[:, None]
-    #             seq_idx = starts[:, None] + torch.arange(T, device=k.device)
-    #             past_key_value[gqa_layer_id, batch_idx, 0, seq_idx] = k_write
-    #             past_key_value[gqa_layer_id, batch_idx, 1, seq_idx] = v_write
-                
-    #         max_seq_len = cache_position.max().int() + T
-    #         if max_seq_len == T:
-    #             # First token generation - use only current K,V
-    #             k_cache = k_write
-    #             v_cache = v_write
-    #         else:
-    #             # Read full cache up to current position
-    #             k_cache = past_key_value[gqa_layer_id, :, 0, :max_seq_len]
-    #             v_cache = past_key_value[gqa_layer_id, :, 1, :max_seq_len]
-            
-    #     else:
-    #         # Old layout: [layer, B, seq, 2, dim]
-    #         if B == 1 or (starts == starts[0]).all():
-    #             start = starts[0].int()
-    #             end = start + T
-    #             past_key_value[gqa_layer_id, :, start:end, 0] = k_write
-    #             past_key_value[gqa_layer_id, :, start:end, 1] = v_write
-    #         else:
-    #             for b in range(B):
-    #                 start = cache_position[b, 0].int()
-    #                 end = start + T
-    #                 past_key_value[gqa_layer_id, b, start:end, 0] = k_write[b]
-    #                 past_key_value[gqa_layer_id, b, start:end, 1] = v_write[b]
-                    
-    #         max_seq_len = cache_position.max().int() + T
-    #         if max_seq_len == T:
-    #             # First token generation
-    #             k_cache = k_write
-    #             v_cache = v_write
-    #         else:
-    #             # Read full cache
-    #             k_cache = past_key_value[gqa_layer_id, :, :max_seq_len, 0]
-    #             v_cache = past_key_value[gqa_layer_id, :, :max_seq_len, 1]
-
-    #     # === Prepare for Flash Attention ===
-    #     # q shape: (B, T, H, N)
-    #     # k_cache/v_cache shape: (B, S, kv_dim) where S = max_seq_len
-        
-    #     S = k_cache.shape[1]
-        
-    #     # Reshape KV cache for Flash Attention
-    #     k_flash = k_cache.view(B, S, kv_heads, N)  # (B, S, kv_heads, N)
-    #     v_flash = v_cache.view(B, S, kv_heads, N)  # (B, S, kv_heads, N)
-        
-    #     # === Optimized Flash Attention Call ===
-    #     # Use the most efficient path based on batch configuration
-    #     all_same_pos = (starts == starts[0]).all()
-        
-    #     if all_same_pos:
-    #         # All batches have same position - single call to flash_attn_func
-    #         # This is the most common case and the fastest path
-    #         attn_output = flash_attn_func(
-    #             q,           # (B, T, H, N)
-    #             k_flash,     # (B, S, kv_heads, N)
-    #             v_flash,     # (B, S, kv_heads, N)
-    #             causal=True, # Use causal mask for autoregressive generation
-    #         )
-    #     else:
-    #         # Different positions per batch - need custom masking
-    #         # Create position mask efficiently
-    #         query_pos = cache_position[:, :1] + torch.arange(T, device=q.device).unsqueeze(0)  # (B, T)
-    #         key_pos = torch.arange(S, device=q.device).unsqueeze(0).expand(B, -1)  # (B, S)
-            
-    #         # Create causal mask: query_pos >= key_pos
-    #         # Shape: (B, T, S) -> (B, 1, T, S) for broadcasting with heads
-    #         causal_mask = query_pos.unsqueeze(2) >= key_pos.unsqueeze(1)
-    #         causal_mask = causal_mask.unsqueeze(1).to(q.dtype)
-            
-    #         # Convert boolean mask to attention bias
-    #         attn_bias = torch.where(causal_mask, 0.0, float('-10000.0'))
-            
-    #         # Use scaled_dot_product_attention with custom mask
-    #         # First transpose to (B, H, T, N) format
-    #         q_sdpa = q.transpose(1, 2)  # (B, H, T, N)
-    #         k_sdpa = k_flash.transpose(1, 2)  # (B, kv_heads, S, N)
-    #         v_sdpa = v_flash.transpose(1, 2)  # (B, kv_heads, S, N)
-            
-    #         # Handle GQA by repeating KV heads
-    #         if kv_repeat > 1:
-    #             k_sdpa = k_sdpa.repeat_interleave(kv_repeat, dim=1)  # (B, H, S, N)
-    #             v_sdpa = v_sdpa.repeat_interleave(kv_repeat, dim=1)  # (B, H, S, N)
-            
-    #         # Apply attention with custom mask
-    #         attn_output = F.scaled_dot_product_attention(
-    #             q_sdpa, k_sdpa, v_sdpa,
-    #             attn_mask=attn_bias,
-    #             is_causal=False,  # We handle causality with attn_bias
-    #         )
-            
-    #         # Transpose back to (B, T, H, N)
-    #         attn_output = attn_output.transpose(1, 2)
-
-    #     # Reshape output
-    #     attn_output = attn_output.contiguous().view(B, T, HN)
-
-    #     # Output projection
-    #     out = fpx_matmul(attn_output, O_, O_state, ebits, mbits)
-    #     x_out = x_in + out
-
-    #     return T5RMSNorm(x_out, ln2, rmsnorm_epsilon), x_out, past_key_value
 
 
 
 
-
-
-
+    
+    # def SwiGLU_MLP_forward_fpx_w_add(x,gate_,down_,up_,gate_state,down_state,up_state,ebits,mbits,x_in):
+    #     step1 = F.silu(fpx_matmul(x,gate_,gate_state,ebits,mbits)) * fpx_matmul(x,up_,up_state,ebits,mbits)
+    #     xx = fpx_matmul(step1,down_,down_state,ebits,mbits)
+    #     x_in = x_in + xx
+    #     return xx, x_in
     @torch.compile
-    def SwiGLU_MLP_forward_fpx_w_add(x,gate_,down_,up_,gate_state,down_state,up_state,ebits,mbits,x_in):
-        step1 = F.silu(fpx_matmul(x,gate_,gate_state,ebits,mbits)) * fpx_matmul(x,up_,up_state,ebits,mbits)
-        xx = fpx_matmul(step1,down_,down_state,ebits,mbits)
+    def SwiGLU_MLP_forward_fpx_w_add(x,
+                                    gateup_,gateup_split_list,
+                                    down_,
+                                    gateup_state,down_state,
+                                    ebits,mbits,x_in):
+        #step1 = F.silu(fpx_matmul(x,gate_,gate_state,ebits,mbits)) * fpx_matmul(x,up_,up_state,ebits,mbits)
+        gate,up = fpx_matmul(x,gateup_,gateup_state,ebits,mbits).split(gateup_split_list,dim=-1)
+        xx = fpx_matmul((F.silu(gate) * up),down_,down_state,ebits,mbits)
         x_in = x_in + xx
         return xx, x_in
     
 
 
     #@torch.compile
+    @torch.compile
     def hxa079r_forward(self, idx, 
                 last_wkv_states: List[torch.Tensor], kv_cache,pos_cache,  full_output:bool=False):
         
         with torch.no_grad(): 
             z = self.z
+
+            t0 = time.perf_counter()
 
             if self.emboncpu:
                 x = z['emb.weight'][idx.cpu()].to(device=self.device,dtype=self.dtype)
@@ -1400,7 +1084,15 @@ class HRWKV_7(nn.Module):
             if ln_r is not None:
                 rk_normmode = True
 
-                        
+
+            #t1 = time.perf_counter()
+
+
+            RWKV = 0.0
+            GQA = 0.0
+
+            RWKVBlockCount = 0    
+            GQABlockCount = 0       
 
             for i in range(self.n_layer):
                 bbb = f'blocks.{i}.'
@@ -1413,44 +1105,81 @@ class HRWKV_7(nn.Module):
 
                 if self.HRWKV_Block_Mode[i][0] == 0:
                     time_mix_state = last_wkv_states[self.HRWKV_Block_Mode[i][2]]
+                    RWKVBlockCount = RWKVBlockCount + 1
                     #print('rwkv')
+                    #t2 = time.perf_counter()
                     xx, time_mix_shift, time_mix_state, v_first,k_first, x = HRWKV_7.hxa079_TimeMix(self.HRWKV_Block_Mode[i][2], self.n_head, self.head_size, x, time_mix_shift, v_first,k_first, time_mix_state,cache_pos,
                                                                         calc_cos,calc_sin,
                                                                         # z[att+'x_r'], z[att+'x_w'], z[att+'x_k'], z[att+'x_v'], z[att+'x_a'], z[att+'x_g'],
-                                                                        z[att+'w0'], z[att+'w1'], z[att+'w2'], z[att+'a0'], z[att+'a1'], z[att+'a2'], z[att+'v0'], z[att+'v1'], z[att+'v2'], z[att+'g1'], z[att+'g2'],
-                                                                        z[att+'k0'], z[att+'k1'], z[att+'k2'], #key residual
+                                                                        # z[att+'w0'], z[att+'w1'], z[att+'w2'], z[att+'a0'], z[att+'a1'], z[att+'a2'], z[att+'v0'], z[att+'v1'], z[att+'v2'], z[att+'g1'], z[att+'g2'],
+                                                                        # z[att+'k0'], z[att+'k1'], z[att+'k2'], #key residual
+                                                                        z[att+'wavgk_fused'],self.HRWKV_Misc[att+'wavgk_split_list'],
+                                                                        z[att+'w0'], z[att+'w2'], z[att+'a0'], z[att+'a2'], z[att+'v0'], z[att+'v2'], z[att+'g2'],
+                                                                        z[att+'k0'], z[att+'k2'], #key residual
+
                                                                         z[att+'r_k'],
-                                                                        z[att+'receptance.weight'], z[att+'key.weight'], z[att+'value.weight'], z[att+'output.weight'],
-                                                                        z.get(att+'receptance.weight.qstate',dummytensor), z.get(att+'key.weight.qstate',dummytensor), z.get(att+'value.weight.qstate',dummytensor), z.get(att+'output.weight.qstate',dummytensor),
-                                                                        z.get(att+'receptance.bias',dummytensor), z.get(att+'key.bias',dummytensor), z.get(att+'value.bias',dummytensor), dummytensor,
-                                                                        z.get(att+'ln_r.weight',None),z.get(att+'ln_k.weight',None),self.rms_norm_eps,
+                                                                        z[att+'rkv_fused.weight'],self.HRWKV_Misc[att+'rkv_split_list'],
+                                                                        #z[att+'receptance.weight'], z[att+'key.weight'], z[att+'value.weight'], 
+                                                                        z[att+'output.weight'],
+                                                                        #z[att+'receptance.weight.qstate'], z[att+'key.weight.qstate'], z[att+'value.weight.qstate'], 
+                                                                        z[att+'rkv_fused.weight.qstate'],
+                                                                        z[att+'output.weight.qstate'],
+                                                                        z[att+'receptance.bias'], z[att+'key.bias'], z[att+'value.bias'], dummytensor,
+                                                                        z[att+'ln_r.weight'],z[att+'ln_k.weight'],self.rms_norm_eps,
                                                                         z[bbb+'ln1.weight'],z[bbb+'ln2.weight'],self.rope_theta,
                                                                         self.ebits,self.mbits
                                                                         )
                     last_wkv_states[self.HRWKV_Block_Mode[i][2]] = time_mix_state
+                    #t3 = time.perf_counter()
+                    #RWKV+=t3-t2
                 else:
                     #print('gqa')
+                    GQABlockCount = GQABlockCount + 1
+                    #t2 = time.perf_counter()
                     xx, x, kv_cache= HRWKV_7.GQA_Attention_Nested(i,self.HRWKV_Block_Mode[i][2],self.n_head,self.head_size,x,kv_cache,cache_pos,
-                                          calc_cos,calc_sin,
-                                          z[att+'q_proj.weight'], z[att+'k_proj.weight'], z[att+'v_proj.weight'], z[att+'o_proj.weight'],
-                                                                        z.get(att+'q_proj.weight.qstate',dummytensor), z.get(att+'k_proj.weight.qstate',dummytensor), z.get(att+'v_proj.weight.qstate',dummytensor), z.get(att+'o_proj.weight.qstate',dummytensor),
-                                                                        z.get(att+'q_proj.bias',dummytensor), z.get(att+'k_proj.bias',dummytensor), z.get(att+'v_proj.bias',dummytensor), dummytensor,
-                                                                        z.get(att+'ln_r.weight',None),z.get(att+'ln_k.weight',None),self.rms_norm_eps,
+                                                                        calc_cos,calc_sin,
+                                                                        #z[att+'q_proj.weight'], z[att+'k_proj.weight'], z[att+'v_proj.weight'],
+                                                                        z[att+'qkv_fused.weight'],self.HRWKV_Misc[att+'qkv_split_list'],
+                                                                        z[att+'o_proj.weight'],
+                                                                        #z[att+'q_proj.weight.qstate'], z[att+'k_proj.weight.qstate'], z[att+'v_proj.weight.qstate'],
+                                                                        z[att+'qkv_fused.weight.qstate'],
+                                                                        z[att+'o_proj.weight.qstate'],
+                                                                        z[att+'q_proj.bias'], z[att+'k_proj.bias'], z[att+'v_proj.bias'], dummytensor,
+                                                                        z[att+'ln_r.weight'],z[att+'ln_k.weight'],self.rms_norm_eps,
                                                                         z[bbb+'ln1.weight'],z[bbb+'ln2.weight'],self.rope_theta,
                                                                         self.ebits,self.mbits )
+                    #t3 = time.perf_counter()
+                    #GQA +=t3-t2
 
 
-                xx,x = HRWKV_7.SwiGLU_MLP_forward_fpx_w_add(xx,z[ffn+'gate.weight'],z[ffn+'down.weight'],z[ffn+'up.weight'],
-                                                z.get(ffn+'gate.weight.qstate',dummytensor),z.get(ffn+'down.weight.qstate',dummytensor),z.get(ffn+'up.weight.qstate',dummytensor),
-                                                self.ebits,self.mbits,
-                                                x
-                                                )
+                xx,x = HRWKV_7.SwiGLU_MLP_forward_fpx_w_add(xx,
+                                                            z[ffn+'gateup.weight'],self.HRWKV_Misc[ffn+'gateup_split_list'],
+                                                            z[ffn+'down.weight'],
+
+                                                            z[ffn+'gateup.weight.qstate'],
+                                                            z[ffn+'down.weight.qstate'],
+                                                            self.ebits,self.mbits,
+                                                            x
+                                                            )
       
 
                 #x = x + xx
 
                 #last_shift_states[i*2] = time_mix_shift
                 #last_shift_states[i*2+1] = channel_mix_state
+
+
+            #GQA = GQA / ( 1 ) * 1000
+
+           #RWKV = RWKV / (1 ) * 1000
+
+            #init = (t1 - t0) * 1000
+
+
+            #t4 = time.perf_counter()
+
+
+            
                 
                 
 
@@ -1460,5 +1189,12 @@ class HRWKV_7(nn.Module):
             x = fpx_matmul(x , z['head.weight'],z.get('head.weight.qstate',None),self.ebits,self.mbits)
             if not full_output: x = x[:, -1, :]  # 最後のタイムステップだけを選択し、バッチ次元を保持
             pos_cache += T
+
+
+            # t5 = time.perf_counter()
+
+            # post = (t5-t4) * 1000
+            # total = (t5-t0) * 1000 
+            #print(f'idx {idx.shape} RWKV = {RWKV}ms GQA = {GQA}ms init = {init}ms post = {post}ms  total = {total}')
             return x, None, last_wkv_states, kv_cache, pos_cache
 

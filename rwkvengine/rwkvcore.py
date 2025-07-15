@@ -8,7 +8,7 @@ from safetensors import safe_open
 from safetensors.torch import load_file
 import torch
 #Test Torchao
-
+torch.compiler.reset()
 try:
     import torchao
     from torchao.dtypes.floatx import to_scaled_tc_floatx
@@ -26,15 +26,121 @@ except ImportError:
     print('Bitsandbytes not found')
     HAS_BITSANDBYTES = False
     bnb = None
-try:
-    from hqq.core.quantize import BaseQuantizeConfig, HQQLinear
-    from gemlite.core import GemLiteLinearTriton, DType, TORCH_TO_DTYPE
-    HAS_HQQ = True
-except ImportError:
-    print('hqq not found')
-    HAS_HQQ = False
-    HQQLinear = None
+# from hqq.core.quantize import BaseQuantizeConfig, HQQLinear
+# from gemlite.core import GemLiteLinearTriton, DType, TORCH_TO_DTYPE
+# try:
+#     from hqq.core.quantize import BaseQuantizeConfig, HQQLinear
+#     from gemlite.core import GemLiteLinearTriton, DType, TORCH_TO_DTYPE
+#     HAS_HQQ = True
+# except ImportError:
+#     print('hqq not found')
+#     HAS_HQQ = False
+#     HQQLinear = None
 
+HAS_HQQ = False
+HQQLinear = None
+
+def Attach_Adapter(keyname,weight,adapter,mode,scaling=2.0,device='cuda'): #from JL-er lora merge inspired
+                
+    print(f'AttachAdapter = {keyname}')
+    if keyname.endswith('.weight') or keyname.endswith('head'):
+        adapterkeys = list(adapter.keys())
+        #print(adapterkeys)
+        #exit()
+
+        if mode != '':
+            #print(f'scaling = {scaling}')
+            prefix = keyname[:-len('.weight')]
+            lora_A = prefix + '.lora_A'
+            lora_B = prefix + '.lora_B'
+            lora_M = prefix + '.lora_M'
+            gbmm = prefix + '.bone'
+            if lora_A in adapterkeys:
+                w=adapter
+                assert lora_B in adapterkeys
+
+                if lora_M in adapterkeys:
+                    print('dora merging {lora_A} and {lora_B} and {lora_M} into {k}')
+                    assert w[lora_B].shape[1] == w[lora_A].shape[0]
+
+                    w[lora_A] = w[lora_A].to(device=device)
+                    w[lora_B] = w[lora_B].to(device=device)
+                    w[lora_M] = w[lora_M].to(device=device)
+                    weight = weight + w[lora_B] @ w[lora_A] * scaling
+                    norm = weight.norm(dim=0, keepdim=True) + 1e-6
+                    weight = (w[lora_M] * weight) / norm  
+
+                    del w[lora_A]
+                    del w[lora_B]
+                    del w[lora_M]
+                    return weight
+                
+                else:
+                    print(f'lora merging {lora_A} and {lora_B} into {k}')
+                    
+                    assert w[lora_B].shape[1] == w[lora_A].shape[0]
+
+                    w[lora_A] = w[lora_A].to(device=device)
+                    w[lora_B] = w[lora_B].to(device=device)
+                    weight = weight + w[lora_B] @ w[lora_A] * scaling
+                    del w[lora_A]
+                    del w[lora_B]
+                    return weight
+
+            if gbmm in adapterkeys :
+                w=adapter
+                print(f'bone merging {gbmm} into {k}')
+                w[gbmm] = w[gbmm].to(device=device)
+                b,r,_ = w[gbmm].shape
+                bone = rearrange(weight, '(a r1) (b r2) -> a b r1 r2', r1 = r, r2 = r)@w[gbmm]+w[gbmm]
+                weight += rearrange(bone, 'a b r1 r2 ->(a r1) (b r2) ')
+                print(weight)
+                del w[gbmm]
+                return weight
+            for key in adapterkeys:
+                if key == keyname:
+                    weight = adapter[key].to(dtype=torch.bfloat16,device=device)
+                    print(f'key = {key} is swapped from Adapter')
+            return weight
+        else:
+            return weight
+    else:
+        adapterkeys = list(adapter.keys())
+        for key in adapterkeys:
+            if key == keyname:
+                weight = adapter[key].to(dtype=torch.bfloat16,device=device)
+                print(f'key = {key} is swapped from Adapter')
+
+        return weight
+
+def load_split_safetensors(model_dir, device="cpu"):
+                """
+                分割されたSafeTensorファイルを読み込む関数
+                
+                Args:
+                    model_dir: 分割されたSafeTensorファイルが格納されているディレクトリパス
+                    device: ロード先のデバイス（デフォルトは"cpu"）
+                
+                Returns:
+                    dict: 統合されたモデルの状態辞書
+                """
+                # ディレクトリから全てのsafetensorファイルを取得
+                files = sorted([f for f in os.listdir(model_dir) if f.endswith('.safetensors')])
+                
+                if not files:
+                    raise ValueError(f"No safetensors files found in {model_dir}")
+                
+                # 状態辞書を初期化
+                state_dict = {}
+                
+                # 各ファイルを読み込んで統合
+                for file in files:
+                    file_path = os.path.join(model_dir, file)
+                    # load_fileはtorch形式で読み込む
+                    file_state_dict = load_file(file_path, device=device)
+                    state_dict.update(file_state_dict)
+                
+                return state_dict
 
 def create_hqq_module_from_weight(
     weight: torch.Tensor,
@@ -201,7 +307,7 @@ from rwkvengine.fla.ops.rwkv6.chunk import chunk_rwkv6,ChunkRWKV6Function
 from rwkvengine.fla.ops.rwkv6.fused_recurrent import fused_recurrent_rwkv6
 from rwkvengine.fla.ops.rwkv7 import chunk_rwkv7
 from rwkvengine.cuda.wkv7triton import rwkv7_attn_triton
-#os.environ["NVIDIA_TF32_OVERRIDE"] = "0"
+os.environ["NVIDIA_TF32_OVERRIDE"] = "0"
 torch.backends.cudnn.benchmark = True
 torch.backends.cuda.matmul.allow_tf32 = False
 torch.backends.cudnn.allow_tf32 = False
@@ -348,34 +454,7 @@ class RWKV_x(nn.Module):
             modelpath = load_model
             self.SafeTensorMode = False
 
-            def load_split_safetensors(model_dir, device="cpu"):
-                """
-                分割されたSafeTensorファイルを読み込む関数
-                
-                Args:
-                    model_dir: 分割されたSafeTensorファイルが格納されているディレクトリパス
-                    device: ロード先のデバイス（デフォルトは"cpu"）
-                
-                Returns:
-                    dict: 統合されたモデルの状態辞書
-                """
-                # ディレクトリから全てのsafetensorファイルを取得
-                files = sorted([f for f in os.listdir(model_dir) if f.endswith('.safetensors')])
-                
-                if not files:
-                    raise ValueError(f"No safetensors files found in {model_dir}")
-                
-                # 状態辞書を初期化
-                state_dict = {}
-                
-                # 各ファイルを読み込んで統合
-                for file in files:
-                    file_path = os.path.join(model_dir, file)
-                    # load_fileはtorch形式で読み込む
-                    file_state_dict = load_file(file_path, device=device)
-                    state_dict.update(file_state_dict)
-                
-                return state_dict
+            
             if '.pth' in modelpath:
                 z = torch.load(modelpath,map_location="cpu",mmap=True)
             else:
@@ -400,78 +479,7 @@ class RWKV_x(nn.Module):
                     for zkeys in z_adapter_keys:
                         z[zkeys] = z_adapter[zkeys]
 
-            def Attach_Adapter(keyname,weight,adapter,mode,scaling=2.0,device='cuda'): #from JL-er lora merge inspired
-                
-                print(f'AttachAdapter = {keyname}')
-                if keyname.endswith('.weight') or keyname.endswith('head'):
-                    adapterkeys = list(adapter.keys())
-                    #print(adapterkeys)
-                    #exit()
-
-                    if mode != '':
-                        #print(f'scaling = {scaling}')
-                        prefix = keyname[:-len('.weight')]
-                        lora_A = prefix + '.lora_A'
-                        lora_B = prefix + '.lora_B'
-                        lora_M = prefix + '.lora_M'
-                        gbmm = prefix + '.bone'
-                        if lora_A in adapterkeys:
-                            w=adapter
-                            assert lora_B in adapterkeys
-
-                            if lora_M in adapterkeys:
-                                print('dora merging {lora_A} and {lora_B} and {lora_M} into {k}')
-                                assert w[lora_B].shape[1] == w[lora_A].shape[0]
-
-                                w[lora_A] = w[lora_A].to(device=device)
-                                w[lora_B] = w[lora_B].to(device=device)
-                                w[lora_M] = w[lora_M].to(device=device)
-                                weight = weight + w[lora_B] @ w[lora_A] * scaling
-                                norm = weight.norm(dim=0, keepdim=True) + 1e-6
-                                weight = (w[lora_M] * weight) / norm  
-
-                                del w[lora_A]
-                                del w[lora_B]
-                                del w[lora_M]
-                                return weight
-                            
-                            else:
-                                print(f'lora merging {lora_A} and {lora_B} into {k}')
-                                
-                                assert w[lora_B].shape[1] == w[lora_A].shape[0]
-
-                                w[lora_A] = w[lora_A].to(device=device)
-                                w[lora_B] = w[lora_B].to(device=device)
-                                weight = weight + w[lora_B] @ w[lora_A] * scaling
-                                del w[lora_A]
-                                del w[lora_B]
-                                return weight
-
-                        if gbmm in adapterkeys :
-                            w=adapter
-                            print(f'bone merging {gbmm} into {k}')
-                            w[gbmm] = w[gbmm].to(device=device)
-                            b,r,_ = w[gbmm].shape
-                            bone = rearrange(weight, '(a r1) (b r2) -> a b r1 r2', r1 = r, r2 = r)@w[gbmm]+w[gbmm]
-                            weight += rearrange(bone, 'a b r1 r2 ->(a r1) (b r2) ')
-                            print(weight)
-                            del w[gbmm]
-                            return weight
-                        for key in adapterkeys:
-                            if key == keyname:
-                                weight = adapter[key].to(dtype=torch.bfloat16,device=device)
-                                print(f'key = {key} is swapped from Adapter')
-                        return weight
-                    else:
-                        return weight
-                else:
-                    adapterkeys = list(adapter.keys())
-                    for key in adapterkeys:
-                        if key == keyname:
-                            weight = adapter[key].to(dtype=torch.bfloat16,device=device)
-                            print(f'key = {key} is swapped from Adapter')
-
-                    return weight
+            
                 
             # if self.SafeTensorMode:
             #     keys = []
@@ -599,9 +607,9 @@ class RWKV_x(nn.Module):
                 else:
                     z['emb.weight'] = F.layer_norm(z['emb.weight'], (self.n_embd,), weight=z['blocks.0.ln0.weight'], bias=z['blocks.0.ln0.bias'])
 
-                z['blocks.0.att.v0'] = z['blocks.0.att.a0'] # actually ignored
-                z['blocks.0.att.v1'] = z['blocks.0.att.a1'] # actually ignored
-                z['blocks.0.att.v2'] = z['blocks.0.att.a2'] # actually ignored
+                z['blocks.0.att.v0'] = z.get('blocks.0.att.v0',z['blocks.0.att.a0']) # actually ignored
+                z['blocks.0.att.v1'] = z.get('blocks.0.att.v1',z['blocks.0.att.a1']) # actually ignored
+                z['blocks.0.att.v2'] = z.get('blocks.0.att.v2',z['blocks.0.att.a2']) # actually ignored
 
                 if self.gate_enable == False:
                     for i in range(n_layer):
@@ -660,7 +668,6 @@ class RWKV_x(nn.Module):
                     if self.HRWKV_Mode == 0:
                         self.HRWKV_Mode = 1
                         #self.HRWKV_StartLayers=n_layer
-            
 
             if self.HRWKV_Mode:
                 print('HRWKV-7 Mode. Hybrid RWKV Mode. hxa078r, hxa079r')
@@ -686,6 +693,110 @@ class RWKV_x(nn.Module):
                         break
 
                 #exit()
+
+            self.HRWKV_Misc = {}
+
+            if self.HRWKV_Generation == 79:
+                print('QKV, RKV Fusion')
+                for i in range(n_layer):
+                    bbb = f'blocks.{i}.'
+                    att = f'blocks.{i}.att.'
+                    ffn = f'blocks.{i}.ffn.'
+                    if self.HRWKV_Block_Mode[i][0] == 0:
+                        print(f'Layer:{i} RWKV hxa079 block r,k,v try to fusion')
+                        #
+                        print(f"r shape = {z[att+'receptance.weight'].shape}")
+                        print(f"k shape = {z[att+'key.weight'].shape}")
+                        print(f"v shape = {z[att+'value.weight'].shape}")
+                        z[att + 'rkv_fused.weight'] = torch.cat([z[att+'receptance.weight'],
+                                                                 z[att+'key.weight'],
+                                                                 z[att+'value.weight'],
+                                                                ],dim=0)
+
+                        self.HRWKV_Misc[att + 'rkv_split_list'] = [z[att+'receptance.weight'].shape[0],
+                                                     z[att+'key.weight'].shape[0],
+                                                     z[att+'value.weight'].shape[0],
+                                                    ]
+
+
+                        print(f"rkv shape = {z[att + 'rkv_fused.weight'].shape}")
+                        #exit()
+
+                        print(f'wavgk 1 fuse')
+                        z[att + 'wavgk_fused'] = torch.cat([z[att+'w1'],
+                                                                 z[att+'a1'],
+                                                                 z[att+'v1'],
+                                                                 z[att+'g1'],
+                                                                 z[att+'k1'],
+                                                                ],dim=1)
+
+                        self.HRWKV_Misc[att + 'wavgk_split_list'] = [z[att+'w1'].shape[1],
+                                                     z[att+'a1'].shape[1],
+                                                     z[att+'v1'].shape[1],
+                                                     z[att+'g1'].shape[1],
+                                                     z[att+'k1'].shape[1],
+                                                    ]
+
+                        print(self.HRWKV_Misc[att + 'wavgk_split_list'])
+
+                        print(f"wavgk shape = {z[att + 'wavgk_fused'].shape}")
+
+                        #exit()
+
+                        
+                        z[att+'receptance.weight'] = None
+                        z[att+'key.weight'] = None
+                        z[att+'value.weight'] = None
+                        z[att+'w1'] = None
+                        z[att+'a1'] = None
+                        z[att+'v1'] = None
+                        z[att+'g1'] = None
+                        z[att+'k1'] = None
+                        del z[att+'receptance.weight']
+                        del z[att+'key.weight']
+                        del z[att+'value.weight']
+
+                        del z[att+'w1']
+                        del z[att+'a1']
+                        del z[att+'v1']
+                        del z[att+'g1']
+                        del z[att+'k1']
+                    else:
+                        print(f'Layer:{i} Attention block q,k,v try to fusion')
+                        z[att + 'qkv_fused.weight'] = torch.cat([z[att+'q_proj.weight'],
+                                                                 z[att+'k_proj.weight'],
+                                                                 z[att+'v_proj.weight']
+                                                                ],dim=0)
+
+                        self.HRWKV_Misc[att + 'qkv_split_list'] = [z[att+'q_proj.weight'].shape[0],
+                                                     z[att+'k_proj.weight'].shape[0],
+                                                     z[att+'v_proj.weight'].shape[0],
+                                                    ]
+                        
+                        z[att+'q_proj.weight'] = None
+                        z[att+'k_proj.weight'] = None
+                        z[att+'v_proj.weight'] = None
+                        del z[att+'q_proj.weight']
+                        del z[att+'k_proj.weight']
+                        del z[att+'v_proj.weight']
+                    
+                    print('SwiGLU MLP Layer Fusing')
+                    z[ffn+'gate.weight'] = pad_weight_tensor_to_256(z[ffn+'gate.weight'])
+                    z[ffn+'up.weight'] = pad_weight_tensor_to_256(z[ffn+'up.weight'])
+                    z[ffn + 'gateup.weight'] = torch.cat([z[ffn+'gate.weight'],
+                                                                 z[ffn+'up.weight']
+                                                                ],dim=0)
+
+                    self.HRWKV_Misc[ffn + 'gateup_split_list'] = [z[ffn+'gate.weight'].shape[0],
+                                                    z[ffn+'up.weight'].shape[0],
+                                                ]
+                    z[ffn+'gate.weight'] = None
+                    z[ffn+'up.weight'] = None
+                    del z[ffn+'gate.weight']
+                    del z[ffn+'up.weight']
+                keys = list(z.keys())
+
+            
 
 
             
@@ -754,10 +865,10 @@ class RWKV_x(nn.Module):
 
 
 
-            QuantList = ['.receptance.weight','.key.weight','.value.weight','.gate.weight','.output.weight','head.weight','.down.weight','up.weight','gate_up.weight']
-            QuantListBNB = ['q_proj.weight','k_proj.weight','v_proj.weight','o_proj.weight','att.receptance.weight','att.key.weight','att.value.weight','att.gate.weight','att.output.weight','ffn.key.weight','ffn.receptance.weight','ffn.value.weight','head.weight','ffn.down.weight','ffn.up.weight','ffn.gate.weight','gate_up.weight']
-            QuantListFP8 = ['q_proj.weight','k_proj.weight','v_proj.weight','o_proj.weight','att.receptance.weight','att.key.weight','att.value.weight','att.gate.weight','att.output.weight','ffn.key.weight','ffn.receptance.weight','ffn.value.weight','head.weight','ffn.down.weight','ffn.up.weight','ffn.gate.weight','gate_up.weight'] #, ,
-            QuantListFP6 = ['q_proj.weight','k_proj.weight','v_proj.weight','o_proj.weight','att.receptance.weight','att.key.weight','att.value.weight','att.gate.weight','att.output.weight','ffn.key.weight','ffn.receptance.weight','ffn.value.weight','ffn.down.weight','ffn.up.weight','ffn.gate.weight','gate_up.weight'] #, ,
+            QuantList = ['.gateup.weight','.rkv_fused.weight','.qkv_fused.weight','.receptance.weight','.key.weight','.value.weight','.gate.weight','.output.weight','head.weight','.down.weight','up.weight','gate_up.weight']
+            QuantListBNB = ['.gateup.weight','.rkv_fused.weight','.qkv_fused.weight','q_proj.weight','k_proj.weight','v_proj.weight','o_proj.weight','att.receptance.weight','att.key.weight','att.value.weight','att.gate.weight','att.output.weight','ffn.key.weight','ffn.receptance.weight','ffn.value.weight','head.weight','ffn.down.weight','ffn.up.weight','ffn.gate.weight','gate_up.weight']
+            QuantListFP8 = ['.gateup.weight','.rkv_fused.weight','.qkv_fused.weight','q_proj.weight','k_proj.weight','v_proj.weight','o_proj.weight','att.receptance.weight','att.key.weight','att.value.weight','att.gate.weight','att.output.weight','ffn.key.weight','ffn.receptance.weight','ffn.value.weight','head.weight','ffn.down.weight','ffn.up.weight','ffn.gate.weight','gate_up.weight'] #, ,
+            QuantListFP6 = ['.gateup.weight','.rkv_fused.weight','.qkv_fused.weight','q_proj.weight','k_proj.weight','v_proj.weight','o_proj.weight','att.receptance.weight','att.key.weight','att.value.weight','att.gate.weight','att.output.weight','ffn.key.weight','ffn.receptance.weight','ffn.value.weight','ffn.down.weight','ffn.up.weight','ffn.gate.weight','gate_up.weight'] #, ,
     
             
 
@@ -882,13 +993,18 @@ class RWKV_x(nn.Module):
                             else:
                                 print(f'Quant {k} to FP6 shape = {z[k].shape}' )
                             QuantKeyFound = True
-                            z[k] = z[k].to(device='cuda',dtype=torch.float16)#.t() 
+                            if z[k].shape[0] > 30000:
+                                gc.collect()
+                                torch.cuda.empty_cache() 
+                            z[k] = z[k].to(device='cuda',dtype=torch.float16)
                             print(f'before size {z[k].shape}')
                             z[k] = pad_weight_tensor_to_256(z[k])
                             print(f'after size {z[k].shape}')
 
                           
                             z[k], z[k+'.qstate'] = to_scaled_tc_floatx(z[k], self.ebits, self.mbits)
+
+                            z[k] = z[k].to('cpu')
 
                             if self.ExtremeCPUOffload:
                                 z[k] = z[k].to(device='cpu')
@@ -928,6 +1044,9 @@ class RWKV_x(nn.Module):
                                 z[k] = z[k].t()
                             if k.endswith('att.r_k'): z[k] = z[k].flatten()
                             z[k] = z[k].squeeze().to(dtype=self.base_precision)
+
+                for k in keys:
+                    z[k] = z[k].to(device='cuda')
 
             # BNB 4bit
             elif self.bit4quant == True:
@@ -1062,7 +1181,7 @@ class RWKV_x(nn.Module):
             #         z[f'blocks.{i}.att.x_a'] = None
             #         z[f'blocks.{i}.att.x_g'] = None
             self.z = z
-            self.device = z['blocks.0.att.receptance.weight'].device
+            self.device = z['head.weight'].device
             self.dtype = z['emb.weight'].dtype
 
             self.dummytensor = torch.tensor(0).to(dtype=self.dtype,device=self.device)
@@ -1085,6 +1204,29 @@ class RWKV_x(nn.Module):
 
             if self.HRWKV_Generation == 79:
                 self.cos, self.sin, _ = compute_qwen3_rope_cache(self.max_ctxlen,self.head_size,self.device,torch.float32,self.rope_theta)
+                #
+                DummyCheckList = ['receptance.weight.qstate','key.weight.qstate','value.weight.qstate','output.weight.qstate',
+                             'receptance.bias','key.bias','value.bias','output.bias',
+                             'q_proj.weight.qstate','k_proj.weight.qstate','v_proj.weight.qstate','o_proj.weight.qstate',
+                             'q_proj.bias','k_proj.bias','v_proj.bias','o_proj.bias',
+                             'rkv_fused.weight.qstate','qkv_fused.weight.qstate',
+                                ]
+                DummyCheckList2 = ['gate.weight.qstate','down.weight.qstate','up.weight.qstate','gateup.weight.qstate'
+                                ]
+                NoneCheckList = ['ln_r.weight','ln_k.weight']
+                for i in range(self.n_layer):
+                    bbb = f'blocks.{i}.'
+                    att = f'blocks.{i}.att.'
+                    ffn = f'blocks.{i}.ffn.'
+
+                    for key in DummyCheckList:
+                        z[att+key] = z.get(att+key,self.dummytensor)
+                    for key in DummyCheckList2:
+                        z[ffn+key] = z.get(ffn+key,self.dummytensor)
+
+                    for key in NoneCheckList:
+                        z[att+key] = z.get(att+key,None)
+
 
 
     def new_state(self, B, max_token=4096):
