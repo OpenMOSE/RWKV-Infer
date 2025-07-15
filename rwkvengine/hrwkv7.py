@@ -53,8 +53,8 @@ from rwkvengine.matmulhell import fused_dequant_gemm
 torch.backends.cudnn.benchmark = True
 torch.backends.cudnn.allow_tf32 = True
 torch.backends.cuda.matmul.allow_tf32 = True
-# torch.backends.cuda.matmul.allow_fp16_reduced_precision_reduction = True
-# torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction = True
+torch.backends.cuda.matmul.allow_fp16_reduced_precision_reduction = True
+torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction = True
 torch._C._jit_set_autocast_mode(True)
 
 
@@ -82,7 +82,7 @@ def bnb_nf4_matmul(x,weight,weight_state):
         w = bnb.functional.dequantize_nf4(weight,quant_state=weight_state).to(torch.bfloat16)
         return x @ w.t()
 
-@torch.compile
+#@torch.compile
 def fp8_matmul(x,weight,weight_state):
     xg = x
     b = weight
@@ -130,7 +130,7 @@ def fp8_matmul(x,weight,weight_state):
         )
         return x.view(S0, S1, -1)
     
-@torch.compile()
+#@torch.compile()
 def fpx_matmul(x,weight,weight_state,ebits:int=3,mbits:int=2):
     if ebits == -4 and mbits == -4:
         return bnb_nf4_matmul(x,weight,weight_state)
@@ -161,7 +161,7 @@ def fpx_matmul(x,weight,weight_state,ebits:int=3,mbits:int=2):
             #return x @ weight.to(device=x.device).t()
         else:
             return x @ weight.t()
-@torch.compile
+#@torch.compile
 def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
     """
     Repeat KV heads along the head dimension (GQA).
@@ -175,7 +175,7 @@ def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
     hidden_states = hidden_states[:, :, :, None, :]  # (B, T, H_kv, 1, D)
     hidden_states = hidden_states.expand(B, T, H_kv, n_rep, D)  # (B, T, H_kv, n_rep, D)
     return hidden_states.reshape(B, T, H_kv * n_rep, D).contiguous()
-@torch.compile
+#@torch.compile
 def repeat_kv_original(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
     """
     This is the equivalent of torch.repeat_interleave(x, dim=1, repeats=n_rep). The hidden states go from (batch,
@@ -186,22 +186,14 @@ def repeat_kv_original(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
         return hidden_states
     hidden_states = hidden_states[:, :, None, :, :].expand(batch, num_key_value_heads, n_rep, slen, head_dim)
     return hidden_states.reshape(batch, num_key_value_heads * n_rep, slen, head_dim)
-@torch.compile
+#@torch.compile
 def T5RMSNorm(hidden_states,weight,variance_epsilon:float=1e-6):
     input_dtype = hidden_states.dtype
     hidden_states = hidden_states.to(torch.float32)
     variance = hidden_states.pow(2).mean(-1, keepdim=True)
     hidden_states = hidden_states * torch.rsqrt(variance + variance_epsilon)
     return (weight * hidden_states).to(input_dtype)
-import triton
-import triton.language as tl
-@torch.compile
-def fused_2gemm(xx, a0, a1, a2):
-    # 第一段階：xx @ a1
-    tmp = xx @ a1               # [B,T,H2] --- ここがメモリ食うから注意
-    # 第二段階：tmp @ a2 + a0
-    out = F.linear(tmp, a2.t(), a0)
-    return out
+ 
 
 def get_batch_rope_cache(cos_cache, sin_cache, batch_pos, seq_len):
     """
@@ -410,18 +402,7 @@ def apply_rotary_pos_emb(q, k, cos, sin, position_ids=None, unsqueeze_dim=1):
     return q_embed, k_embed
 
 
-@torch.compile  # PyTorch 2.0 の最適化コンパイル
-def fast_block(xx, w0, w1, w2):
-    # 1) xx @ w1 → [B, T, H2]
-    t = xx.matmul(w1)
-    # 2) in-place tanh
-    t.tanh_()
-    # 3) fused matmul + bias: F.linear は内部で (t @ w2.T + w0) を一発で実行
-    out = F.linear(t, w2.t(), w0)   # → [B, T, O]
-    # 4) in-place negation
-    #out.neg_()
-    return out
-
+ 
 
 
 def sdpa_attention_forward(
@@ -482,7 +463,7 @@ def sdpa_attention_forward(
 
 
 class HRWKV_7(nn.Module):
-    @torch.compile
+    #@torch.compile
     def hxa079_TimeMix(layer_id: int, H: int, N: int,
                         x_in, x_prev, v_first,k_first,state,cache_position,
                         calc_cos,calc_sin,
@@ -507,85 +488,58 @@ class HRWKV_7(nn.Module):
                         ):
         
         x = T5RMSNorm(x_in,ln1,variance_epsilon=rmsnorm_epsilon)
+        xw,xa,xv,xg,xk = (x @ wavgk1).split(wavgk_split_list, dim=-1)
 
         B, T, HN = x.shape
 
-        
-
-        # r = fpx_matmul(x, R_, R_state, ebits, mbits).add_(R_bias)
-        # k = fpx_matmul(x, K_, K_state, ebits, mbits).add_(K_bias)
-        # v = fpx_matmul(x, V_, V_state, ebits, mbits).add_(V_bias)
-
         rkv = fpx_matmul(x, RKV_,RKV_state, ebits, mbits)
         r,k,v = rkv.split(rkv_split_list,dim=-1)
-
-        xw,xa,xv,xg,xk = (x @ wavgk1).split(wavgk_split_list, dim=-1)
-
-
-        r = r.add_(R_bias)
-        k = k.add_(K_bias)
-        v = v.add_(V_bias)
 
         kv_dim = k.shape[2] # B,T,kv_dim
         kv_repeat = HN // kv_dim
         kv_per_head = kv_dim // N
 
+        r = r.add_(R_bias)
+        k = k.add_(K_bias).view(B, T, kv_per_head, N)
+        v = v.add_(V_bias).view(B, T, kv_per_head, N)
+
         if ln_r == None:
             r = r.view(B,T,H,N)
-            k = k.view(B,T,kv_per_head,N)
+            k = k
         else:
             r = T5RMSNorm(r.view(B,T,H,N), ln_r, variance_epsilon=rmsnorm_epsilon)
-            k = T5RMSNorm(k.view(B,T,kv_per_head,N), ln_k, variance_epsilon=rmsnorm_epsilon)
+            k = T5RMSNorm(k, ln_k, variance_epsilon=rmsnorm_epsilon)
 
         # Rotary embedding
-        #cos, sin, _ = compute_rope_cache_range(cache_position, T, N, k.device, torch.float32, rope_theta)
         cos, sin = calc_cos.to(k.dtype), calc_sin.to(k.dtype)
         r, k = apply_rotary_pos_emb(r, k, cos, sin,unsqueeze_dim=2)
-
-
-        k = k.view(B, T, kv_per_head, N)
-        v = v.view(B, T, kv_per_head, N)
 
         if layer_id == 0:
             v_first = v
             k_first = k 
         else:
-            #tmp = x @ v1
-            tmp = F.linear(xv, v2.t(), v0)
-            gate = torch.sigmoid(tmp).view(B, T, kv_per_head, N)
-            v = v + (v_first - v) * gate
+            # gate = torch.sigmoid(xv@v2 + v0).view(B, T, kv_per_head, N)
+            # v = v + (v_first - v) * gate
+            # gate2 = torch.sigmoid(xk@k2 + k0).view(B, T, kv_per_head, N)
+            # k = k + (k_first - k) * gate2
+            v = v + (v_first - v) * torch.sigmoid(xv@v2 + v0).view(B, T, kv_per_head, N)
+            k = k + (k_first - k) * torch.sigmoid(xk@k2 + k0).view(B, T, kv_per_head, N)
 
-            #tmp2 = x @ k1
-            tmp2 = F.linear(xk, k2.t(), k0)
-            gate2 = torch.sigmoid(tmp2).view(B, T, kv_per_head, N)
-            k = k + (k_first - k) * gate2
+ 
 
-        #tmp = x @ w1             # → [B, T, H2]
-        tmp = torch.tanh(xw)
-        w = F.linear(tmp, w2.t(), w0)  # → [B, T, O]
-        w = -F.softplus(-w) - 0.5
+        k = repeat_kv(k, kv_repeat).view(B, T, -1)
+        v = repeat_kv(v, kv_repeat).view(B, T, -1)
 
+  
+        a = torch.sigmoid(xa @ a2 + a0)
         
-
-        k = repeat_kv(k, kv_repeat)
-        v = repeat_kv(v, kv_repeat)
-
-        k = k.view(B, T, -1)
-        v = v.view(B, T, -1)
-
-        #tmp = x @ a1
-        tmp = F.linear(xa, a2.t(), a0)
-        a = torch.sigmoid(tmp)
-        g = torch.sigmoid(xg) @ g2
-
         kk = F.normalize(k.view(B, T, H, N), p=2.0, dim=-1).view(B, T, H*N)
+        w = torch.tanh(xw) @ w2 + w0
+        w = -F.softplus(-w) - 0.5
         k = k * (1.0 - w + a)
 
         aa = -kk
         bb = kk * a
-
-        
-
 
         w = -w.to(dtype=torch.float32).exp()
         r_,w_,k_,v_,aa_,bb_ = [i.view(B,T,H,N) for i in [r,w,k,v,aa,bb]]
@@ -593,248 +547,17 @@ class HRWKV_7(nn.Module):
         xx, state = fused_recurrent_rwkv7(r_, w_, k_, v_, aa_, bb_, scale=1.0, initial_state=state, output_final_state=True, head_first=False)
 
         
-        xx = xx.view(B,T,-1)
-        xx = xx * (float(N) ** -0.5)
+        xx = xx.view(B,T,-1) * (float(N) ** -0.5)
 
         xx = xx.to(dtype=r.dtype) + ((r.view(B,T,H,N)*k.view(B,T,H,N)*r_k.view(H,N)).sum(dim=-1, keepdim=True) * v.view(B,T,H,N)).view(B,T,HN)
-        output = fpx_matmul((xx * g), O_, O_state,ebits,mbits)
+
+        output = fpx_matmul((xx * (torch.sigmoid(xg) @ g2)), O_, O_state,ebits,mbits)
 
         x_in = x_in + output
         output = T5RMSNorm(x_in,ln2,variance_epsilon=rmsnorm_epsilon)
 
         return  output, x[:,-1], state, v_first, k_first, x_in
-    
-    
-    # @torch.compile
-    # def GQA_Attention_old(layer_id: int, gqa_layer_id: int, H: int, N: int,
-    #               x_in, past_key_value, cache_position,
-    #               calc_cos,calc_sin,
-    #               Q_, K_, V_, O_,
-    #               Q_state, K_state, V_state, O_state,
-    #               Q_bias, K_bias, V_bias, O_bias,
-    #               ln_r, ln_k, rmsnorm_epsilon: float,
-    #               ln1, ln2, rope_theta,
-    #               ebits: int, mbits: int):
 
-    #     B, T, C = x_in.size()
-    #     x = T5RMSNorm(x_in, ln1, rmsnorm_epsilon)
-
-    #     HN = H * N
-    #     #kv_dim = K_.shape[0] if K_.dtype != torch.int8 else K_.shape[1]
-    #     # kv_per_head = kv_dim // N
-    #     # kv_repeat = HN // kv_dim
-    #     # kv_cache_size = past_key_value.shape[2]
-
-    #     # Projections
-    #     q = fpx_matmul(x, Q_, Q_state, ebits, mbits).add_(Q_bias).view(B, T, H, N)
-    #     k = fpx_matmul(x, K_, K_state, ebits, mbits).add_(K_bias)
-    #     v = fpx_matmul(x, V_, V_state, ebits, mbits).add_(V_bias)
-
-    #     kv_dim = k.shape[2] # B,T,kv_dim
-    #     kv_per_head = kv_dim // N
-    #     kv_repeat = HN // kv_dim
-    #     kv_cache_size = past_key_value.shape[2]
-
-    #     #print(F'GQA VIEW KV')
-
-    #     k = k.view(B, T, kv_per_head, N)
-    #     v = v.view(B, T, kv_per_head, N)
-
-    #     #print(F'GQA VIEW end')
-
-
-    #     if ln_r is not None:
-    #         q = T5RMSNorm(q, ln_r, rmsnorm_epsilon)
-    #         k = T5RMSNorm(k, ln_k, rmsnorm_epsilon)
-
-    #     # Rotary embedding
-    #     #cos, sin, _ = compute_rope_cache_range(cache_position, T, N, k.device, torch.float32, rope_theta)
-    #     cos, sin = calc_cos.to(k.dtype), calc_sin.to(k.dtype)
-    #     #q, k = apply_rotary_pos_emb(q, k, cos, sin, unsqueeze_dim=2)
-
-    #     # === KV write準備 ===
-    #     k_write = k.view(B, T, kv_per_head * N)
-    #     v_write = v.view(B, T, kv_per_head * N)
-
-    #     for b in range(B):
-    #         start = cache_position[b, 0].item()
-    #         end = start + T
-
-    #         # if end > kv_cache_size:
-    #         #     # 溢れる分だけ左詰め（truncate）
-    #         #     shift = end - kv_cache_size
-    #         #     past_key_value[gqa_layer_id, b, :-shift] = past_key_value[gqa_layer_id, b, shift:].clone()
-    #         #     start -= shift
-    #         #     end = start + T
-    #         #     #cache_position[b, 0] = kv_cache_size
-
-    #         #print(f'start {start} end {end} k_write[b] {k_write[b].shape}')
-
-    #         # 連続領域に安全にcopy_
-    #         past_key_value[gqa_layer_id, b, start:end, 0].copy_(k_write[b])
-    #         past_key_value[gqa_layer_id, b, start:end, 1].copy_(v_write[b])
-    #         #cache_position[b, 0] = end
-
-    #     # === 読み出し ===
-    #     max_seq_len = cache_position.max().item()
-    #     k_all = past_key_value[gqa_layer_id, :, :max_seq_len, 0].view(B, max_seq_len, kv_per_head, N).transpose(1, 2).contiguous()
-    #     v_all = past_key_value[gqa_layer_id, :, :max_seq_len, 1].view(B, max_seq_len, kv_per_head, N).transpose(1, 2).contiguous()
-
-    #     k = repeat_kv_original(k_all, kv_repeat)
-    #     v = repeat_kv_original(v_all, kv_repeat)
-
-    #     # Attention mask
-    #     S = k.shape[2]
-    #     attn_mask = torch.full((B, 1, T, S), float('-inf'), dtype=q.dtype, device=q.device)
-    #     for b in range(B):
-    #         valid_len = cache_position[b, 0].item()
-    #         attn_mask[b, 0, :, :valid_len] = 0.0
-
-    #     attn_output = F.scaled_dot_product_attention(q.transpose(1, 2), k, v, attn_mask, is_causal=False)
-    #     attn_output = attn_output.transpose(1, 2).contiguous().view(B, T, H * N)
-
-    #     out = fpx_matmul(attn_output, O_, O_state, ebits, mbits)
-    #     x_out = x_in + out
-
-    #     return T5RMSNorm(x_out, ln2, rmsnorm_epsilon), x_out, past_key_value
-    #@torch.compile
-    def GQA_Attention(layer_id: int, gqa_layer_id: int, H: int, N: int,
-              x_in, past_key_value, cache_position,
-              calc_cos, calc_sin,
-              #Q_, K_, V_,
-              QKV_,qkv_split_list,
-              O_,
-              #Q_state, K_state, V_state,
-              QKV_state,
-              O_state,
-              Q_bias, K_bias, V_bias, O_bias,
-              ln_r, ln_k, rmsnorm_epsilon: float,
-              ln1, ln2, rope_theta,
-              ebits: int, mbits: int):
-
-        B, T, C = x_in.size()
-        x = T5RMSNorm(x_in, ln1, rmsnorm_epsilon)
-
-        HN = H * N
-
-        # Projections
-        # q = fpx_matmul(x, Q_, Q_state, ebits, mbits).add_(Q_bias).view(B, T, H, N)
-        # k = fpx_matmul(x, K_, K_state, ebits, mbits).add_(K_bias)
-        # v = fpx_matmul(x, V_, V_state, ebits, mbits).add_(V_bias)
-        qkv = fpx_matmul(x, QKV_,QKV_state, ebits, mbits)
-        q,k,v = qkv.split(qkv_split_list,dim=-1)
-
-        print(f'q = {q.shape} k = {k.shape} v = {v.shape}')
-
-        q = q.add_(Q_bias).view(B, T, H, N)
-        k = k.add_(K_bias)
-        v = v.add_(V_bias)
-
-        kv_dim = k.shape[2]  # B,T,kv_dim
-        kv_per_head = kv_dim // N
-        kv_repeat = HN // kv_dim
-
-        k = k.view(B, T, kv_per_head, N)
-        v = v.view(B, T, kv_per_head, N)
-
-        if ln_r is not None:
-            q = T5RMSNorm(q, ln_r, rmsnorm_epsilon)
-            k = T5RMSNorm(k, ln_k, rmsnorm_epsilon)
-
-        # Rotary embedding (if needed)
-        cos, sin = calc_cos.to(k.dtype), calc_sin.to(k.dtype)
-        # q, k = apply_rotary_pos_emb(q, k, cos, sin, unsqueeze_dim=2)
-
-        # === Optimized KV Cache Write ===
-        # Detect cache layout more reliably
-        cache_shape = past_key_value.shape
-        
-        # Check if dimension 3 is 2 (old layout) or dimension 2 is 2 (new layout)
-        # Old: [layer, B, seq, 2, dim] -> shape[3] == 2
-        # New: [layer, B, 2, seq, dim] -> shape[2] == 2 and shape[3] != 2
-        is_new_layout = (cache_shape[2] == 2) and (cache_shape[3] != 2)
-        
-        k_write = k.view(B, T, -1)
-        v_write = v.view(B, T, -1)
-        starts = cache_position[:, 0]
-        
-        if is_new_layout:
-            # New optimized layout: [layer, B, 2, seq, dim]
-            if B == 1 or (starts == starts[0]).all():
-                start = starts[0].int()
-                end = start + T
-                past_key_value[gqa_layer_id, :, 0, start:end] = k_write
-                past_key_value[gqa_layer_id, :, 1, start:end] = v_write
-            else:
-                batch_idx = torch.arange(B, device=k.device)[:, None]
-                seq_idx = starts[:, None] + torch.arange(T, device=k.device)
-                past_key_value[gqa_layer_id, batch_idx, 0, seq_idx] = k_write
-                past_key_value[gqa_layer_id, batch_idx, 1, seq_idx] = v_write
-                
-            # Optimized read
-            max_seq_len = cache_position.max().int()
-            k_cache = past_key_value[gqa_layer_id, :, 0, :max_seq_len]
-            v_cache = past_key_value[gqa_layer_id, :, 1, :max_seq_len]
-            
-        else:
-            # Old layout: [layer, B, seq, 2, dim]
-            if B == 1 or (starts == starts[0]).all():
-                start = starts[0].int()
-                end = start + T
-                past_key_value[gqa_layer_id, :, start:end, 0] = k_write
-                past_key_value[gqa_layer_id, :, start:end, 1] = v_write
-            else:
-                # For old layout with different positions, use loop (compile will optimize)
-                for b in range(B):
-                    start = cache_position[b, 0].int()
-                    end = start + T
-                    past_key_value[gqa_layer_id, b, start:end, 0] = k_write[b]
-                    past_key_value[gqa_layer_id, b, start:end, 1] = v_write[b]
-                    
-            # Read with old layout
-            max_seq_len = cache_position.max().int()
-            k_cache = past_key_value[gqa_layer_id, :, :max_seq_len, 0]
-            v_cache = past_key_value[gqa_layer_id, :, :max_seq_len, 1]
-
-        # === Common reshape logic ===
-        kv_heads = kv_dim // N
-        k_all = k_cache.view(B, -1, kv_heads, N).transpose(1, 2)
-        v_all = v_cache.view(B, -1, kv_heads, N).transpose(1, 2)
-
-        # Repeat KV if needed (GQA)
-        if kv_repeat > 1:
-            k = repeat_kv_original(k_all, kv_repeat)
-            v = repeat_kv_original(v_all, kv_repeat)
-        else:
-            k = k_all
-            v = v_all
-
-        # === Optimized Attention Mask ===
-        S = k.shape[2]
-        
-        # Create mask using broadcasting instead of loops
-        seq_indices = torch.arange(S, device=q.device, dtype=torch.int32)
-        valid_lens = cache_position[:, 0].unsqueeze(1).unsqueeze(2)  # B, 1, 1
-        
-        # Create mask: True where seq_indices < valid_lens
-        mask = seq_indices.unsqueeze(0).unsqueeze(1) < valid_lens  # B, 1, S
-        mask = mask.unsqueeze(2).expand(B, 1, T, S)  # B, 1, T, S
-        
-        # Convert to attention mask values
-        attn_mask = torch.where(mask, 0.0, float('-inf')).to(q.dtype)
-
-        # Compute attention
-        attn_output = F.scaled_dot_product_attention(
-            q.transpose(1, 2), k, v, attn_mask, is_causal=False
-        )
-        attn_output = attn_output.transpose(1, 2).contiguous().view(B, T, HN)
-
-        # Output projection
-        out = fpx_matmul(attn_output, O_, O_state, ebits, mbits)
-        x_out = x_in + out
-
-        return T5RMSNorm(x_out, ln2, rmsnorm_epsilon), x_out, past_key_value
-    @torch.compile
     def GQA_Attention_Nested(layer_id: int, gqa_layer_id: int, H: int, N: int,
                         x_in, past_key_value, cache_position,
                         calc_cos, calc_sin,
@@ -854,14 +577,9 @@ class HRWKV_7(nn.Module):
 
         HN = H * N
 
-        # Projections
-        # q = fpx_matmul(x, Q_, Q_state, ebits, mbits).add_(Q_bias).view(B, T, H, N)
-        # k = fpx_matmul(x, K_, K_state, ebits, mbits).add_(K_bias)
-        # v = fpx_matmul(x, V_, V_state, ebits, mbits).add_(V_bias)
+
         qkv = fpx_matmul(x, QKV_,QKV_state, ebits, mbits)
         q,k,v = qkv.split(qkv_split_list,dim=-1)
-
-        #print(f'q = {q.shape} k = {k.shape} v = {v.shape}')
 
         q = q.add_(Q_bias).view(B, T, H, N)
         k = k.add_(K_bias)
@@ -878,14 +596,8 @@ class HRWKV_7(nn.Module):
             q = T5RMSNorm(q, ln_r, rmsnorm_epsilon)
             k = T5RMSNorm(k, ln_k, rmsnorm_epsilon)
 
-        # Rotary embedding (if needed)
-        cos, sin = calc_cos.to(k.dtype), calc_sin.to(k.dtype)
-        # q, k = apply_rotary_pos_emb(q, k, cos, sin, unsqueeze_dim=2)
 
-        # === Optimized KV Cache Write (same as before) ===
         cache_shape = past_key_value.shape
-        #print(f'cache shape = {cache_shape}')
-        is_new_layout = (cache_shape[2] == 2) and (cache_shape[3] != 2)
         
         k_write = k.view(B, T, -1)
         v_write = v.view(B, T, -1)
@@ -902,20 +614,7 @@ class HRWKV_7(nn.Module):
             seq_idx = starts[:, None] + torch.arange(T, device=k.device)
             past_key_value[gqa_layer_id, batch_idx, 0, seq_idx] = k_write
             past_key_value[gqa_layer_id, batch_idx, 1, seq_idx] = v_write
-        # else:
-        #     if B == 1 or (starts == starts[0]).all():
-        #         start = starts[0].int()
-        #         end = start + T
-        #         past_key_value[gqa_layer_id, :, start:end, 0] = k_write
-        #         past_key_value[gqa_layer_id, :, start:end, 1] = v_write
-        #     else:
-        #         for b in range(B):
-        #             start = cache_position[b, 0].int()
-        #             end = start + T
-        #             past_key_value[gqa_layer_id, b, start:end, 0] = k_write[b]
-        #             past_key_value[gqa_layer_id, b, start:end, 1] = v_write[b]
-
-        # === Create Nested Tensors for valid KV only ===
+  
         kv_heads = kv_dim // N
         
         # Get valid lengths for each batch item
@@ -1034,7 +733,7 @@ class HRWKV_7(nn.Module):
     #     xx = fpx_matmul(step1,down_,down_state,ebits,mbits)
     #     x_in = x_in + xx
     #     return xx, x_in
-    @torch.compile
+    #@torch.compile
     def SwiGLU_MLP_forward_fpx_w_add(x,
                                     gateup_,gateup_split_list,
                                     down_,
@@ -1049,14 +748,12 @@ class HRWKV_7(nn.Module):
 
 
     #@torch.compile
-    @torch.compile
+    @torch.compile()
     def hxa079r_forward(self, idx, 
                 last_wkv_states: List[torch.Tensor], kv_cache,pos_cache,  full_output:bool=False):
         
         with torch.no_grad(): 
             z = self.z
-
-            t0 = time.perf_counter()
 
             if self.emboncpu:
                 x = z['emb.weight'][idx.cpu()].to(device=self.device,dtype=self.dtype)
@@ -1068,12 +765,9 @@ class HRWKV_7(nn.Module):
             v_first = torch.empty_like(x)
             k_first = torch.empty_like(x)
 
-            cache_pos = pos_cache#[i]
-            #print(f'before = {cache_pos}')
+            cache_pos = pos_cache
 
             B, T, C = x.shape
-
-            #cos,sin,_ = compute_qwen3_rope_cache(self.max_ctxlen,self.head_size,self.device,torch.float32,self.rope_theta)
 
             calc_cos, calc_sin = get_batch_rope_cache(self.cos, self.sin, cache_pos, T)
 
@@ -1085,29 +779,26 @@ class HRWKV_7(nn.Module):
                 rk_normmode = True
 
 
-            #t1 = time.perf_counter()
-
-
             RWKV = 0.0
             GQA = 0.0
+            MLP = 0.0
 
             RWKVBlockCount = 0    
-            GQABlockCount = 0       
+            GQABlockCount = 0     
+            MLPBlockCount = 0  
 
             for i in range(self.n_layer):
                 bbb = f'blocks.{i}.'
                 att = f'blocks.{i}.att.'
                 ffn = f'blocks.{i}.ffn.'
 
-                time_mix_shift = dummytensor#last_shift_states[i*2]
-                channel_mix_state = dummytensor#last_shift_states[i*2+1]
+                time_mix_shift = dummytensor
+                channel_mix_state = dummytensor
 
 
                 if self.HRWKV_Block_Mode[i][0] == 0:
                     time_mix_state = last_wkv_states[self.HRWKV_Block_Mode[i][2]]
-                    RWKVBlockCount = RWKVBlockCount + 1
-                    #print('rwkv')
-                    #t2 = time.perf_counter()
+
                     xx, time_mix_shift, time_mix_state, v_first,k_first, x = HRWKV_7.hxa079_TimeMix(self.HRWKV_Block_Mode[i][2], self.n_head, self.head_size, x, time_mix_shift, v_first,k_first, time_mix_state,cache_pos,
                                                                         calc_cos,calc_sin,
                                                                         # z[att+'x_r'], z[att+'x_w'], z[att+'x_k'], z[att+'x_v'], z[att+'x_a'], z[att+'x_g'],
@@ -1130,12 +821,9 @@ class HRWKV_7(nn.Module):
                                                                         self.ebits,self.mbits
                                                                         )
                     last_wkv_states[self.HRWKV_Block_Mode[i][2]] = time_mix_state
-                    #t3 = time.perf_counter()
-                    #RWKV+=t3-t2
+
                 else:
-                    #print('gqa')
-                    GQABlockCount = GQABlockCount + 1
-                    #t2 = time.perf_counter()
+
                     xx, x, kv_cache= HRWKV_7.GQA_Attention_Nested(i,self.HRWKV_Block_Mode[i][2],self.n_head,self.head_size,x,kv_cache,cache_pos,
                                                                         calc_cos,calc_sin,
                                                                         #z[att+'q_proj.weight'], z[att+'k_proj.weight'], z[att+'v_proj.weight'],
@@ -1148,8 +836,6 @@ class HRWKV_7(nn.Module):
                                                                         z[att+'ln_r.weight'],z[att+'ln_k.weight'],self.rms_norm_eps,
                                                                         z[bbb+'ln1.weight'],z[bbb+'ln2.weight'],self.rope_theta,
                                                                         self.ebits,self.mbits )
-                    #t3 = time.perf_counter()
-                    #GQA +=t3-t2
 
 
                 xx,x = HRWKV_7.SwiGLU_MLP_forward_fpx_w_add(xx,
@@ -1161,40 +847,12 @@ class HRWKV_7(nn.Module):
                                                             self.ebits,self.mbits,
                                                             x
                                                             )
-      
 
-                #x = x + xx
-
-                #last_shift_states[i*2] = time_mix_shift
-                #last_shift_states[i*2+1] = channel_mix_state
-
-
-            #GQA = GQA / ( 1 ) * 1000
-
-           #RWKV = RWKV / (1 ) * 1000
-
-            #init = (t1 - t0) * 1000
-
-
-            #t4 = time.perf_counter()
-
-
-            
-                
-                
-
-       
 
             x = T5RMSNorm(x,z['ln_out.weight'],variance_epsilon=self.rms_norm_eps)
             x = fpx_matmul(x , z['head.weight'],z.get('head.weight.qstate',None),self.ebits,self.mbits)
             if not full_output: x = x[:, -1, :]  # 最後のタイムステップだけを選択し、バッチ次元を保持
             pos_cache += T
 
-
-            # t5 = time.perf_counter()
-
-            # post = (t5-t4) * 1000
-            # total = (t5-t0) * 1000 
-            #print(f'idx {idx.shape} RWKV = {RWKV}ms GQA = {GQA}ms init = {init}ms post = {post}ms  total = {total}')
             return x, None, last_wkv_states, kv_cache, pos_cache
 

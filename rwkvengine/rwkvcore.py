@@ -26,19 +26,19 @@ except ImportError:
     print('Bitsandbytes not found')
     HAS_BITSANDBYTES = False
     bnb = None
-# from hqq.core.quantize import BaseQuantizeConfig, HQQLinear
-# from gemlite.core import GemLiteLinearTriton, DType, TORCH_TO_DTYPE
-# try:
-#     from hqq.core.quantize import BaseQuantizeConfig, HQQLinear
-#     from gemlite.core import GemLiteLinearTriton, DType, TORCH_TO_DTYPE
-#     HAS_HQQ = True
-# except ImportError:
-#     print('hqq not found')
-#     HAS_HQQ = False
-#     HQQLinear = None
+from hqq.core.quantize import BaseQuantizeConfig, HQQLinear
+from gemlite.core import GemLiteLinearTriton, DType, TORCH_TO_DTYPE
+try:
+    from hqq.core.quantize import BaseQuantizeConfig, HQQLinear
+    from gemlite.core import GemLiteLinearTriton, DType, TORCH_TO_DTYPE
+    HAS_HQQ = True
+except ImportError:
+    print('hqq not found')
+    HAS_HQQ = False
+    HQQLinear = None
 
-HAS_HQQ = False
-HQQLinear = None
+#HAS_HQQ = False
+#HQQLinear = None
 
 def Attach_Adapter(keyname,weight,adapter,mode,scaling=2.0,device='cuda'): #from JL-er lora merge inspired
                 

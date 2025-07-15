@@ -24,9 +24,12 @@ if __name__ == '__main__':
 
 
     model = RWKV_x('/home/client/Projects/llm/HRWKV7-hxa079-qwen3-14b-stage2-e1.pth','int8',
-                   adapter_model='/home/client/Projects/llm/rwkv-4.pth',
-                   adapter_mode='lora',
-                   fully_fusedrecurrent=args.fully_fused)
+                   adapter_model='',
+                   adapter_mode='',
+                   fully_fusedrecurrent=args.fully_fused,
+                   rope_theta=1000000.0,
+                   rms_norm_eps=1e-5                   
+                   )
 
     Target_batch = args.tb
     target_temp = 1.0
@@ -51,8 +54,10 @@ if __name__ == '__main__':
 
         context = pipeline.generate_prompt_from_config(pipeline.modeltemplate,messages,True)
 
-        States = model.new_state(Target_batch,16384)#state_empty(32, 1, 2560, 2560 // 32)
-        States2 = model.new_state(Target_batch,16384)#state_empty(32, 1, 2560, 2560 // 32)
+        #context = context + "<reasoning>\n\n</reasoning>\n"
+
+        States = model.new_state(Target_batch,8192)#state_empty(32, 1, 2560, 2560 // 32)
+        States2 = model.new_state(Target_batch,8192)#state_empty(32, 1, 2560, 2560 // 32)
 
         
 
@@ -195,7 +200,7 @@ if __name__ == '__main__':
         min_time_all = 1e10
         min_time_all_single = 1e10
 
-        maxtoken= 120
+        maxtoken= 500
 
         temperature = torch.full((Target_batch,), float(target_temp))
         top_p = torch.full((Target_batch,), float(target_topp))
@@ -257,7 +262,7 @@ if __name__ == '__main__':
             for j in range(Target_batch):
                 out_tokens[j] += [otokens[j]]
                 try:
-                    print('(TRY)')
+                    #print('(TRY)')
                     tmp = pipeline.decode(out_tokens[j][out_last[j]:])
                     if ("\ufffd" not in tmp) and (not tmp.endswith("\n")):
                             #if j == Target_batch - 1:
