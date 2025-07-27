@@ -4,9 +4,12 @@ fastapi
 starlette
 uvicorn
 numpy
-triton==3.1.0
+triton
 bitsandbytes
 einops
 transformers
-torchao==0.6.1
+torchao
 safetensors
+rwkv-fla
+hqq
+gemlite
