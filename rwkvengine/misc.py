@@ -660,8 +660,8 @@ class BlockStateList:
         result.shift_states[:] = 0
         return result
     
-    def hx078_create(N,GQA_N, B, n_embd,n_kv,head_size,max_len,device, dtype):
-        result = BlockStateList.hx078_empty(N,GQA_N, B, n_embd,n_kv,head_size,max_len,device, dtype)
+    def hx078_create(N,GQA_N, B, n_attn,n_kv,head_size,max_len,device, dtype):
+        result = BlockStateList.hx078_empty(N,GQA_N, B, n_attn,n_kv,head_size,max_len,device, dtype)
         result.wkv_states[:] = 0
         result.shift_states[:] = 0
         result.kv_cache[:] = 0
@@ -685,11 +685,11 @@ class BlockStateList:
         return BlockStateList(shift_states, wkv_states)
     
     @staticmethod
-    def hx078_empty(N,GQA_N, B, n_embd,n_kv,head_size,max_len,device, dtype):
-        wkv_states = torch.zeros((N, B, n_embd // head_size, head_size, head_size),
+    def hx078_empty(N,GQA_N, B, n_attn,n_kv,head_size,max_len,device, dtype):
+        wkv_states = torch.zeros((N, B, n_attn, head_size, head_size),
                                  device=device,
                                  dtype=dtype) 
-        shift_states = torch.zeros((N*2,B,1,n_embd), device=device, dtype=dtype)
+        shift_states = torch.zeros((N*2,B,1,n_attn*head_size), device=device, dtype=dtype)
 
         kv_cache = torch.zeros((GQA_N,B,2,max_len,head_size*n_kv), device=device, dtype=dtype)
         #kv_cache = torch.zeros((GQA_N,B,max_len,2,head_size*n_kv), device=device, dtype=dtype)

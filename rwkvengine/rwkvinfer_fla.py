@@ -240,14 +240,15 @@ class LLMWorker:
         gc.collect()
         torch.cuda.empty_cache()
         self.model = RWKV_x(modelpath,base_precision=precision,adapter_model=adapter_model,adapter_mode=adapter_mode,adapter_scale=adapter_scale,fully_fusedrecurrent=fully_fusedrecurrent,rope_theta=rope_theta,rms_norm_eps=rms_norm_eps,max_ctxlen=max_ctxlen)
-        
-        if self.model.ARWKVMode:
-            self.pipeline = PIPELINE(template_mode)
-            self.templatemode = template_mode
+        self.pipeline = PIPELINE(template_mode)
+        self.templatemode = template_mode
+        # if self.model.ARWKVMode:
+        #     self.pipeline = PIPELINE(template_mode)
+        #     self.templatemode = template_mode
             
-        else:
-            self.pipeline = PIPELINE('world')
-            self.templatemode = 'world'
+        # else:
+        #     self.pipeline = PIPELINE('world')
+        #     self.templatemode = 'world'
         
         
         gc.collect()
@@ -603,12 +604,8 @@ class LLMWorker:
 
 
 
-                        if self.model.RWKVMode == 6:
-                            shift_states = self.States.shift_states.permute(1, 0, 2, 3)
-                            wkv_states = self.States.wkv_states.permute(1, 0, 2, 3, 4)
-                        elif self.model.RWKVMode == 7:
-                            shift_states = self.States.shift_states.permute(1, 0, 2, 3)
-                            wkv_states = self.States.wkv_states.permute(1, 0, 2, 3, 4)
+                        shift_states = self.States.shift_states.permute(1, 0, 2, 3)
+                        wkv_states = self.States.wkv_states.permute(1, 0, 2, 3, 4)
 
                         if self.model.HRWKV_Mode == 1:
                             #Hybrid Mode
@@ -762,67 +759,127 @@ class LLMWorker:
                     #prompts = []
                     if self.time_debug:
                         start_time = time.time()
-                    token = []
-                    token_ids = [] 
-                    b_wkv_states = []
-                    b_shift_states = []
-                    b_kv_cache = []
-                    b_pos_cache = []
+                    # token = []
+                    # token_ids = [] 
+                    # b_wkv_states = []
+                    # b_shift_states = []
+                    # b_kv_cache = []
+                    # b_pos_cache = []
 
 
 
-                    current_prob = []
-                    temperature = []
-                    top_p = []
-                    outputs = []
-                    out_tokens = []
-                    out_last = []
-                    max_tokens = []
-                    statuss = []
-                    end_token = []
-                    occurrence = []
-                    counts = []
-                    mrss_info = []
+                    # current_prob = []
+                    # temperature = []
+                    # top_p = []
+                    # outputs = []
+                    # out_tokens = []
+                    # out_last = []
+                    # max_tokens = []
+                    # statuss = []
+                    # end_token = []
+                    # occurrence = []
+                    # counts = []
+                    # mrss_info = []
 
-                    start_times = []
-                    end_times = []
+                    # start_times = []
+                    # end_times = []
 
                 
+
+                    # # フィルタリング条件
+                    # valid_works = [work for work in self.llM_current_batch_info[:self.llm_max_batch_count]
+                    #             if work['proceedtokens'] >= len(work['prompt']) and work['slotstatus'] == 'processing']
+                    
+                    # #print(valid_works)
+
+                    # # リスト内包表記を使用してデータを抽出
+                    # token = [work['currenttoken'] for work in valid_works]
+                    # token_ids = [work['prompt_id'] for work in valid_works]
+                    # b_wkv_states = [work['wkv_states'] for work in valid_works]
+                    # b_wkv_states_offset = [work['wkv_states_offset'] for work in valid_works]
+                    # b_shift_states = [work['shift_states'] for work in valid_works]
+
+                    # b_kv_cache = [work['kv_cache'] for work in valid_works]
+                    # b_pos_cache = [work['pos_cache'] for work in valid_works]
+
+                    # current_prob = [work['current_prob'] for work in valid_works]
+                    # temperature = [torch.Tensor([float(work['temperature'])]) for work in valid_works]
+                    # top_p = [torch.Tensor([float(work['top_p'])]) for work in valid_works]
+                    # outputs = [work['output'] for work in valid_works]
+                    # out_tokens = [work['out_tokens'] for work in valid_works]
+                    # out_last = [work['out_last'] for work in valid_works]
+                    # max_tokens = [work['max_tokens'] for work in valid_works]
+                    # statuss = [work['slotstatus'] for work in valid_works]
+                    # end_token = [work['end_token'] for work in valid_works]
+                    # occurrence = [work['occurrence'] for work in valid_works]
+                    # counts = [work['count'] for work in valid_works]
+                    # start_times = [work['start_time'] for work in valid_works]
+                    # end_times = [work['end_time'] for work in valid_works]
+                    # mrss_info = [{'use_contain_originalstate': work['use_contain_originalstate'],
+                    #             'use_mrss': work['use_mrss'],
+                    #             'mrss_gating_param': work['mrss_gating_param'],
+                    #             'mrss_state_count': work['mrss_state_count']}
+                    #             for work in valid_works]
+
 
                     # フィルタリング条件
                     valid_works = [work for work in self.llM_current_batch_info[:self.llm_max_batch_count]
                                 if work['proceedtokens'] >= len(work['prompt']) and work['slotstatus'] == 'processing']
-                    
-                    #print(valid_works)
 
-                    # リスト内包表記を使用してデータを抽出
-                    token = [work['currenttoken'] for work in valid_works]
-                    token_ids = [work['prompt_id'] for work in valid_works]
-                    b_wkv_states = [work['wkv_states'] for work in valid_works]
-                    b_wkv_states_offset = [work['wkv_states_offset'] for work in valid_works]
-                    b_shift_states = [work['shift_states'] for work in valid_works]
+                    # 事前にリストサイズを取得
+                    batch_size = len(valid_works)
 
-                    b_kv_cache = [work['kv_cache'] for work in valid_works]
-                    b_pos_cache = [work['pos_cache'] for work in valid_works]
+                    # リストを事前確保
+                    token = [None] * batch_size
+                    token_ids = [None] * batch_size
+                    b_wkv_states = [None] * batch_size
+                    b_wkv_states_offset = [None] * batch_size
+                    b_shift_states = [None] * batch_size
+                    b_kv_cache = [None] * batch_size
+                    b_pos_cache = [None] * batch_size
+                    current_prob = [None] * batch_size
+                    temperature = [None] * batch_size
+                    top_p = [None] * batch_size
+                    outputs = [None] * batch_size
+                    out_tokens = [None] * batch_size
+                    out_last = [None] * batch_size
+                    max_tokens = [None] * batch_size
+                    statuss = [None] * batch_size
+                    end_token = [None] * batch_size
+                    occurrence = [None] * batch_size
+                    counts = [None] * batch_size
+                    start_times = [None] * batch_size
+                    end_times = [None] * batch_size
+                    mrss_info = [None] * batch_size
 
-                    current_prob = [work['current_prob'] for work in valid_works]
-                    temperature = [torch.Tensor([float(work['temperature'])]) for work in valid_works]
-                    top_p = [torch.Tensor([float(work['top_p'])]) for work in valid_works]
-                    outputs = [work['output'] for work in valid_works]
-                    out_tokens = [work['out_tokens'] for work in valid_works]
-                    out_last = [work['out_last'] for work in valid_works]
-                    max_tokens = [work['max_tokens'] for work in valid_works]
-                    statuss = [work['slotstatus'] for work in valid_works]
-                    end_token = [work['end_token'] for work in valid_works]
-                    occurrence = [work['occurrence'] for work in valid_works]
-                    counts = [work['count'] for work in valid_works]
-                    start_times = [work['start_time'] for work in valid_works]
-                    end_times = [work['end_time'] for work in valid_works]
-                    mrss_info = [{'use_contain_originalstate': work['use_contain_originalstate'],
-                                'use_mrss': work['use_mrss'],
-                                'mrss_gating_param': work['mrss_gating_param'],
-                                'mrss_state_count': work['mrss_state_count']}
-                                for work in valid_works]
+                    # 1回のループで全データを抽出
+                    for i, work in enumerate(valid_works):
+                        token[i] = work['currenttoken']
+                        token_ids[i] = work['prompt_id']
+                        b_wkv_states[i] = work['wkv_states']
+                        b_wkv_states_offset[i] = work['wkv_states_offset']
+                        b_shift_states[i] = work['shift_states']
+                        b_kv_cache[i] = work['kv_cache']
+                        b_pos_cache[i] = work['pos_cache']
+                        current_prob[i] = work['current_prob']
+                        temperature[i] = torch.tensor([work['temperature']], dtype=torch.float32)
+                        top_p[i] = torch.tensor([work['top_p']], dtype=torch.float32)
+                        outputs[i] = work['output']
+                        out_tokens[i] = work['out_tokens']
+                        out_last[i] = work['out_last']
+                        max_tokens[i] = work['max_tokens']
+                        statuss[i] = work['slotstatus']
+                        end_token[i] = work['end_token']
+                        occurrence[i] = work['occurrence']
+                        counts[i] = work['count']
+                        start_times[i] = work['start_time']
+                        end_times[i] = work['end_time']
+                        mrss_info[i] = {
+                            'use_contain_originalstate': work['use_contain_originalstate'],
+                            'use_mrss': work['use_mrss'],
+                            'mrss_gating_param': work['mrss_gating_param'],
+                            'mrss_state_count': work['mrss_state_count']
+                        }
 
                     if self.time_debug:
                         start_time1 = time.time()
@@ -872,28 +929,50 @@ class LLMWorker:
                                         #totalweight = totalweight + mrss_info[j]['mrss_gating_param'][k]
 
                                 #logits_combined = logits_combined / totalweight
-                                BatchProbs.append(logits_combined)
+                                BatchProbs.append(logits_combined.unsqueeze(0))
                             else:
                                 realbatchcount = realbatchcount + 1
 
-                                for n in occurrence[j]:
-                                    current_prob[j][-1][n] -= 0.2 + occurrence[j][n] * 0.3
+                                # for n in occurrence[j]:
+                                #     current_prob[j][-1][n] -= 0.2 + occurrence[j][n] * 0.3
+                                if occurrence[j]:
+                                    # キーをリストとして保持
+                                    occ_keys = list(occurrence[j].keys())
+                                    indices = torch.tensor(occ_keys, dtype=torch.long, device='cuda')
+                                    values = torch.tensor([occurrence[j][k] for k in occ_keys],  # occ_keysを使用
+                                                        dtype=current_prob[j].dtype, 
+                                                        device=current_prob[j].device)
+                                    penalties = 0.2 + values * 0.3
+                                    current_prob[j][-1].scatter_add_(0, indices, -penalties)
 
                                 current_prob[j][-1][0] -= 1e10 
 
-                                BatchProbs.append(current_prob[j][-1])
+                                #BatchProbs.append(current_prob[j][-1])
+                                BatchProbs.append(current_prob[j][-1].unsqueeze(0))
                         
                         #Batch Sampling
                         #BatchProbs[:, 0] -= 1e10
-                        BatchProbs = torch.stack(BatchProbs)
+
+
+                        #BatchProbs = torch.stack(BatchProbs)
+                        BatchProbs = torch.cat(BatchProbs,dim=0)
+
+
                         #print(temperature)
                         otokens = self.pipeline.nucleous_sample(BatchProbs, temperature=torch.stack(temperature), top_p=torch.stack(top_p)).tolist()
 
+                        # for j in range(len(token_ids)):
+                        #     for xxx in occurrence[j]:
+                        #             occurrence[j][xxx] *= 0.996
+                        #     tk = otokens[j]
+                        #     occurrence[j][tk] = 1 + (occurrence[j][tk] if tk in occurrence[j] else 0)
+
+                        # 改善版1: 辞書内包表記
                         for j in range(len(token_ids)):
-                            for xxx in occurrence[j]:
-                                    occurrence[j][xxx] *= 0.996
                             tk = otokens[j]
-                            occurrence[j][tk] = 1 + (occurrence[j][tk] if tk in occurrence[j] else 0)
+                            # 一度の辞書内包表記で更新
+                            occurrence[j] = {k: v * 0.996 for k, v in occurrence[j].items()}
+                            occurrence[j][tk] = occurrence[j].get(tk, 0) + 1
 
   
 
@@ -921,8 +1000,7 @@ class LLMWorker:
                                 if ("\ufffd" not in tmp) and (not tmp.endswith("\n")) and (not tmp.endswith(end_token[j][0])):
                                         outputs[j].append(tmp)
                                         out_last[j] = counts[j] + 1
-                                #print(f'outtokens = {len(out_tokens[j])}')
-                                #print(f'{int(counts[j])} {max_tokens[j]}')
+
                                 if int(counts[j]) > int(max_tokens[j]):
                                     #Reached Max Token
                                     statuss[j] = 'idle'
@@ -931,17 +1009,16 @@ class LLMWorker:
                                 if len(out_tokens[j]) > int(max_tokens[j]):
                                     #Reached Max Token
                                     statuss[j] = 'idle'
-                                    print(f'batch {j} is finished')
+
                                     #print(outputs[j])
                                 exit_flag = False
-                                #print(end_token[j])
+
                                 for stop in end_token[j]:
                                     if stop in tmp:
-                                        #yield tmp
-                                        #output_text = output_text + tmp
+                               
                                         print(f'Endtoken = {repr(tmp)}')
                                         tmp = tmp.replace(stop,'')
-                                        #outputs[j] = outputs[j] + tmp
+                                   
                                         exit_flag = True
                                 for stop in end_token[j]:
                                     # 末尾から文字列を構築
@@ -961,36 +1038,18 @@ class LLMWorker:
                                                 print(outputs[j])
                                                 del outputs[j][-matched_token_count:]
                                                 print(outputs[j])
-
-                                                #outputs[j].append(accum_str.replace(search_str,''))
                                                 print(f'Endtoken = {stop}')
                                                 exit_flag = True
                                                 tmp=''
-                                                #print(f"見つかって削除されました！新しいTextArray: {outputs[j]}")
-                                            # else:
-                                            #     print("見つかりませんでした。")
+                                            
                                             break
                                 if exit_flag:
                                     statuss[j] = 'idle'
-
-
-                                    #outputs[j] = outputs[j] + tmp
                                     outputs[j].append(tmp)
-
-
-
                                     print(f'batch {j} is finished cause got endtoken')
-                                    #print(outputs[j])
 
                             except Exception as e:
                                 print('exceptions')
-                                #print(f"エラーが発生しました: {type(e).__name__}")
-                                #print(f"エラーの詳細: {str(e)}")
-                                #print(f'tried tokenize {out_tokens[j][out_last[j]:]}')
-                                #print(f'tried tokenize {out_tokens[j]}')
-                                #tmp = ''
-                                #outputs[j] = outputs[j] #+ tmp
-                                #out_last[j] = counts[j] + 1
                                 pass
 
                         if self.time_debug:
@@ -998,7 +1057,6 @@ class LLMWorker:
 
                         idx = torch.cat(tokens, dim=0).to('cuda')
 
-                        #self.States = self.model.new_state(realbatchcount,max_token=self.max_ctxlen) #support hybrid
                         if BeforeBatchCount != realbatchcount:
                             self.States = self.model.new_state(realbatchcount,max_token=self.max_ctxlen) #support hybrid
                         # else:
@@ -1034,6 +1092,7 @@ class LLMWorker:
                             if mrss_info[i]['use_mrss'] == True:
                                 #print('MRSS Mode')
                                 if type(b_wkv_states[i])==list:
+                                    print(f'Stack detected in wkv_states')
                                     b_wkv_states[i] = torch.stack(b_wkv_states[i],dim=0)
 
                                 if type(b_wkv_states_offset[i])==list:
@@ -1084,6 +1143,7 @@ class LLMWorker:
                                 if self.model.HRWKV_Mode == 1:
                                     if b_kv_cache[i] is not None:
                                         if type(b_kv_cache[i])==list:
+                                            print(f'Stack detected in kv_caches')
                                             b_kv_cache[i] = torch.stack(b_kv_cache[i],dim=0)
                                         #print(f'kv_caches = {kv_caches.shape}')# b_kv_cache = {b_kv_cache.shape}')
                                         kv_caches[NowTensorPosition] = b_kv_cache[i]
@@ -1175,12 +1235,15 @@ class LLMWorker:
                                             prompt_queue.update_prompt(id,PromptStatus.PROCESSING,result=outputs[j])
 
                                             self.llM_current_batch_info[i]['wkv_states'] = wkv_states[NowTensorPosition]
+                                            
                                             self.llM_current_batch_info[i]['shift_states'] = shift_states[NowTensorPosition]
                                             self.llM_current_batch_info[i]['current_prob'] = x[NowTensorPosition]
                                             self.llM_current_batch_info[i]['occurrence'] = occurrence[j]
                                             if self.model.HRWKV_Mode == 1:
                                                 self.llM_current_batch_info[i]['kv_cache'] = kv_caches[NowTensorPosition]
                                                 self.llM_current_batch_info[i]['pos_cache'] = pos_caches[NowTensorPosition]
+                                                print(pos_caches[NowTensorPosition])
+                                                print(kv_caches[NowTensorPosition].shape)
                                         else:
                                             if end_times[j] is None:
                                                 end_times[j] = time.time()

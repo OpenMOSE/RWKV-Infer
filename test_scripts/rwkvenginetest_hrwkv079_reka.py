@@ -1,6 +1,9 @@
 import time
 import sys
 import os
+import gemlite
+#gemlite.reset_cache()
+#gemlite.set_autotune_setting(lambda M: M) #max-autotune example
 # 1階層上のディレクトリのパスを取得
 parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 sys.path.append(parent_dir)
@@ -11,7 +14,8 @@ import time
 import copy
 import torch.nn.functional as F
 import numpy as np
-from torch.profiler import profile, ProfilerActivity, tensorboard_trace_handler
+
+#from torch.profiler import profile, ProfilerActivity, tensorboard_trace_handler
 if __name__ == '__main__':
     from argparse import ArgumentParser
     parser = ArgumentParser()
@@ -23,13 +27,21 @@ if __name__ == '__main__':
     pipeline = PIPELINE("rekaflash3")
 
 
-    model = RWKV_x('/home/client/Projects/llm/hxa079-reka-flash3-stage2-hybrid-final.pth','int8',
+    model = RWKV_x('/home/client/output/reka-flash-3.1/output/','int4',
                    adapter_model='',
                    adapter_mode='',
                    fully_fusedrecurrent=args.fully_fused,
                    rope_theta=8000000.0,
-                   rms_norm_eps=1e-5                   
+                   rms_norm_eps=1e-5                
                    )
+    # model = RWKV_x('/home/client/output/qwen3-30b/output','int4',
+    #                adapter_model='',
+    #                adapter_mode='',
+    #                fully_fusedrecurrent=args.fully_fused,
+    #                rope_theta=10000000.0,
+    #                rms_norm_eps=1e-6                  
+    #                )
+
 
     Target_batch = args.tb
     target_temp = 1.0
@@ -42,6 +54,8 @@ if __name__ == '__main__':
                 target_temp = input('temperature:')
             elif textinput == "topp":
                 target_topp = input('topp:') 
+            elif textinput == "cache":
+                gemlite.cache_config('gemlite_config.json')
             else:
                 break
 
@@ -56,8 +70,8 @@ if __name__ == '__main__':
 
         #context = context + "<reasoning>\n\n</reasoning>\n"
 
-        States = model.new_state(Target_batch,8192)#state_empty(32, 1, 2560, 2560 // 32)
-        States2 = model.new_state(Target_batch,8192)#state_empty(32, 1, 2560, 2560 // 32)
+        States = model.new_state(Target_batch,4096)#tate_empty(32, 1, 2560, 2560 // 32)
+        States2 = model.new_state(Target_batch,4096)#state_empty(32, 1, 2560, 2560 // 32)
 
         
 
@@ -120,9 +134,9 @@ if __name__ == '__main__':
                                                                                copy.deepcopy(pos_caches),
 
                                                                                KernelMode=1) #FLA
-        print(x1)
+        #print(x1)
 
-        print(kv_caches1)
+        #print(kv_caches1)
         del x1
         del shift_states1
         del wkv_states1
@@ -216,9 +230,9 @@ if __name__ == '__main__':
 
         
 
-        from torch.utils.tensorboard import SummaryWriter
+        # from torch.utils.tensorboard import SummaryWriter
 
-        writer = SummaryWriter(log_dir="./log")
+        # writer = SummaryWriter(log_dir="./log")
 
         # with torch.profiler.profile(
         #     activities=[
