@@ -237,7 +237,7 @@ def get_cdna_autotune_configs():
             {
                 'BLOCK_M': 256,
                 'BLOCK_N': 64,
-                'waves_per_eu': 2,
+               # 'waves_per_eu': 2,
                 'PRE_LOAD_V': False
             },
             num_stages=1,
@@ -246,7 +246,7 @@ def get_cdna_autotune_configs():
             {
                 'BLOCK_M': 128,
                 'BLOCK_N': 128,
-                'waves_per_eu': 2,
+              #  'waves_per_eu': 2,
                 'PRE_LOAD_V': False
             },
             num_stages=1,
@@ -255,7 +255,7 @@ def get_cdna_autotune_configs():
             {
                 'BLOCK_M': 256,
                 'BLOCK_N': 128,
-                'waves_per_eu': 2,
+              #  'waves_per_eu': 2,
                 'PRE_LOAD_V': False
             },
             num_stages=1,
@@ -264,7 +264,7 @@ def get_cdna_autotune_configs():
             {
                 'BLOCK_M': 128,
                 'BLOCK_N': 64,
-                'waves_per_eu': 1,
+              #  'waves_per_eu': 1,
                 'PRE_LOAD_V': False
             },
             num_stages=1,
@@ -273,7 +273,7 @@ def get_cdna_autotune_configs():
             {
                 'BLOCK_M': 128,
                 'BLOCK_N': 64,
-                'waves_per_eu': 3,
+              #  'waves_per_eu': 3,
                 'PRE_LOAD_V': True
             },
             num_stages=1,
@@ -282,7 +282,7 @@ def get_cdna_autotune_configs():
             {
                 'BLOCK_M': 128,
                 'BLOCK_N': 64,
-                'waves_per_eu': 3,
+               # 'waves_per_eu': 3,
                 'PRE_LOAD_V': False
             },
             num_stages=1,
@@ -291,7 +291,7 @@ def get_cdna_autotune_configs():
             {
                 'BLOCK_M': 64,
                 'BLOCK_N': 64,
-                'waves_per_eu': 4,
+               # 'waves_per_eu': 4,
                 'PRE_LOAD_V': False
             },
             num_stages=1,
@@ -300,7 +300,7 @@ def get_cdna_autotune_configs():
             {
                 'BLOCK_M': 32,
                 'BLOCK_N': 32,
-                'waves_per_eu': 4,
+               # 'waves_per_eu': 4,
                 'PRE_LOAD_V': False
             },
             num_stages=1,
@@ -329,7 +329,7 @@ def get_rdna_autotune_configs():
             {
                 'BLOCK_M': 32,
                 'BLOCK_N': 32,
-                'waves_per_eu': 4,
+               # 'waves_per_eu': 4,
                 'PRE_LOAD_V': False
             },
             num_stages=1,
@@ -338,7 +338,7 @@ def get_rdna_autotune_configs():
             {
                 'BLOCK_M': 32,
                 'BLOCK_N': 32,
-                'waves_per_eu': 2,
+             #   'waves_per_eu': 2,
                 'PRE_LOAD_V': False
             },
             num_stages=1,
@@ -347,7 +347,7 @@ def get_rdna_autotune_configs():
             {
                 'BLOCK_M': 32,
                 'BLOCK_N': 16,
-                'waves_per_eu': 4,
+               # 'waves_per_eu': 4,
                 'PRE_LOAD_V': False
             },
             num_stages=1,
@@ -356,7 +356,7 @@ def get_rdna_autotune_configs():
             {
                 'BLOCK_M': 32,
                 'BLOCK_N': 16,
-                'waves_per_eu': 2,
+               # 'waves_per_eu': 2,
                 'PRE_LOAD_V': False
             },
             num_stages=1,
