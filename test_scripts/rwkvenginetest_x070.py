@@ -24,15 +24,12 @@ if __name__ == '__main__':
     args = parser.parse_args()
     print('RWKV x070Core with FLA Test')
 
-    pipeline = PIPELINE("qwen3")
+    pipeline = PIPELINE("world")
 
 
-    model = RWKV_x('models/HRWKV7-hxa079-qwen3-14b-stage2-e1.pth','attn_int8_ffn_int4',
-                   adapter_model='',
-                   adapter_mode='',
-                   fully_fusedrecurrent=args.fully_fused,
-                   rope_theta=1000000.0,
-                   rms_norm_eps=1e-6                  
+    model = RWKV_x('models/rwkv7-g0-7.2b-20250722-ctx4096.pth','int8',
+                   adapter_model='adapters/rwkv-5.pth',
+                   adapter_mode='lora'              
                    )
     # model = RWKV_x('/home/client/output/qwen3-30b/output','int4',
     #                adapter_model='',
@@ -61,7 +58,7 @@ if __name__ == '__main__':
 
         messages = [
         #{'role':'system', 'content':"You are Mistral Small 3, a Large Language Model (LLM) created by Mistral AI, a French startup headquartered in Paris.Your knowledge base was last updated on 2023-10-01. The current date is 2025-01-30.When you're not sure about some information, you say that you don't have the information and don't make up anything."},
-        {'role':'system', 'content':"You are helpful assistant."},
+       # {'role':'system', 'content':"You are helpful assistant."},
         {'role':'user', 'content':textinput},
         ]
 
@@ -70,8 +67,8 @@ if __name__ == '__main__':
 
         #context = context + "<reasoning>\n\n</reasoning>\n"
 
-        States = model.new_state(Target_batch,1024)#tate_empty(32, 1, 2560, 2560 // 32)
-        States2 = model.new_state(Target_batch,1024)#state_empty(32, 1, 2560, 2560 // 32)
+        States = model.new_state(Target_batch)#tate_empty(32, 1, 2560, 2560 // 32)
+        States2 = model.new_state(Target_batch)#state_empty(32, 1, 2560, 2560 // 32)
 
         
 
@@ -81,13 +78,11 @@ if __name__ == '__main__':
 
         shift_states = States.shift_states
         wkv_states = States.wkv_states
-        kv_caches = States.kv_cache
-        pos_caches = States.pos_cache
+
 
         shift_states2 = States2.shift_states
         wkv_states2 = States2.wkv_states
-        kv_caches2 = States.kv_cache
-        pos_caches2 = States.pos_cache
+ 
         
 
         def print_tensor_shapes(tensor_list):
@@ -127,11 +122,9 @@ if __name__ == '__main__':
 
         #print(idx.shape)
         # this is warmup for triton kernels
-        x1, shift_states1, wkv_states1,kv_caches1, pos_caches1 = model.forward(copy.deepcopy(idx),
+        x1, shift_states1, wkv_states1= model.forward(copy.deepcopy(idx),
                                                                                copy.deepcopy(shift_states),
-                                                                               copy.deepcopy(wkv_states),
-                                                                               copy.deepcopy(kv_caches),
-                                                                               copy.deepcopy(pos_caches),
+                                                                               copy.deepcopy(wkv_states),                                                    
 
                                                                                KernelMode=1) #FLA
         #print(x1)
@@ -144,7 +137,7 @@ if __name__ == '__main__':
         #exit()
 
         t_prefill_0 = time.perf_counter()
-        x, shift_states, wkv_states,kv_caches,pos_caches = model.forward(copy.deepcopy(idx), shift_states, wkv_states, kv_caches,pos_caches, KernelMode=1) #FLA
+        x, shift_states, wkv_states = model.forward(copy.deepcopy(idx), shift_states, wkv_states, KernelMode=1) #FLA
         t_prefill_1 = time.perf_counter()
 
 
@@ -304,7 +297,7 @@ if __name__ == '__main__':
                 #     print("Decode error:", e)
             t2 = time.perf_counter()
             #kv_caches = kv_caches.to(device='cuda')
-            x, shift_states, wkv_states, kv_caches, pos_caches = model.forward(idx, shift_states, wkv_states,kv_caches,pos_caches,one_mode=True)
+            x, shift_states, wkv_states = model.forward(idx, shift_states, wkv_states,one_mode=True)
             #kv_caches = kv_caches.to(device='cpu')
 
             #print(pos_caches)

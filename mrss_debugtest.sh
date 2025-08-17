@@ -3,7 +3,7 @@ curl http://127.0.0.1:9000/healthcheck
 
 #curl http://127.0.0.1:9000/loadmodel -X POST -H "Content-Type: application/json" -d '{"model_filename":"models/hxa079-qwen3-8b-stage2-hybrid-final.pth","model_viewname":"hxa079-8B","model_strategy":"nf4","adapter_filename":"","adapter_mode":"", "template":"qwen3", "endtoken":"<|im_end|>","default_temperature":"1.0", "default_top_p":"0.3"}'
 
-curl http://127.0.0.1:9000/loadmodel -X POST -H "Content-Type: application/json" -d '{"model_filename":"/home/client/output/reka-flash-3.1/output/","model_viewname":"hxa079-reka-3.1-stage2-hqq4","model_strategy":"nf4","adapter_filename":"","adapter_mode":"", "template":"rekaflash3", "endtoken":"\n <sep>","default_temperature":"0.6", "default_top_p":"0.3"}'
+#curl http://127.0.0.1:9000/loadmodel -X POST -H "Content-Type: application/json" -d '{"model_filename":"/home/client/output/reka-flash-3.1/output/","model_viewname":"hxa079-reka-3.1-stage2-hqq4","model_strategy":"nf4","adapter_filename":"","adapter_mode":"", "template":"rekaflash3", "endtoken":"\n <sep>","default_temperature":"0.6", "default_top_p":"0.3"}'
 #
 #curl http://127.0.0.1:9000/loadmodel -X POST -H "Content-Type: application/json" -d '{"model_filename":"models/PRWKV7-cxa075-qwen14b-stage2-final.pth","model_viewname":"PRWKV7-cxa075 Qwen 2.5 14B Stage3 16k e7","model_strategy":"fp6","adapter_filename":"adapters/testlora7.pth","adapter_mode":"lora", "template":"qwen", "endtoken":"<|im_end|>","default_temperature":"0.7", "default_top_p":"0.1"}'
 #
@@ -19,4 +19,6 @@ curl http://127.0.0.1:9000/loadmodel -X POST -H "Content-Type: application/json"
 #curl http://127.0.0.1:9000/mrss_loadstatemodel -X POST -H "Content-Type: application/json" -d '{"state_viewname":"Aoko", "state_filenames":["states/jp7b-bancho.pth","states/ojousama2.pth","states/secret.pth"], "contain_originalstate":"True", "state_gatingweight":["0.01","0.3","0.0","0.05"],"default_temperature":"1.0", "default_top_p":"0.6"}'
  
 
-#curl http://127.0.0.1:9000/loadmodel -X POST -H "Content-Type: application/json" -d '{"model_filename":"/home/client/Projects/llm/hxa079-reka-flash3-stage2-hybrid-final.pth","model_viewname":"RWKV HXA079 L38T6 Reka Flash3 temp0.2","model_strategy":"int8","adapter_filename":"","adapter_mode":"", "template":"rekaflash3", "endtoken":"\n <sep>","default_temperature":"0.2", "default_top_p":"0.6", "rope_theta":"8000000.0", "rms_norm_eps":"1e-5"}'
+#curl http://127.0.0.1:9000/loadmodel -X POST -H "Content-Type: application/json" -d '{"model_filename":"models/rwkv7-g0-7.2b-20250722-ctx4096.pth","model_viewname":"RWKV x070 DFT lr1e-5 b32 e5 a0.15","model_strategy":"int8","adapter_filename":"adapters/rwkv-5.pth","adapter_mode":"lora", "template":"world", "endtoken":"\n\n","default_temperature":"1.0", "default_top_p":"0.3"}'
+
+curl http://127.0.0.1:9000/loadmodel -X POST -H "Content-Type: application/json" -d '{"model_filename":"models/rwkv7-g0-7.2b-20250722-ctx4096.pth","model_viewname":"RWKV x070 DFT lr1e-5 b32 e5 a0.15","model_strategy":"int8","adapter_filename":"adapters/tsundere.pth","adapter_mode":"lora", "template":"world", "endtoken":"\n\n","default_temperature":"1.0", "default_top_p":"0.3"}'

@@ -1,7 +1,16 @@
 import torch
+import os
+parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+import sys
+sys.path.append(parent_dir)
+import torch.profiler
+import torch
 from rwkvengine.rwkvcore import RWKV_x, PIPELINE
+import sys
+ 
 import time
 
+sys.path.append(parent_dir)
 
 if __name__ == '__main__':
     from argparse import ArgumentParser
@@ -12,7 +21,7 @@ if __name__ == '__main__':
 
     pipeline = PIPELINE()
     #This is RWKV "World" model only :)
-    model = RWKV_x('models/RWKV-x060-Jpn-7B-20240816-ctx4096.pth','fp5') #bf16, fp8, fp6, fp5
+    model = RWKV_x('models/rwkv7-g0-7.2b-20250722-ctx4096.pth','nf4') #bf16, fp8, fp6, fp5
     Target_batch = 1#args.tb#16
 
     States = model.new_state(Target_batch)#state_empty(32, 1, 2560, 2560 // 32)
@@ -34,8 +43,8 @@ if __name__ == '__main__':
 
     #Apply State-tuned wkv to InitialState
     #if no state-tuned commentout
-    state_tuned_wkv = model.load_state('states/ojousama2.pth')
-    wkv_states = state_tuned_wkv.view(state_tuned_wkv.shape[0],1,state_tuned_wkv.shape[1],state_tuned_wkv.shape[2],state_tuned_wkv.shape[3]).to('cuda')
+    # state_tuned_wkv = model.load_state('states/ojousama2.pth')
+    # wkv_states = state_tuned_wkv.view(state_tuned_wkv.shape[0],1,state_tuned_wkv.shape[1],state_tuned_wkv.shape[2],state_tuned_wkv.shape[3]).to('cuda')
 
 
     tokens = pipeline.encode(context)

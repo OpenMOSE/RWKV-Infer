@@ -22,7 +22,7 @@ import os, sys
 import time
 import functools
 from einops import rearrange
-
+from rwkvengine.tensormagic import Attach_Adapter
 from rwkvengine.matmulhell import quantize_weight, fused_dequant_gemm
 
 
@@ -214,6 +214,15 @@ class RWKV_x(nn.Module):
 
                 if modelconfig['rwkv_architecture'] == 'hxa079':
                     print('Check RWKV Layers and Transformer Layers.')
+
+
+
+
+
+
+
+
+
             self.n_layer = modelconfig['num_hidden_layers']
 
             self.HRWKV_Block_Mode = [] #0: RWKV, 1: Attention
@@ -247,18 +256,18 @@ class RWKV_x(nn.Module):
             print(f'GQA Layer = {self.GQALayers}')
 
 
-            if first_rwkv_layer != -1 and self.HFMode:
-                self.lora_rank_decay = z[f'model.layers.{first_rwkv_layer}.self_attn.w1'].shape[1]
-                self.lora_rank_iclr = z[f'model.layers.{first_rwkv_layer}.self_attn.a1'].shape[1]
-                self.lora_rank_value_residual_mix = z[f'model.layers.{first_rwkv_layer}.self_attn.v1'].shape[1]
-                self.lora_rank_key_residual_mix = z[f'model.layers.{first_rwkv_layer}.self_attn.k1'].shape[1]
-                self.lora_rank_gate = z[f'model.layers.{first_rwkv_layer}.self_attn.g1'].shape[1]
-                print(f'lora_rank_decay = {self.lora_rank_decay}')
-                print(f'lora_rank_iclr = {self.lora_rank_iclr}')
-                print(f'lora_rank_value_residual_mix = {self.lora_rank_value_residual_mix}')
-                print(f'lora_rank_key_residual_mix = {self.lora_rank_key_residual_mix}')
-                print(f'lora_rank_gate = {self.lora_rank_gate}')
-                #exit()
+            # if first_rwkv_layer != -1 and self.HFMode:
+            #     self.lora_rank_decay = z[f'model.layers.{first_rwkv_layer}.self_attn.w1'].shape[1]
+            #     self.lora_rank_iclr = z[f'model.layers.{first_rwkv_layer}.self_attn.a1'].shape[1]
+            #     self.lora_rank_value_residual_mix = z[f'model.layers.{first_rwkv_layer}.self_attn.v1'].shape[1]
+            #     self.lora_rank_key_residual_mix = z[f'model.layers.{first_rwkv_layer}.self_attn.k1'].shape[1]
+            #     self.lora_rank_gate = z[f'model.layers.{first_rwkv_layer}.self_attn.g1'].shape[1]
+            #     print(f'lora_rank_decay = {self.lora_rank_decay}')
+            #     print(f'lora_rank_iclr = {self.lora_rank_iclr}')
+            #     print(f'lora_rank_value_residual_mix = {self.lora_rank_value_residual_mix}')
+            #     print(f'lora_rank_key_residual_mix = {self.lora_rank_key_residual_mix}')
+            #     print(f'lora_rank_gate = {self.lora_rank_gate}')
+            #     #exit()
 
 
 
@@ -296,6 +305,12 @@ class RWKV_x(nn.Module):
                 print('x070 architecture initializing')
 
             if self.HFMode == False:
+                for k in keys:
+                    if f'head.' in k:
+                        if self.ModeMode != 'standard':
+                            z[k] = z[k].to(device='cuda', dtype=torch.bfloat16)
+                            z[k] = Attach_Adapter(keyname=k,weight=z[k],adapter=z_adapter,mode=self.ModeMode,scaling=adapter_scale,device='cuda').to(device='cpu')
+                            #exit()
                 for key in keys:
                     if f'emb.' in key:
                         z = RenameToHFStyle(z,key,0)
@@ -305,13 +320,17 @@ class RWKV_x(nn.Module):
                         z = RenameToHFStyle(z,key,0)
 
             self.RWKVMode = 7
-            self.HRWKV_Mode = 1
+            self.HRWKV_Mode = 0
+
+
+            
 
 
             for i in range(self.n_layer):
                 keys = sorted(list(z.keys()),key=natural_sort_key)
 
                 if modelconfig['rwkv_architecture'] == 'hxa079':
+                    self.HRWKV_Mode = 1
                     if self.HFMode == False:
                         for key in keys:
                             if f'blocks.{i}.' in key:
@@ -436,6 +455,34 @@ class RWKV_x(nn.Module):
                             del z[ffn+addfix+'up_proj.weight']
                         
                         # z[f'model.layer.{i}.mlp.experts.{j}.gate_proj.weight']
+
+
+
+
+
+                elif modelconfig['rwkv_architecture'] == 'x070':
+                    
+                        
+                    if self.HFMode == False:
+                        for k in keys:
+                            if f'blocks.{i}.' in k:
+                                if self.ModeMode != 'standard':
+                                    z[k] = z[k].to(device='cuda', dtype=torch.bfloat16)
+                                    z[k] = Attach_Adapter(keyname=k,weight=z[k],adapter=z_adapter,mode=self.ModeMode,scaling=adapter_scale,device='cuda').to(device='cpu')
+
+                        keys = sorted(list(z.keys()),key=natural_sort_key)
+
+                        for key in keys:
+                            if f'blocks.{i}.' in key:
+                                z = RenameToHFStyle(z,key,0)
+                        keys = sorted(list(z.keys()),key=natural_sort_key)
+
+                    bbb = f'model.layers.{i}.'
+                    att = f'model.layers.{i}.self_attn.'
+                    ffn = f'model.layers.{i}.mlp.'
+                    
+                    
+
                 keys = sorted(list(z.keys()),key=natural_sort_key)
                 bbb = f'model.layers.{i}.'
                 for key in keys:
@@ -443,7 +490,7 @@ class RWKV_x(nn.Module):
                         z = DoQuantizationIfPossible(z,key,self.attn_quant,self.ffn_quant,self.base_precision,self.device) 
 
             z = DoQuantizationIfPossible(z,'lm_head.weight',self.attn_quant,self.ffn_quant,self.base_precision,self.device) 
-
+            
 
             keys = sorted(list(z.keys()),key=natural_sort_key)
 
@@ -455,11 +502,10 @@ class RWKV_x(nn.Module):
             for k in keys:
                 is_in_blocks = any(block in k for block in offload_blocks)
                 
-                if not k.endswith('qstate') and 'emb' not in k:# or is_in_blocks):  and ('mlp' not in k or is_in_blocks)
+                if not k.endswith('qstate') and 'emb' not in k and 'ln0' not in k:# or is_in_blocks):  and ('mlp' not in k or is_in_blocks)
                     print(f'{k} move to device {device}')
                     z[k] = z[k].to(device=self.device)
-                                 
-
+            
          
 
             # detect model details
@@ -470,7 +516,13 @@ class RWKV_x(nn.Module):
             self.n_embd = n_embd
             self.vocab_size = vocab_size
 
-        
+            if modelconfig['rwkv_architecture'] == 'x070':
+                z = DoQuantizationIfPossible(z,'model.norm.weight',self.attn_quant,self.ffn_quant,self.base_precision,self.device) 
+                z = DoQuantizationIfPossible(z,'model.norm.bias',self.attn_quant,self.ffn_quant,self.base_precision,self.device) 
+                emb_device = z['model.embed_tokens.weight'].device
+                z['model.embed_tokens.weight'] = F.layer_norm(z['model.embed_tokens.weight'].to(dtype=self.base_precision,device='cuda'), (self.n_embd,), weight=z['model.layers.0.ln0.weight'].to(device='cuda'), bias=z['model.layers.0.ln0.bias'].to(device='cuda')).to(device=emb_device)
+                                 
+
 
             self.dim_hidden = z['model.embed_tokens.weight'].shape[1]
 
@@ -488,6 +540,9 @@ class RWKV_x(nn.Module):
                     if ('.bone' in key or '.lora' in key) and 'expert' not in key:
                         z[key] = None
                         print(f'{key} deleted')
+
+
+#Sliding
 
             
         
@@ -666,6 +721,8 @@ class RWKV_x(nn.Module):
             return HRWKV_7.hxa079r_forward(self,idx,last_wkv_states,kv_cache,pos_cache,full_output)
         elif self.modelconfig['rwkv_architecture'] == 'hxa079' and self.MoEMode == True:
             return HRWKV_7.hxa079r_moe_forward(self,idx,last_wkv_states,kv_cache,pos_cache,full_output) 
+        elif self.modelconfig['rwkv_architecture'] == 'x070':
+            return RWKV_7.x070_forward(self,idx,last_shift_states,last_wkv_states,full_output=full_output) 
 
         
         # if self.RWKVMode == 6:

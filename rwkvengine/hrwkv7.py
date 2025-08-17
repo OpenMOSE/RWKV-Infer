@@ -839,7 +839,7 @@ class HRWKV_7(nn.Module):
     #@torch.compile()
     #@torch.compile
     @torch.compiler.disable
-    def GQA_Attention_Flash(layer_id: int, gqa_layer_id: int, H: int, N: int,
+    def GQA_Attention_Flash_(layer_id: int, gqa_layer_id: int, H: int, N: int,
                        x_in, past_key_value, cache_position,
                        calc_cos, calc_sin,
                        QKV_, qkv_split_list,
@@ -983,6 +983,199 @@ class HRWKV_7(nn.Module):
         
         return T5RMSNorm(x_out, ln2, rmsnorm_epsilon), x_out, past_key_value
 
+    @torch.compiler.disable
+    def GQA_Attention_Flash(layer_id: int, gqa_layer_id: int, H: int, N: int,
+                                 x_in, past_key_value, cache_position,
+                                 calc_cos, calc_sin,
+                                 QKV_, qkv_split_list,
+                                 O_, QKV_state, O_state,
+                                 Q_bias, K_bias, V_bias, O_bias,
+                                 ln_r, ln_k, rmsnorm_epsilon: float,
+                                 ln1, ln2, rope_theta,
+                                 ebits: int, mbits: int,
+                                 attention_sinks: int = 16,      # 保持する初期トークン数
+                                 window_size: int = 496):      # スライディングウィンドウサイズ
+        """
+        StreamingLLM-style GQA Attention with Flash Attention.
+        Maintains attention sinks (first few tokens) + sliding window for the rest.
+        Total cache size = attention_sinks + window_size
+        """
+        
+        B, T, C = x_in.size()
+        x = T5RMSNorm(x_in, ln1, rmsnorm_epsilon)
+        
+        # KVキャッシュの構造: [attention_sinks tokens] + [sliding window tokens]
+        max_cache_len = past_key_value.shape[3]  # Should equal attention_sinks + window_size
+        
+        HN = H * N
+        
+        # QKV projection
+        qkv = fpx_matmul(x, QKV_, QKV_state, ebits, mbits)
+        q, k, v = qkv.split(qkv_split_list, dim=-1)
+        
+        # Add bias and reshape
+        q = q.add_(Q_bias).view(B, T, H, N)
+        k = k.add_(K_bias)
+        v = v.add_(V_bias)
+        
+        # KV dimensions for GQA
+        kv_dim = k.shape[2]
+        kv_heads = kv_dim // N
+        kv_repeat = HN // kv_dim
+        
+        k = k.view(B, T, kv_heads, N)
+        v = v.view(B, T, kv_heads, N)
+        
+        # Optional RMSNorm
+        if ln_r is not None:
+            q = T5RMSNorm(q, ln_r, rmsnorm_epsilon)
+            k = T5RMSNorm(k, ln_k, rmsnorm_epsilon)
+        
+        k_write = k.view(B, T, -1)
+        v_write = v.view(B, T, -1)
+        
+        # === StreamingLLM Cache Update ===
+        # cache_positionは累積トークン数を保持
+        valid_lengths = torch.zeros(B, dtype=torch.long, device=x_in.device)
+        
+        for b in range(B):
+            total_seen = int(cache_position[b, 0])  # これまでに処理した総トークン数
+            
+            if total_seen < attention_sinks:
+                # Phase 1: まだattention sink領域を埋めている段階
+                write_len = min(T, attention_sinks - total_seen)
+                past_key_value[gqa_layer_id, b, 0, total_seen:total_seen+write_len] = k_write[b, :write_len]
+                past_key_value[gqa_layer_id, b, 1, total_seen:total_seen+write_len] = v_write[b, :write_len]
+                
+                remaining = T - write_len
+                if remaining > 0:
+                    # attention sinkが埋まり、sliding window領域に入る
+                    past_key_value[gqa_layer_id, b, 0, attention_sinks:attention_sinks+remaining] = k_write[b, write_len:]
+                    past_key_value[gqa_layer_id, b, 1, attention_sinks:attention_sinks+remaining] = v_write[b, write_len:]
+                
+                # 有効なキャッシュ長
+                valid_lengths[b] = min(total_seen + T, max_cache_len)
+                cache_position[b, 0] = total_seen + T
+                
+            elif total_seen < max_cache_len:
+                # Phase 2: attention sinkは埋まり、sliding windowを埋めている段階
+                window_start = attention_sinks
+                window_pos = total_seen - attention_sinks  # window内での現在位置
+                write_len = min(T, max_cache_len - total_seen)
+                
+                past_key_value[gqa_layer_id, b, 0, total_seen:total_seen+write_len] = k_write[b, :write_len]
+                past_key_value[gqa_layer_id, b, 1, total_seen:total_seen+write_len] = v_write[b, :write_len]
+                
+                remaining = T - write_len
+                if remaining > 0:
+                    # キャッシュが満杯になった - sliding開始
+                    # 古いwindow部分を左にシフト
+                    shift_amount = remaining
+                    past_key_value[gqa_layer_id, b, :, attention_sinks:max_cache_len-shift_amount] = \
+                        past_key_value[gqa_layer_id, b, :, attention_sinks+shift_amount:max_cache_len].clone()
+                    
+                    # 新しいトークンを末尾に追加
+                    past_key_value[gqa_layer_id, b, 0, max_cache_len-shift_amount:max_cache_len] = k_write[b, write_len:]
+                    past_key_value[gqa_layer_id, b, 1, max_cache_len-shift_amount:max_cache_len] = v_write[b, write_len:]
+                
+                valid_lengths[b] = min(total_seen + T, max_cache_len)
+                cache_position[b, 0] = total_seen + T
+                
+            else:
+                # Phase 3: キャッシュが満杯 - sliding window mode
+                # attention sinksは保持、window部分のみスライド
+                
+                if T < window_size:
+                    # 少量の新トークン - 効率的にスライド
+                    # window部分を左にシフト
+                    past_key_value[gqa_layer_id, b, :, attention_sinks:max_cache_len-T] = \
+                        past_key_value[gqa_layer_id, b, :, attention_sinks+T:max_cache_len].clone()
+                    
+                    # 新しいトークンを末尾に追加
+                    past_key_value[gqa_layer_id, b, 0, max_cache_len-T:max_cache_len] = k_write[b]
+                    past_key_value[gqa_layer_id, b, 1, max_cache_len-T:max_cache_len] = v_write[b]
+                else:
+                    # 大量の新トークン - window全体を置き換え
+                    use_len = min(T, window_size)
+                    start_idx = max(0, T - window_size)
+                    
+                    past_key_value[gqa_layer_id, b, 0, attention_sinks:attention_sinks+use_len] = k_write[b, start_idx:start_idx+use_len]
+                    past_key_value[gqa_layer_id, b, 1, attention_sinks:attention_sinks+use_len] = v_write[b, start_idx:start_idx+use_len]
+                
+                valid_lengths[b] = max_cache_len
+                cache_position[b, 0] = total_seen + T
+        
+        # === Flash Attention準備 ===
+        # Cumulative sequence lengths
+        cu_seqlens_q = torch.zeros(B + 1, dtype=torch.int32, device=q.device)
+        cu_seqlens_k = torch.zeros(B + 1, dtype=torch.int32, device=q.device)
+        
+        cu_seqlens_q[1:] = torch.arange(1, B + 1, device=q.device) * T
+        cu_seqlens_k[1:] = valid_lengths.cumsum(dim=0)
+        
+        # Query reshape
+        q_flash = q.reshape(B * T, H, N)
+        
+        # === Key/Value gathering ===
+        max_valid_len = int(valid_lengths.max().item())
+        
+        k_all_list = []
+        v_all_list = []
+        
+        for b in range(B):
+            valid_len = int(valid_lengths[b])
+            
+            # 有効な部分のみ取得
+            k_valid = past_key_value[gqa_layer_id, b, 0, :valid_len]
+            v_valid = past_key_value[gqa_layer_id, b, 1, :valid_len]
+            
+            # Reshape to (seq_len, kv_heads, N)
+            k_valid = k_valid.view(valid_len, kv_heads, N)
+            v_valid = v_valid.view(valid_len, kv_heads, N)
+            
+            k_all_list.append(k_valid)
+            v_all_list.append(v_valid)
+        
+        # Concatenate all K/V
+        k_flash = torch.cat(k_all_list, dim=0)  # (total_k_tokens, kv_heads, N)
+        v_flash = torch.cat(v_all_list, dim=0)  # (total_v_tokens, kv_heads, N)
+        
+        # Output tensor
+        o_flash = torch.empty_like(q_flash)
+        
+        # Scaling factor
+        sm_scale = 1.0 / (N ** 0.5)
+        
+        # === Flash Attention実行 ===
+        attn_output, _ = triton_attention(
+            q_flash,
+            k_flash,
+            v_flash,
+            o_flash,
+            cu_seqlens_q,
+            cu_seqlens_k,
+            T,  # max_seqlen_q
+            max_valid_len,  # max_seqlen_k
+            True,  # causal
+            sm_scale,
+            None,  # bias
+        )
+        
+        # === 出力処理 ===
+        # Reshape output back to (B, T, H, N)
+        attn_output = attn_output.view(B, T, H, N)
+        
+        # Reshape for output projection
+        attn_output = attn_output.contiguous().view(B, T, HN)
+        
+        # Output projection
+        out = fpx_matmul(attn_output, O_, O_state, ebits, mbits)
+        
+        # Add residual connection
+        x_out = x_in + out
+        
+        # Final RMSNorm
+        return T5RMSNorm(x_out, ln2, rmsnorm_epsilon), x_out, past_key_value
     #@torch.compile
     def GQA_Attention_Flash_Fused(layer_id: int, gqa_layer_id: int, H: int, N: int,
                               x_in, past_key_value, cache_position,

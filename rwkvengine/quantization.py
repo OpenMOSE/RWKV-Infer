@@ -296,8 +296,8 @@ QuantizationList = {}
 
 QuantizationList['embedding'] = ['emb.weight','embed_tokens']
 QuantizationList['head'] = ['head.weight','lm_head.weight']
-QuantizationList['attention'] = ['.rkv_fused.weight','.qkv_fused.weight','q_proj.weight','k_proj.weight','v_proj.weight','o_proj.weight','att.receptance.weight','att.key.weight','att.value.weight','att.gate.weight','output.weight']
-QuantizationList['mlp'] = ['.gateup.weight','.down_proj.weight','.up_proj.weight','.gate_proj.weight','mlp.gate_up_proj.weight','ffn.key.weight','ffn.value.weight','ffn.receptance.weight']
+QuantizationList['attention'] = ['.rkv_fused.weight','.qkv_fused.weight','q_proj.weight','k_proj.weight','v_proj.weight','o_proj.weight','self_attn.receptance.weight','self_attn.key.weight','self_attn.value.weight','self_attn.gate.weight','self_attn.output.weight']
+QuantizationList['mlp'] = ['.gateup.weight','.down_proj.weight','.up_proj.weight','.gate_proj.weight','mlp.gate_up_proj.weight','mlp.key.weight','mlp.value.weight','mlp.receptance.weight']
 
 QuantizationModeList = ['hqq_int4','bnb_int4','ao_fp5','ao_fp6','op_int8']
 
