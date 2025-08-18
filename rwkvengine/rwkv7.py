@@ -9,14 +9,9 @@ os.environ["FLASH_ATTENTION_TRITON_AMD_AUTOTUNE"] = "True"
 import time
 import torch
 from collections import defaultdict
-#from flash_attn import flash_attn_varlen_func, flash_attn_func
-
-from torch.nn.attention import SDPBackend, sdpa_kernel
-
 
 import torch._dynamo
 torch._dynamo.config.cache_size_limit = 64  # 例えば32に拡張
-
 
 try:
     import bitsandbytes as bnb
@@ -38,9 +33,7 @@ import functools
 from einops import rearrange
 from torch.nn import functional as F
 from typing import Callable, Optional, Tuple, Union
-
 from transformers.cache_utils import Cache, DynamicCache
-
 
 from rwkvengine.misc import PIPELINE, TimeMixState, ChannelMixState,BlockState,BlockStateList
 from rwkvengine.matmularena import hybrid_matmul
@@ -63,7 +56,6 @@ class RWKV_7(nn.Module):
                         O_,
                         R_state,K_state,V_state,
                         O_state,
-
                         ln1_w,ln1_b,
                         ln2_w,ln2_b,
                         ln_x_w,ln_x_b,
@@ -90,7 +82,6 @@ class RWKV_7(nn.Module):
 
         kk = torch.nn.functional.normalize((k * k_k).view(B,T,H,N), dim=-1, p=2.0).view(B,T,H*N)
         k = fused_k_rwkv7(k, a, k_a)
-
 
         w = torch.tanh(xw @ w1) @ w2 + w0
         w = -F.softplus(-w) - 0.5
@@ -185,15 +176,6 @@ class RWKV_7(nn.Module):
                                                                 x_in = x
                                                                 )
  
-                # xx,x = HRWKV_7.SwiGLU_MLP_forward_fpx_w_add(xx,
-                #                                             z[ffn+'gateup.weight'],self.HRWKV_Misc[ffn+'gateup_split_list'],
-                #                                             z[ffn+'down_proj.weight'],
-
-                #                                             z[ffn+'gateup.weight.qstate'],
-                #                                             z[ffn+'down_proj.weight.qstate'],
-                #                                             self.mlp_ebits,self.mlp_mbits,
-                #                                             x
-                #                                             )
        
                 last_shift_states[i*2] = time_mix_shift.unsqueeze(1)
                 last_shift_states[i*2+1] = channel_mix_state

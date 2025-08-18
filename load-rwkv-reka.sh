@@ -1,0 +1,1 @@
+curl http://127.0.0.1:9000/loadmodel -X POST -H "Content-Type: application/json" -d '{"model_filename":"/home/client/output/reka-flash-3.1/output/","model_viewname":"hxa079-reka-3.1-stage2-hqq4","model_strategy":"nf4","adapter_filename":"","adapter_mode":"", "template":"rekaflash3", "endtoken":"\n <sep>","default_temperature":"0.6", "default_top_p":"0.3"}'

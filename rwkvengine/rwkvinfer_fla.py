@@ -242,6 +242,7 @@ class LLMWorker:
         self.model = RWKV_x(modelpath,base_precision=precision,adapter_model=adapter_model,adapter_mode=adapter_mode,adapter_scale=adapter_scale,fully_fusedrecurrent=fully_fusedrecurrent,rope_theta=rope_theta,rms_norm_eps=rms_norm_eps,max_ctxlen=max_ctxlen)
         self.pipeline = PIPELINE(template_mode)
         self.templatemode = template_mode
+        self.max_ctxlen = max_ctxlen
         # if self.model.ARWKVMode:
         #     self.pipeline = PIPELINE(template_mode)
         #     self.templatemode = template_mode
