@@ -24,12 +24,12 @@ if __name__ == '__main__':
     args = parser.parse_args()
     print('RWKV x070Core with FLA Test')
 
-    pipeline = PIPELINE("rekaflash3")
+    pipeline = PIPELINE("rekaflash31")
 
 
     model = RWKV_x('/home/client/output/reka-flash-3.1/output/','int4',
-                   adapter_model='',
-                   adapter_mode='',
+                   adapter_model='adapters/hxa079_test51.pth',
+                   adapter_mode='lora',
                    fully_fusedrecurrent=args.fully_fused,
                    rope_theta=8000000.0,
                    rms_norm_eps=1e-5                
@@ -44,7 +44,7 @@ if __name__ == '__main__':
 
 
     Target_batch = args.tb
-    target_temp = 1.0
+    target_temp = 0.6
     target_topp = 0.3
     while True:
 
@@ -61,7 +61,7 @@ if __name__ == '__main__':
 
         messages = [
         #{'role':'system', 'content':"You are Mistral Small 3, a Large Language Model (LLM) created by Mistral AI, a French startup headquartered in Paris.Your knowledge base was last updated on 2023-10-01. The current date is 2025-01-30.When you're not sure about some information, you say that you don't have the information and don't make up anything."},
-        {'role':'system', 'content':"You are helpful assistant."},
+        #{'role':'system', 'content':"You are helpful assistant."},
         {'role':'user', 'content':textinput},
         ]
 
@@ -70,8 +70,8 @@ if __name__ == '__main__':
 
         #context = context + "<reasoning>\n\n</reasoning>\n"
 
-        States = model.new_state(Target_batch,4096)#tate_empty(32, 1, 2560, 2560 // 32)
-        States2 = model.new_state(Target_batch,4096)#state_empty(32, 1, 2560, 2560 // 32)
+        States = model.new_state(Target_batch,2048)#tate_empty(32, 1, 2560, 2560 // 32)
+        #States2 = model.new_state(Target_batch,4096)#state_empty(32, 1, 2560, 2560 // 32)
 
         
 
@@ -84,10 +84,10 @@ if __name__ == '__main__':
         kv_caches = States.kv_cache
         pos_caches = States.pos_cache
 
-        shift_states2 = States2.shift_states
-        wkv_states2 = States2.wkv_states
-        kv_caches2 = States.kv_cache
-        pos_caches2 = States.pos_cache
+        # shift_states2 = States2.shift_states
+        # wkv_states2 = States2.wkv_states
+        # kv_caches2 = States.kv_cache
+        # pos_caches2 = States.pos_cache
         
 
         def print_tensor_shapes(tensor_list):

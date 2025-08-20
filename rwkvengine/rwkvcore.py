@@ -48,7 +48,7 @@ MyStatic = torch.jit.script
 # from rwkvengine.rwkv6 import RWKV_6, fused_recurrent_rwkv6_torch
 from rwkvengine.rwkv7 import RWKV_7
 # from rwkvengine.arwkv7 import ARWKV_7
-from rwkvengine.prwkv7 import PRWKV_7
+#from rwkvengine.prwkv7 import PRWKV_7
 from rwkvengine.hrwkv7 import HRWKV_7, compute_qwen3_rope_cache
 
 
@@ -63,7 +63,6 @@ class RWKV_x(nn.Module):
 
     def __init__(self,load_model: str,base_precision: str = 'int8',adapter_model:str = '', adapter_mode:str = '', adapter_scale:float=2.0,fully_fusedrecurrent:bool=True, tokenizer='',rope_theta=1000000.0,rms_norm_eps=1e-6,max_ctxlen=8192,device='cuda'):
 
-        #print('Helloworld RWKV v060 :) Initializing')
         print('RWKV-Infer RWKVCore Initializing')
         self.max_ctxlen = max_ctxlen
 
@@ -72,14 +71,6 @@ class RWKV_x(nn.Module):
         self.rms_norm_eps = rms_norm_eps
         self.rope_theta = rope_theta
 
-        #GANBATTE CODE KAKOU
-        # self.bit8quant = False
-        # self.bit4quant = False 
-        # self.bitfp8quant = False
-        # self.bitfp6quant = False
-
-        # self.fully_fusedrecurrent = fully_fusedrecurrent
-        # self.ExtremeCPUOffload = False
         self.debug = False
 
         self.eval()
@@ -106,15 +97,7 @@ class RWKV_x(nn.Module):
 
             z_adapter_keys = None
             self.ModeMode = 'standard'
-            if adapter_model != '' and adapter_mode != '':
-                print('Adapter LoadMode')
-                if 'lora' in adapter_mode or 'bone' in adapter_mode or 'hybrid' in adapter_mode:
-                    print('LoRA Mode Lets Merge!')
-                    self.ModeMode = adapter_mode
-                    z_adapter = torch.load(adapter_model,map_location="cpu",mmap=True)
-                    z_adapter_keys = list(z_adapter.keys())
-                    for zkeys in z_adapter_keys:
-                        z[zkeys] = z_adapter[zkeys]
+            
 
             
             def natural_sort_key(text):
@@ -177,14 +160,7 @@ class RWKV_x(nn.Module):
 
                 self.n_kv = key_shape[0]//self.head_size
 
-                #     for key in keys:
-                #         if 'k_proj' in key:
-                #             k_shape = z[key].shape
-                #             print(k_shape)
-                #             self.n_kv = k_shape[0]//self.head_size
-                #             print(self.n_kv)
-                #             break
-                    #
+         
                 modelconfig['rope_theta'] = rope_theta
                 modelconfig['tokenizer'] = tokenizer
                 modelconfig['rms_norm_eps'] = rms_norm_eps
@@ -215,14 +191,6 @@ class RWKV_x(nn.Module):
                 if modelconfig['rwkv_architecture'] == 'hxa079':
                     print('Check RWKV Layers and Transformer Layers.')
 
-
-
-
-
-
-
-
-
             self.n_layer = modelconfig['num_hidden_layers']
 
             self.HRWKV_Block_Mode = [] #0: RWKV, 1: Attention
@@ -251,6 +219,7 @@ class RWKV_x(nn.Module):
                     self.RWKVLayers = self.RWKVLayers + 1
                     if first_rwkv_layer == -1:
                         first_rwkv_layer = i
+
             print(f'Layer info = {self.HRWKV_Block_Mode}')
             print(f'RWKV Layer = {self.RWKVLayers}')
             print(f'GQA Layer = {self.GQALayers}')
@@ -269,9 +238,25 @@ class RWKV_x(nn.Module):
             #     print(f'lora_rank_gate = {self.lora_rank_gate}')
             #     #exit()
 
+            if adapter_model != '' and adapter_mode != '':
+                print('Adapter LoadMode')
+                if 'lora' in adapter_mode or 'bone' in adapter_mode or 'hybrid' in adapter_mode:
+                    print('LoRA Mode Lets Merge!')
+                    self.ModeMode = adapter_mode
+                    z_adapter = torch.load(adapter_model,map_location="cpu",mmap=True)
+                    z_adapter_keys = list(z_adapter.keys())
+                    for zkeys in z_adapter_keys:
+                        z_adapter = RenameToHFStyle(z_adapter,zkeys,self.HRWKV_Block_Mode[i][0])
+                    z_adapter_keys = list(z_adapter.keys())
+                    print(z_adapter_keys)
+
+                    for zkeys in z_adapter_keys:
+                        z[zkeys] = z_adapter[zkeys]
+
+            #exit()
 
 
-            
+
 
 
             self.MoEMode = False
@@ -282,9 +267,6 @@ class RWKV_x(nn.Module):
                     self.num_experts_per_tok = modelconfig['num_experts_per_tok'] 
                     self.norm_topk_prob = modelconfig['norm_topk_prob']
                     break
-            
-
-
 
             self.attn_quant,self.ffn_quant,self.base_precision,self.attn_ebits, self.attn_mbits,self.mlp_ebits, self.mlp_mbits = CleanQuantizationMode(base_precision)
             self.head_ebits,self.head_mbits = -8,-8
@@ -305,12 +287,7 @@ class RWKV_x(nn.Module):
                 print('x070 architecture initializing')
 
             if self.HFMode == False:
-                for k in keys:
-                    if f'head.' in k:
-                        if self.ModeMode != 'standard':
-                            z[k] = z[k].to(device='cuda', dtype=torch.bfloat16)
-                            z[k] = Attach_Adapter(keyname=k,weight=z[k],adapter=z_adapter,mode=self.ModeMode,scaling=adapter_scale,device='cuda').to(device='cpu')
-                            #exit()
+                
                 for key in keys:
                     if f'emb.' in key:
                         z = RenameToHFStyle(z,key,0)
@@ -318,6 +295,12 @@ class RWKV_x(nn.Module):
                         z = RenameToHFStyle(z,key,0)
                     elif f'ln_out.' in key:
                         z = RenameToHFStyle(z,key,0)
+            for k in keys:
+                if f'head.' in k:
+                    if self.ModeMode != 'standard':
+                        z[k] = z[k].to(device='cuda', dtype=torch.bfloat16)
+                        z[k] = Attach_Adapter(keyname=k,weight=z[k],adapter=z_adapter,mode=self.ModeMode,scaling=adapter_scale,device='cuda').to(device='cpu')
+                        #exit()
 
             self.RWKVMode = 7
             self.HRWKV_Mode = 0
@@ -336,6 +319,13 @@ class RWKV_x(nn.Module):
                             if f'blocks.{i}.' in key:
                                 z = RenameToHFStyle(z,key,self.HRWKV_Block_Mode[i][0])
                         keys = sorted(list(z.keys()),key=natural_sort_key)
+
+                    for k in keys:
+                        if f'layers.{i}.' in k:
+                            if self.ModeMode != 'standard':
+                                z[k] = z[k].to(device='cuda', dtype=torch.bfloat16)
+                                z[k] = Attach_Adapter(keyname=k,weight=z[k],adapter=z_adapter,mode=self.ModeMode,scaling=adapter_scale,device='cuda').to(device='cpu')
+
 
                     bbb = f'model.layers.{i}.'
                     att = f'model.layers.{i}.self_attn.'
@@ -464,17 +454,19 @@ class RWKV_x(nn.Module):
                     
                         
                     if self.HFMode == False:
-                        for k in keys:
-                            if f'blocks.{i}.' in k:
-                                if self.ModeMode != 'standard':
-                                    z[k] = z[k].to(device='cuda', dtype=torch.bfloat16)
-                                    z[k] = Attach_Adapter(keyname=k,weight=z[k],adapter=z_adapter,mode=self.ModeMode,scaling=adapter_scale,device='cuda').to(device='cpu')
-
-                        keys = sorted(list(z.keys()),key=natural_sort_key)
+                        
 
                         for key in keys:
                             if f'blocks.{i}.' in key:
                                 z = RenameToHFStyle(z,key,0)
+                        keys = sorted(list(z.keys()),key=natural_sort_key)
+
+                        for k in keys:
+                            if f'layers.{i}.' in k:
+                                if self.ModeMode != 'standard':
+                                    z[k] = z[k].to(device='cuda', dtype=torch.bfloat16)
+                                    z[k] = Attach_Adapter(keyname=k,weight=z[k],adapter=z_adapter,mode=self.ModeMode,scaling=adapter_scale,device='cuda').to(device='cpu')
+
                         keys = sorted(list(z.keys()),key=natural_sort_key)
 
                     bbb = f'model.layers.{i}.'
@@ -505,9 +497,9 @@ class RWKV_x(nn.Module):
                 if not k.endswith('qstate') and 'emb' not in k and 'ln0' not in k:# or is_in_blocks):  and ('mlp' not in k or is_in_blocks)
                     print(f'{k} move to device {device}')
                     z[k] = z[k].to(device=self.device)
-            
-         
 
+            self.emboncpu = True
+            
             # detect model details
             vocab_size, n_embd = z["model.embed_tokens.weight"].shape
             print(f'vocab = {vocab_size}')
@@ -522,11 +514,7 @@ class RWKV_x(nn.Module):
                 emb_device = z['model.embed_tokens.weight'].device
                 z['model.embed_tokens.weight'] = F.layer_norm(z['model.embed_tokens.weight'].to(dtype=self.base_precision,device='cuda'), (self.n_embd,), weight=z['model.layers.0.ln0.weight'].to(device='cuda'), bias=z['model.layers.0.ln0.bias'].to(device='cuda')).to(device=emb_device)
                                  
-
-
             self.dim_hidden = z['model.embed_tokens.weight'].shape[1]
-
-      
 
             self.dummytensor = torch.tensor(0).to(dtype=self.base_precision,device=self.device)
 

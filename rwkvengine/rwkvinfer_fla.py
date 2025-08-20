@@ -696,18 +696,13 @@ class LLMWorker:
                             #pos_caches = pos_caches.permute(1, 0, 2)
 
 
-                        if token_max < self.llm_minimum_chunk:
-                            KernelMode = 2
-                        else:
-                            KernelMode = 0
-
                         
 
                         if self.model.HRWKV_Mode == 1:
                             print(f'KVCache = {kv_caches.shape}')
                             x, _, wkv_states, kv_caches,pos_caches = self.model.forward(idx, shift_states, wkv_states,kv_caches,pos_caches)
                         else:
-                            x, shift_states, wkv_states = self.model.forward(idx, shift_states, wkv_states,KernelMode=KernelMode,time_offset_state=offset_tensor)
+                            x, shift_states, wkv_states = self.model.forward(idx, shift_states, wkv_states,time_offset_state=offset_tensor)
 
                         
 
@@ -1056,7 +1051,7 @@ class LLMWorker:
                         if self.time_debug:
                             start_time2 = time.time()
 
-                        idx = torch.cat(tokens, dim=0).to('cuda')
+                        idx = torch.cat(tokens, dim=0)#.to('cuda')
 
                         if BeforeBatchCount != realbatchcount:
                             self.States = self.model.new_state(realbatchcount,max_token=self.max_ctxlen) #support hybrid
@@ -1243,8 +1238,8 @@ class LLMWorker:
                                             if self.model.HRWKV_Mode == 1:
                                                 self.llM_current_batch_info[i]['kv_cache'] = kv_caches[NowTensorPosition]
                                                 self.llM_current_batch_info[i]['pos_cache'] = pos_caches[NowTensorPosition]
-                                                print(pos_caches[NowTensorPosition])
-                                                print(kv_caches[NowTensorPosition].shape)
+                                                #print(pos_caches[NowTensorPosition])
+                                                #print(kv_caches[NowTensorPosition].shape)
                                         else:
                                             if end_times[j] is None:
                                                 end_times[j] = time.time()

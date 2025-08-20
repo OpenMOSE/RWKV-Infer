@@ -15,7 +15,7 @@ from torch.nn.attention import SDPBackend, sdpa_kernel
 
 
 import torch._dynamo
-torch._dynamo.config.cache_size_limit = 64  # 例えば32に拡張
+torch._dynamo.config.cache_size_limit = 1  # 例えば32に拡張
 
 
 try:
@@ -1490,7 +1490,7 @@ class HRWKV_7(nn.Module):
     #@torch.compile
     @torch.compile()
     def hxa079r_forward(self, idx, 
-                last_wkv_states: List[torch.Tensor], kv_cache,pos_cache,  full_output:bool=False):
+                last_wkv_states: List[torch.Tensor], kv_cache: List[torch.Tensor],pos_cache,  full_output:bool=False):
         
         with torch.no_grad(): 
             z = self.z
