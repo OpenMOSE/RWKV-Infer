@@ -15,7 +15,7 @@ from torch.nn.attention import SDPBackend, sdpa_kernel
 
 
 import torch._dynamo
-torch._dynamo.config.cache_size_limit = 1  # 例えば32に拡張
+torch._dynamo.config.cache_size_limit = 32  # 例えば32に拡張
 
 
 try:
@@ -993,8 +993,8 @@ class HRWKV_7(nn.Module):
                                  ln_r, ln_k, rmsnorm_epsilon: float,
                                  ln1, ln2, rope_theta,
                                  ebits: int, mbits: int,
-                                 attention_sinks: int = 16,      # 保持する初期トークン数
-                                 window_size: int = 496):      # スライディングウィンドウサイズ
+                                 attention_sinks: int = 0,      # 保持する初期トークン数
+                                 window_size: int = 1024):      # スライディングウィンドウサイズ
         """
         StreamingLLM-style GQA Attention with Flash Attention.
         Maintains attention sinks (first few tokens) + sliding window for the rest.
@@ -1565,7 +1565,7 @@ class HRWKV_7(nn.Module):
 
                 else:
 
-                    xx, x, kv_cache= HRWKV_7.GQA_Attention_Flash(i,self.HRWKV_Block_Mode[i][2],self.n_head,self.head_size,x,kv_cache,cache_pos,
+                    xx, x, kv_cache= HRWKV_7.GQA_Attention_Flash_(i,self.HRWKV_Block_Mode[i][2],self.n_head,self.head_size,x,kv_cache,cache_pos,
                                                                         calc_cos,calc_sin,
                                                                         #z[att+'q_proj.weight'], z[att+'k_proj.weight'], z[att+'v_proj.weight'],
                                                                         z[att+'qkv_fused.weight'],self.HRWKV_Misc[att+'qkv_split_list'],
@@ -1690,7 +1690,7 @@ class HRWKV_7(nn.Module):
 
                 else:
 
-                    xx, x, kv_cache= HRWKV_7.GQA_Attention_Flash(i,self.HRWKV_Block_Mode[i][2],self.n_head,self.head_size,x,kv_cache,cache_pos,
+                    xx, x, kv_cache= HRWKV_7.GQA_Attention_Flash_(i,self.HRWKV_Block_Mode[i][2],self.n_head,self.head_size,x,kv_cache,cache_pos,
                                                                         calc_cos,calc_sin,
                                                                         #z[att+'q_proj.weight'], z[att+'k_proj.weight'], z[att+'v_proj.weight'],
                                                                         z[att+'qkv_fused.weight'],self.HRWKV_Misc[att+'qkv_split_list'],

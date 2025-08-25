@@ -127,7 +127,7 @@ def RenameToHFStyle(z,inputkey,gqa=0):
 
 import torch
 
-def Attach_Adapter(keyname,weight,adapter,mode,scaling=2.0,device='cuda'): #from JL-er lora merge inspired
+def Attach_Adapter(keyname,weight,adapter,mode,scaling=1.0,device='cuda'): #from JL-er lora merge inspired
             
             print(f'AttachAdapter = {keyname}')
             k = keyname
