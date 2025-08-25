@@ -28,7 +28,7 @@ if __name__ == '__main__':
 
 
     model = RWKV_x('/home/client/Projects/RWKV-Reka-3.1-Flash/','int8',
-                   adapter_model='/home/client/Projects/RWKV-LM-RLHF/main/myfolder/hxa079_output_may/rwkv-3.pth',
+                   adapter_model='/home/client/Projects/RWKV-LM-RLHF/main/myfolder/hxa079_output_may2/rwkv-3.pth',
                    adapter_mode='bone',
                    fully_fusedrecurrent=args.fully_fused,
                    rope_theta=8000000.0,
@@ -82,7 +82,7 @@ if __name__ == '__main__':
 
         context = pipeline.generate_prompt_from_config(pipeline.modeltemplate,messages,True)
 
-        context = context + "<reasoning>\n\n\n\n</reasoning>\n"
+        context = context# + "<reasoning>\n\n\n\n</reasoning>\n"
 
         States = model.new_state(Target_batch,2048)#tate_empty(32, 1, 2560, 2560 // 32)
         #States2 = model.new_state(Target_batch,4096)#state_empty(32, 1, 2560, 2560 // 32)
@@ -228,7 +228,7 @@ if __name__ == '__main__':
         min_time_all = 1e10
         min_time_all_single = 1e10
 
-        maxtoken= 500
+        maxtoken= 1024
 
         temperature = torch.full((Target_batch,), float(target_temp))
         top_p = torch.full((Target_batch,), float(target_topp))

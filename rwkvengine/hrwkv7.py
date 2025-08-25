@@ -851,6 +851,201 @@ class HRWKV_7(nn.Module):
                        ln1, ln2, rope_theta,
                        ebits: int, mbits: int):
         """
+        GQA Attention using Flash Attention implementation via Triton with KV cache size management.
+        
+        This function replaces the PyTorch SDPA with the custom Flash Attention kernel
+        and manages KV cache size by evicting old entries when approaching the limit.
+        The max cache size is automatically determined from the KV cache tensor dimensions.
+        """
+        
+        B, T, C = x_in.size()
+        
+        # Get max cache size from KV cache tensor dimensions
+        # past_key_value shape: [num_layers, batch_size, 2, max_seq_len, hidden_dim]
+        max_cache_size = past_key_value.shape[3]
+        
+        x = T5RMSNorm(x_in, ln1, rmsnorm_epsilon)
+        
+        HN = H * N
+        
+        # QKV projection
+        qkv = fpx_matmul(x, QKV_, QKV_state, ebits, mbits)
+        q, k, v = qkv.split(qkv_split_list, dim=-1)
+        
+        # Add bias and reshape
+        q = q.add_(Q_bias).view(B, T, H, N)
+        k = k.add_(K_bias)
+        v = v.add_(V_bias)
+        
+        # KV dimensions for GQA
+        kv_dim = k.shape[2]
+        kv_heads = kv_dim // N
+        kv_repeat = HN // kv_dim
+        
+        k = k.view(B, T, kv_heads, N)
+        v = v.view(B, T, kv_heads, N)
+        
+        # Optional RMSNorm
+        if ln_r is not None:
+            q = T5RMSNorm(q, ln_r, rmsnorm_epsilon)
+            k = T5RMSNorm(k, ln_k, rmsnorm_epsilon)
+        
+        # Write to KV cache with size management
+        k_write = k.view(B, T, -1)
+        v_write = v.view(B, T, -1)
+        starts = cache_position[:, 0]
+        
+        # Check which batches need cache eviction
+        new_lengths = starts + T
+        batches_to_evict = new_lengths > max_cache_size
+        
+        # For batches that would exceed max_cache_size, perform eviction
+        if batches_to_evict.any():
+            # Calculate how many tokens to evict for each overflowing batch
+            excess_tokens = torch.clamp(new_lengths - max_cache_size, min=0)
+            
+            for b in range(B):
+                if batches_to_evict[b]:
+                    evict_count = excess_tokens[b].item()
+                    if evict_count > 0:
+                        # Shift the cache to remove old tokens (FIFO eviction)
+                        current_len = starts[b].item()
+                        remaining_len = current_len - evict_count
+                        
+                        if remaining_len > 0:
+                            # Clone the data to avoid memory overlap issues
+                            k_data = past_key_value[gqa_layer_id, b, 0, evict_count:current_len].clone()
+                            v_data = past_key_value[gqa_layer_id, b, 1, evict_count:current_len].clone()
+                            
+                            # Clear the cache for this batch
+                            past_key_value[gqa_layer_id, b, 0, :current_len].zero_()
+                            past_key_value[gqa_layer_id, b, 1, :current_len].zero_()
+                            
+                            # Write the shifted data back
+                            past_key_value[gqa_layer_id, b, 0, :remaining_len] = k_data
+                            past_key_value[gqa_layer_id, b, 1, :remaining_len] = v_data
+                        else:
+                            # If no tokens remain, clear the entire cache for this batch
+                            past_key_value[gqa_layer_id, b, 0, :current_len].zero_()
+                            past_key_value[gqa_layer_id, b, 1, :current_len].zero_()
+                        
+                        # Update the start position for this batch
+                        starts[b] = remaining_len
+        
+        # Write new K, V to cache (after potential eviction)
+        batch_idx = torch.arange(B, device=k.device)[:, None]
+        seq_idx = starts[:, None] + torch.arange(T, device=k.device)
+        
+        # Ensure we don't exceed cache bounds
+        valid_seq_idx = torch.clamp(seq_idx, 0, past_key_value.shape[3] - 1)
+        
+        past_key_value[gqa_layer_id, batch_idx, 0, valid_seq_idx] = k_write
+        past_key_value[gqa_layer_id, batch_idx, 1, valid_seq_idx] = v_write
+        
+        # Get valid lengths for each batch (capped at max_cache_size)
+        valid_lengths = torch.clamp(starts + T, max=max_cache_size)
+        
+        # Prepare for Flash Attention
+        # For variable length sequences, we need cu_seqlens format
+        cu_seqlens_q = torch.zeros(B + 1, dtype=torch.int32, device=q.device)
+        cu_seqlens_k = torch.zeros(B + 1, dtype=torch.int32, device=q.device)
+        
+        # Build cumulative sequence lengths
+        for i in range(B):
+            cu_seqlens_q[i + 1] = cu_seqlens_q[i] + T
+            cu_seqlens_k[i + 1] = cu_seqlens_k[i] + valid_lengths[i]
+        
+        # Prepare tensors for Flash Attention
+        # Query: reshape to (total_q_tokens, H, N)
+        q_flash = q.reshape(B * T, H, N)
+        
+        # Key and Value: gather all valid tokens from cache
+        k_all_list = []
+        v_all_list = []
+        
+        for b in range(B):
+            valid_len = valid_lengths[b].int()
+            
+            # Extract valid K and V from cache
+            k_valid = past_key_value[gqa_layer_id, b, 0, :valid_len]
+            v_valid = past_key_value[gqa_layer_id, b, 1, :valid_len]
+            
+            # Reshape to (seq_len, kv_heads, N)
+            k_valid = k_valid.view(valid_len, kv_heads, N)
+            v_valid = v_valid.view(valid_len, kv_heads, N)
+            
+            k_all_list.append(k_valid)
+            v_all_list.append(v_valid)
+        
+        # Concatenate all K and V
+        k_flash = torch.cat(k_all_list, dim=0)  # (total_k_tokens, kv_heads, N)
+        v_flash = torch.cat(v_all_list, dim=0)  # (total_v_tokens, kv_heads, N)
+        
+        # Calculate max sequence lengths
+        max_seqlen_q = T
+        max_seqlen_k = int(valid_lengths.max().item())
+        
+        # Prepare output tensor
+        o_flash = torch.empty_like(q_flash)
+        
+        # Set up scaling
+        sm_scale = 1.0 / (N ** 0.5)
+        
+        # Call Flash Attention
+        # Note: The triton_attention function expects FP8 scale parameters
+        # For non-FP8 case, we pass None
+        fp8_scales = None
+        fp8_out_scale = None
+        
+        # Handle GQA by ensuring K/V are properly shaped
+        # If we have fewer KV heads than Q heads, Flash Attention handles this internally
+        
+        # Import the Flash Attention implementation
+        #from flash_attn_triton import triton_attention
+        
+        # Call the Flash Attention kernel
+        attn_output, _ = triton_attention(
+            q_flash,
+            k_flash,
+            v_flash,
+            o_flash,
+            cu_seqlens_q,
+            cu_seqlens_k,
+            max_seqlen_q,
+            max_seqlen_k,
+            True,  # causal
+            sm_scale,
+            None,  # bias
+            # fp8_scales,
+            # fp8_out_scale,
+        )
+        
+        # Reshape output back to (B, T, H, N)
+        attn_output = attn_output.view(B, T, H, N)
+        
+        # For GQA, if we had repeated KV heads, the output already accounts for this
+        # Reshape and output projection
+        attn_output = attn_output.contiguous().view(B, T, HN)
+        out = fpx_matmul(attn_output, O_, O_state, ebits, mbits)
+        x_out = x_in + out
+        
+        # Update cache_position to reflect any eviction that occurred
+        cache_position[:, 0] = starts
+        
+        return T5RMSNorm(x_out, ln2, rmsnorm_epsilon), x_out, past_key_value
+
+    def GQA_Attention_Flash__(layer_id: int, gqa_layer_id: int, H: int, N: int,
+                       x_in, past_key_value, cache_position,
+                       calc_cos, calc_sin,
+                       QKV_, qkv_split_list,
+                       O_,
+                       QKV_state,
+                       O_state,
+                       Q_bias, K_bias, V_bias, O_bias,
+                       ln_r, ln_k, rmsnorm_epsilon: float,
+                       ln1, ln2, rope_theta,
+                       ebits: int, mbits: int):
+        """
         GQA Attention using Flash Attention implementation via Triton.
         
         This function replaces the PyTorch SDPA with the custom Flash Attention kernel.
@@ -983,337 +1178,7 @@ class HRWKV_7(nn.Module):
         
         return T5RMSNorm(x_out, ln2, rmsnorm_epsilon), x_out, past_key_value
 
-    @torch.compiler.disable
-    def GQA_Attention_Flash(layer_id: int, gqa_layer_id: int, H: int, N: int,
-                                 x_in, past_key_value, cache_position,
-                                 calc_cos, calc_sin,
-                                 QKV_, qkv_split_list,
-                                 O_, QKV_state, O_state,
-                                 Q_bias, K_bias, V_bias, O_bias,
-                                 ln_r, ln_k, rmsnorm_epsilon: float,
-                                 ln1, ln2, rope_theta,
-                                 ebits: int, mbits: int,
-                                 attention_sinks: int = 0,      # 保持する初期トークン数
-                                 window_size: int = 1024):      # スライディングウィンドウサイズ
-        """
-        StreamingLLM-style GQA Attention with Flash Attention.
-        Maintains attention sinks (first few tokens) + sliding window for the rest.
-        Total cache size = attention_sinks + window_size
-        """
-        
-        B, T, C = x_in.size()
-        x = T5RMSNorm(x_in, ln1, rmsnorm_epsilon)
-        
-        # KVキャッシュの構造: [attention_sinks tokens] + [sliding window tokens]
-        max_cache_len = past_key_value.shape[3]  # Should equal attention_sinks + window_size
-        
-        HN = H * N
-        
-        # QKV projection
-        qkv = fpx_matmul(x, QKV_, QKV_state, ebits, mbits)
-        q, k, v = qkv.split(qkv_split_list, dim=-1)
-        
-        # Add bias and reshape
-        q = q.add_(Q_bias).view(B, T, H, N)
-        k = k.add_(K_bias)
-        v = v.add_(V_bias)
-        
-        # KV dimensions for GQA
-        kv_dim = k.shape[2]
-        kv_heads = kv_dim // N
-        kv_repeat = HN // kv_dim
-        
-        k = k.view(B, T, kv_heads, N)
-        v = v.view(B, T, kv_heads, N)
-        
-        # Optional RMSNorm
-        if ln_r is not None:
-            q = T5RMSNorm(q, ln_r, rmsnorm_epsilon)
-            k = T5RMSNorm(k, ln_k, rmsnorm_epsilon)
-        
-        k_write = k.view(B, T, -1)
-        v_write = v.view(B, T, -1)
-        
-        # === StreamingLLM Cache Update ===
-        # cache_positionは累積トークン数を保持
-        valid_lengths = torch.zeros(B, dtype=torch.long, device=x_in.device)
-        
-        for b in range(B):
-            total_seen = int(cache_position[b, 0])  # これまでに処理した総トークン数
-            
-            if total_seen < attention_sinks:
-                # Phase 1: まだattention sink領域を埋めている段階
-                write_len = min(T, attention_sinks - total_seen)
-                past_key_value[gqa_layer_id, b, 0, total_seen:total_seen+write_len] = k_write[b, :write_len]
-                past_key_value[gqa_layer_id, b, 1, total_seen:total_seen+write_len] = v_write[b, :write_len]
-                
-                remaining = T - write_len
-                if remaining > 0:
-                    # attention sinkが埋まり、sliding window領域に入る
-                    past_key_value[gqa_layer_id, b, 0, attention_sinks:attention_sinks+remaining] = k_write[b, write_len:]
-                    past_key_value[gqa_layer_id, b, 1, attention_sinks:attention_sinks+remaining] = v_write[b, write_len:]
-                
-                # 有効なキャッシュ長
-                valid_lengths[b] = min(total_seen + T, max_cache_len)
-                cache_position[b, 0] = total_seen + T
-                
-            elif total_seen < max_cache_len:
-                # Phase 2: attention sinkは埋まり、sliding windowを埋めている段階
-                window_start = attention_sinks
-                window_pos = total_seen - attention_sinks  # window内での現在位置
-                write_len = min(T, max_cache_len - total_seen)
-                
-                past_key_value[gqa_layer_id, b, 0, total_seen:total_seen+write_len] = k_write[b, :write_len]
-                past_key_value[gqa_layer_id, b, 1, total_seen:total_seen+write_len] = v_write[b, :write_len]
-                
-                remaining = T - write_len
-                if remaining > 0:
-                    # キャッシュが満杯になった - sliding開始
-                    # 古いwindow部分を左にシフト
-                    shift_amount = remaining
-                    past_key_value[gqa_layer_id, b, :, attention_sinks:max_cache_len-shift_amount] = \
-                        past_key_value[gqa_layer_id, b, :, attention_sinks+shift_amount:max_cache_len].clone()
-                    
-                    # 新しいトークンを末尾に追加
-                    past_key_value[gqa_layer_id, b, 0, max_cache_len-shift_amount:max_cache_len] = k_write[b, write_len:]
-                    past_key_value[gqa_layer_id, b, 1, max_cache_len-shift_amount:max_cache_len] = v_write[b, write_len:]
-                
-                valid_lengths[b] = min(total_seen + T, max_cache_len)
-                cache_position[b, 0] = total_seen + T
-                
-            else:
-                # Phase 3: キャッシュが満杯 - sliding window mode
-                # attention sinksは保持、window部分のみスライド
-                
-                if T < window_size:
-                    # 少量の新トークン - 効率的にスライド
-                    # window部分を左にシフト
-                    past_key_value[gqa_layer_id, b, :, attention_sinks:max_cache_len-T] = \
-                        past_key_value[gqa_layer_id, b, :, attention_sinks+T:max_cache_len].clone()
-                    
-                    # 新しいトークンを末尾に追加
-                    past_key_value[gqa_layer_id, b, 0, max_cache_len-T:max_cache_len] = k_write[b]
-                    past_key_value[gqa_layer_id, b, 1, max_cache_len-T:max_cache_len] = v_write[b]
-                else:
-                    # 大量の新トークン - window全体を置き換え
-                    use_len = min(T, window_size)
-                    start_idx = max(0, T - window_size)
-                    
-                    past_key_value[gqa_layer_id, b, 0, attention_sinks:attention_sinks+use_len] = k_write[b, start_idx:start_idx+use_len]
-                    past_key_value[gqa_layer_id, b, 1, attention_sinks:attention_sinks+use_len] = v_write[b, start_idx:start_idx+use_len]
-                
-                valid_lengths[b] = max_cache_len
-                cache_position[b, 0] = total_seen + T
-        
-        # === Flash Attention準備 ===
-        # Cumulative sequence lengths
-        cu_seqlens_q = torch.zeros(B + 1, dtype=torch.int32, device=q.device)
-        cu_seqlens_k = torch.zeros(B + 1, dtype=torch.int32, device=q.device)
-        
-        cu_seqlens_q[1:] = torch.arange(1, B + 1, device=q.device) * T
-        cu_seqlens_k[1:] = valid_lengths.cumsum(dim=0)
-        
-        # Query reshape
-        q_flash = q.reshape(B * T, H, N)
-        
-        # === Key/Value gathering ===
-        max_valid_len = int(valid_lengths.max().item())
-        
-        k_all_list = []
-        v_all_list = []
-        
-        for b in range(B):
-            valid_len = int(valid_lengths[b])
-            
-            # 有効な部分のみ取得
-            k_valid = past_key_value[gqa_layer_id, b, 0, :valid_len]
-            v_valid = past_key_value[gqa_layer_id, b, 1, :valid_len]
-            
-            # Reshape to (seq_len, kv_heads, N)
-            k_valid = k_valid.view(valid_len, kv_heads, N)
-            v_valid = v_valid.view(valid_len, kv_heads, N)
-            
-            k_all_list.append(k_valid)
-            v_all_list.append(v_valid)
-        
-        # Concatenate all K/V
-        k_flash = torch.cat(k_all_list, dim=0)  # (total_k_tokens, kv_heads, N)
-        v_flash = torch.cat(v_all_list, dim=0)  # (total_v_tokens, kv_heads, N)
-        
-        # Output tensor
-        o_flash = torch.empty_like(q_flash)
-        
-        # Scaling factor
-        sm_scale = 1.0 / (N ** 0.5)
-        
-        # === Flash Attention実行 ===
-        attn_output, _ = triton_attention(
-            q_flash,
-            k_flash,
-            v_flash,
-            o_flash,
-            cu_seqlens_q,
-            cu_seqlens_k,
-            T,  # max_seqlen_q
-            max_valid_len,  # max_seqlen_k
-            True,  # causal
-            sm_scale,
-            None,  # bias
-        )
-        
-        # === 出力処理 ===
-        # Reshape output back to (B, T, H, N)
-        attn_output = attn_output.view(B, T, H, N)
-        
-        # Reshape for output projection
-        attn_output = attn_output.contiguous().view(B, T, HN)
-        
-        # Output projection
-        out = fpx_matmul(attn_output, O_, O_state, ebits, mbits)
-        
-        # Add residual connection
-        x_out = x_in + out
-        
-        # Final RMSNorm
-        return T5RMSNorm(x_out, ln2, rmsnorm_epsilon), x_out, past_key_value
-    #@torch.compile
-    def GQA_Attention_Flash_Fused(layer_id: int, gqa_layer_id: int, H: int, N: int,
-                              x_in, past_key_value, cache_position,
-                              calc_cos, calc_sin,
-                              QKV_, qkv_split_list,
-                              O_,
-                              QKV_state,
-                              O_state,
-                              Q_bias, K_bias, V_bias, O_bias,
-                              ln_r, ln_k, rmsnorm_epsilon: float,
-                              ln1, ln2, rope_theta,
-                              ebits: int, mbits: int):
-        """
-        Highly optimized version with fused operations and minimal memory copies.
-        """
-        
-        B, T, C = x_in.size()
-        x = T5RMSNorm(x_in, ln1, rmsnorm_epsilon)
-        
-        HN = H * N
-        
-        # QKV projection
-        qkv = fpx_matmul(x, QKV_, QKV_state, ebits, mbits)
-        q, k, v = qkv.split(qkv_split_list, dim=-1)
-        
-        # Fused bias add and reshape
-        q = (q + Q_bias).view(B, T, H, N)
-        k = (k + K_bias).view(B, T, -1)
-        v = (v + V_bias).view(B, T, -1)
-        
-        # KV dimensions
-        kv_dim = k.shape[2]
-        kv_heads = kv_dim // N
-        
-        # Optional RMSNorm
-        if ln_r is not None:
-            q = T5RMSNorm(q, ln_r, rmsnorm_epsilon)
-            k = T5RMSNorm(k.view(B, T, kv_heads, N), ln_k, rmsnorm_epsilon).view(B, T, -1)
-        
-        # Cache positions
-        starts = cache_position[:, 0]
-        valid_lengths = starts + T
-        
-        # For single batch optimization
-        if B == 1:
-            # Direct slice assignment (most efficient for B=1)
-            start = starts[0].item()
-            end = start + T
-            past_key_value[gqa_layer_id, 0, 0, start:end] = k[0]
-            past_key_value[gqa_layer_id, 0, 1, start:end] = v[0]
-            
-            # Direct extraction
-            valid_len = valid_lengths[0].item()
-            k_flash = past_key_value[gqa_layer_id, 0, 0, :valid_len].view(valid_len, kv_heads, N)
-            v_flash = past_key_value[gqa_layer_id, 0, 1, :valid_len].view(valid_len, kv_heads, N)
-            q_flash = q.view(T, H, N)
-            
-            # Simple cu_seqlens
-            cu_seqlens_q = torch.tensor([0, T], dtype=torch.int32, device=q.device)
-            cu_seqlens_k = torch.tensor([0, valid_len], dtype=torch.int32, device=q.device)
-            
-            max_seqlen_q = T
-            max_seqlen_k = valid_len
-        else:
-            # Batch processing with minimal overhead
-            # Use scatter for cache write (single kernel launch)
-            batch_size_range = torch.arange(B, device=k.device)
-            
-            # Prepare indices for scatter
-            indices = starts.unsqueeze(1) + torch.arange(T, device=k.device).unsqueeze(0)
-            
-            # Write to cache using advanced indexing
-            for b in range(B):
-                past_key_value[gqa_layer_id, b, 0, indices[b]] = k[b]
-                past_key_value[gqa_layer_id, b, 1, indices[b]] = v[b]
-            
-            # Efficient batched extraction
-            max_valid_len = valid_lengths.max().item()
-            
-            # Pre-allocate with maximum size
-            k_extract = torch.zeros(B, max_valid_len, kv_dim, dtype=k.dtype, device=k.device)
-            v_extract = torch.zeros(B, max_valid_len, kv_dim, dtype=v.dtype, device=v.device)
-            
-            # Batch extraction using mask
-            for b in range(B):
-                vl = valid_lengths[b].item()
-                k_extract[b, :vl] = past_key_value[gqa_layer_id, b, 0, :vl]
-                v_extract[b, :vl] = past_key_value[gqa_layer_id, b, 1, :vl]
-            
-            # Prepare for Flash Attention
-            cu_seqlens_q = torch.arange(0, (B + 1) * T, T, dtype=torch.int32, device=q.device)
-            cu_seqlens_k = torch.cat([
-                torch.tensor([0], dtype=torch.int32, device=q.device),
-                valid_lengths.to(torch.int32).cumsum(0)
-            ])
-            
-            # Flatten for Flash Attention
-            q_flash = q.reshape(B * T, H, N)
-            
-            # Create mask for valid tokens
-            total_k_tokens = cu_seqlens_k[-1].item()
-            k_flash = torch.empty(total_k_tokens, kv_heads, N, dtype=k.dtype, device=k.device)
-            v_flash = torch.empty(total_k_tokens, kv_heads, N, dtype=v.dtype, device=v.device)
-            
-            # Efficient copy using views
-            for b in range(B):
-                start = cu_seqlens_k[b].item()
-                end = cu_seqlens_k[b + 1].item()
-                length = end - start
-                k_flash[start:end] = k_extract[b, :length].view(length, kv_heads, N)
-                v_flash[start:end] = v_extract[b, :length].view(length, kv_heads, N)
-            
-            max_seqlen_q = T
-            max_seqlen_k = max_valid_len
-        
-        # Pre-allocate output
-        o_flash = torch.empty_like(q_flash)
-        
-        # Flash Attention call
-        sm_scale = 1.0 / (N ** 0.5)
-        attn_output, _ = triton_attention(
-            q_flash, k_flash, v_flash, o_flash,
-            cu_seqlens_q, cu_seqlens_k,
-            max_seqlen_q, max_seqlen_k,
-            True, sm_scale, None
-        )
-        
-        # Output projection with minimal reshaping
-        if B == 1:
-            attn_output = attn_output.view(1, T, H, N)
-        else:
-            attn_output = attn_output.view(B, T, H, N)
-        
-        attn_output = attn_output.reshape(B, T, HN)
-        out = fpx_matmul(attn_output, O_, O_state, ebits, mbits)
-        x_out = x_in + out
-        
-        return T5RMSNorm(x_out, ln2, rmsnorm_epsilon), x_out, past_key_value
+    
 
 
 

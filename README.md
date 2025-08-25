@@ -7,11 +7,10 @@
 <div align="center"> 
 A lightweight RWKV inference platform that operates in Cuda and Rocm environments, supporting multi-batch inference.(RWKV v7)
 </div>
-##Caution: Currently working big major change. 
 
 ## Currently Working Big Major Change.
 
-## 🔄 Hybrid RWKV + Transformer Support(BETA)
+## 🔄 Hybrid RWKV + Transformer Support
 
 I'm so excited to announce that RWKV-Infer now supports a **hybrid architecture combining RWKV and Transformer** layers.
 
@@ -55,10 +54,12 @@ By combining multiple states, MRSS integrates knowledge from different "experts,
 
 - **Quantization Support**:
   - FP8 (Experiment. need NVIDIA H100 or Ada series gpu)
-  - FP6 (Early Experiment. slightly degradation. toachao fpx e3m2)
-  - FP5 (Early Experiment. ppl 10% degradation. toachao fpx e2m2)
+  - int8 (Triton genv kernel based. best inference speed for single batch )
+  - FP6 (slightly degradation. toachao fpx e3m2)
+  - FP5 (ppl 10% degradation. toachao fpx e2m2)
+  - hqq4 (hqq int4 gemlite triton kernel)
 - **Multi Batch Generation**:
-  - multi batch generation with Flash-Linear-Attention(x070)
+  - multi batch generation with Flash-Linear-Attention(x070,hxa079)
   - multi batch sampling
   - On an RTX4090, a 7B parameter model can run over 256 batches of inference.
 
