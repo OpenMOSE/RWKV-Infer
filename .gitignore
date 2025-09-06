@@ -3,6 +3,7 @@ log/
 states/
 adapters/
 experiment/
+uncheatable_eval/
 __pycache__/
 *.pyc
 fla/__pycache__/__init__.cpython-310.pyc

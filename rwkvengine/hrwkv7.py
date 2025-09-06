@@ -1034,149 +1034,151 @@ class HRWKV_7(nn.Module):
         
         return T5RMSNorm(x_out, ln2, rmsnorm_epsilon), x_out, past_key_value
 
-    def GQA_Attention_Flash__(layer_id: int, gqa_layer_id: int, H: int, N: int,
-                       x_in, past_key_value, cache_position,
-                       calc_cos, calc_sin,
-                       QKV_, qkv_split_list,
-                       O_,
-                       QKV_state,
-                       O_state,
-                       Q_bias, K_bias, V_bias, O_bias,
-                       ln_r, ln_k, rmsnorm_epsilon: float,
-                       ln1, ln2, rope_theta,
-                       ebits: int, mbits: int):
-        """
-        GQA Attention using Flash Attention implementation via Triton.
+
+
+    # def GQA_Attention_Flash__(layer_id: int, gqa_layer_id: int, H: int, N: int,
+    #                    x_in, past_key_value, cache_position,
+    #                    calc_cos, calc_sin,
+    #                    QKV_, qkv_split_list,
+    #                    O_,
+    #                    QKV_state,
+    #                    O_state,
+    #                    Q_bias, K_bias, V_bias, O_bias,
+    #                    ln_r, ln_k, rmsnorm_epsilon: float,
+    #                    ln1, ln2, rope_theta,
+    #                    ebits: int, mbits: int):
+    #     """
+    #     GQA Attention using Flash Attention implementation via Triton.
         
-        This function replaces the PyTorch SDPA with the custom Flash Attention kernel.
-        """
+    #     This function replaces the PyTorch SDPA with the custom Flash Attention kernel.
+    #     """
         
-        B, T, C = x_in.size()
-        x = T5RMSNorm(x_in, ln1, rmsnorm_epsilon)
+    #     B, T, C = x_in.size()
+    #     x = T5RMSNorm(x_in, ln1, rmsnorm_epsilon)
         
-        HN = H * N
+    #     HN = H * N
         
-        # QKV projection
-        qkv = fpx_matmul(x, QKV_, QKV_state, ebits, mbits)
-        q, k, v = qkv.split(qkv_split_list, dim=-1)
+    #     # QKV projection
+    #     qkv = fpx_matmul(x, QKV_, QKV_state, ebits, mbits)
+    #     q, k, v = qkv.split(qkv_split_list, dim=-1)
         
-        # Add bias and reshape
-        q = q.add_(Q_bias).view(B, T, H, N)
-        k = k.add_(K_bias)
-        v = v.add_(V_bias)
+    #     # Add bias and reshape
+    #     q = q.add_(Q_bias).view(B, T, H, N)
+    #     k = k.add_(K_bias)
+    #     v = v.add_(V_bias)
         
-        # KV dimensions for GQA
-        kv_dim = k.shape[2]
-        kv_heads = kv_dim // N
-        kv_repeat = HN // kv_dim
+    #     # KV dimensions for GQA
+    #     kv_dim = k.shape[2]
+    #     kv_heads = kv_dim // N
+    #     kv_repeat = HN // kv_dim
         
-        k = k.view(B, T, kv_heads, N)
-        v = v.view(B, T, kv_heads, N)
+    #     k = k.view(B, T, kv_heads, N)
+    #     v = v.view(B, T, kv_heads, N)
         
-        # Optional RMSNorm
-        if ln_r is not None:
-            q = T5RMSNorm(q, ln_r, rmsnorm_epsilon)
-            k = T5RMSNorm(k, ln_k, rmsnorm_epsilon)
+    #     # Optional RMSNorm
+    #     if ln_r is not None:
+    #         q = T5RMSNorm(q, ln_r, rmsnorm_epsilon)
+    #         k = T5RMSNorm(k, ln_k, rmsnorm_epsilon)
         
-        # Write to KV cache
-        k_write = k.view(B, T, -1)
-        v_write = v.view(B, T, -1)
-        starts = cache_position[:, 0]
+    #     # Write to KV cache
+    #     k_write = k.view(B, T, -1)
+    #     v_write = v.view(B, T, -1)
+    #     starts = cache_position[:, 0]
         
-        # Simple batched write to cache
-        batch_idx = torch.arange(B, device=k.device)[:, None]
-        seq_idx = starts[:, None] + torch.arange(T, device=k.device)
-        past_key_value[gqa_layer_id, batch_idx, 0, seq_idx] = k_write
-        past_key_value[gqa_layer_id, batch_idx, 1, seq_idx] = v_write
+    #     # Simple batched write to cache
+    #     batch_idx = torch.arange(B, device=k.device)[:, None]
+    #     seq_idx = starts[:, None] + torch.arange(T, device=k.device)
+    #     past_key_value[gqa_layer_id, batch_idx, 0, seq_idx] = k_write
+    #     past_key_value[gqa_layer_id, batch_idx, 1, seq_idx] = v_write
         
-        # Get valid lengths for each batch
-        valid_lengths = cache_position[:, 0] + T
+    #     # Get valid lengths for each batch
+    #     valid_lengths = cache_position[:, 0] + T
         
-        # Prepare for Flash Attention
-        # For variable length sequences, we need cu_seqlens format
-        cu_seqlens_q = torch.zeros(B + 1, dtype=torch.int32, device=q.device)
-        cu_seqlens_k = torch.zeros(B + 1, dtype=torch.int32, device=q.device)
+    #     # Prepare for Flash Attention
+    #     # For variable length sequences, we need cu_seqlens format
+    #     cu_seqlens_q = torch.zeros(B + 1, dtype=torch.int32, device=q.device)
+    #     cu_seqlens_k = torch.zeros(B + 1, dtype=torch.int32, device=q.device)
         
-        # Build cumulative sequence lengths
-        for i in range(B):
-            cu_seqlens_q[i + 1] = cu_seqlens_q[i] + T
-            cu_seqlens_k[i + 1] = cu_seqlens_k[i] + valid_lengths[i]
+    #     # Build cumulative sequence lengths
+    #     for i in range(B):
+    #         cu_seqlens_q[i + 1] = cu_seqlens_q[i] + T
+    #         cu_seqlens_k[i + 1] = cu_seqlens_k[i] + valid_lengths[i]
         
-        # Prepare tensors for Flash Attention
-        # Query: reshape to (total_q_tokens, H, N)
-        q_flash = q.reshape(B * T, H, N)
+    #     # Prepare tensors for Flash Attention
+    #     # Query: reshape to (total_q_tokens, H, N)
+    #     q_flash = q.reshape(B * T, H, N)
         
-        # Key and Value: gather all valid tokens from cache
-        k_all_list = []
-        v_all_list = []
+    #     # Key and Value: gather all valid tokens from cache
+    #     k_all_list = []
+    #     v_all_list = []
         
-        for b in range(B):
-            valid_len = valid_lengths[b].int()
+    #     for b in range(B):
+    #         valid_len = valid_lengths[b].int()
             
-            # Extract valid K and V from cache
-            k_valid = past_key_value[gqa_layer_id, b, 0, :valid_len]
-            v_valid = past_key_value[gqa_layer_id, b, 1, :valid_len]
+    #         # Extract valid K and V from cache
+    #         k_valid = past_key_value[gqa_layer_id, b, 0, :valid_len]
+    #         v_valid = past_key_value[gqa_layer_id, b, 1, :valid_len]
             
-            # Reshape to (seq_len, kv_heads, N)
-            k_valid = k_valid.view(valid_len, kv_heads, N)
-            v_valid = v_valid.view(valid_len, kv_heads, N)
+    #         # Reshape to (seq_len, kv_heads, N)
+    #         k_valid = k_valid.view(valid_len, kv_heads, N)
+    #         v_valid = v_valid.view(valid_len, kv_heads, N)
             
-            k_all_list.append(k_valid)
-            v_all_list.append(v_valid)
+    #         k_all_list.append(k_valid)
+    #         v_all_list.append(v_valid)
         
-        # Concatenate all K and V
-        k_flash = torch.cat(k_all_list, dim=0)  # (total_k_tokens, kv_heads, N)
-        v_flash = torch.cat(v_all_list, dim=0)  # (total_v_tokens, kv_heads, N)
+    #     # Concatenate all K and V
+    #     k_flash = torch.cat(k_all_list, dim=0)  # (total_k_tokens, kv_heads, N)
+    #     v_flash = torch.cat(v_all_list, dim=0)  # (total_v_tokens, kv_heads, N)
         
-        # Calculate max sequence lengths
-        max_seqlen_q = T
-        max_seqlen_k = int(valid_lengths.max().item())
+    #     # Calculate max sequence lengths
+    #     max_seqlen_q = T
+    #     max_seqlen_k = int(valid_lengths.max().item())
         
-        # Prepare output tensor
-        o_flash = torch.empty_like(q_flash)
+    #     # Prepare output tensor
+    #     o_flash = torch.empty_like(q_flash)
         
-        # Set up scaling
-        sm_scale = 1.0 / (N ** 0.5)
+    #     # Set up scaling
+    #     sm_scale = 1.0 / (N ** 0.5)
         
-        # Call Flash Attention
-        # Note: The triton_attention function expects FP8 scale parameters
-        # For non-FP8 case, we pass None
-        fp8_scales = None
-        fp8_out_scale = None
+    #     # Call Flash Attention
+    #     # Note: The triton_attention function expects FP8 scale parameters
+    #     # For non-FP8 case, we pass None
+    #     fp8_scales = None
+    #     fp8_out_scale = None
         
-        # Handle GQA by ensuring K/V are properly shaped
-        # If we have fewer KV heads than Q heads, Flash Attention handles this internally
+    #     # Handle GQA by ensuring K/V are properly shaped
+    #     # If we have fewer KV heads than Q heads, Flash Attention handles this internally
         
-        # Import the Flash Attention implementation
-        #from flash_attn_triton import triton_attention
+    #     # Import the Flash Attention implementation
+    #     #from flash_attn_triton import triton_attention
         
-        # Call the Flash Attention kernel
-        attn_output, _ = triton_attention(
-            q_flash,
-        k_flash,
-        v_flash,
-        o_flash,
-        cu_seqlens_q,
-        cu_seqlens_k,
-        max_seqlen_q,
-        max_seqlen_k,
-        True,  # causal
-        sm_scale,
-        None,  # bias
-        # fp8_scales,
-        # fp8_out_scale,
-        )
+    #     # Call the Flash Attention kernel
+    #     attn_output, _ = triton_attention(
+    #         q_flash,
+    #     k_flash,
+    #     v_flash,
+    #     o_flash,
+    #     cu_seqlens_q,
+    #     cu_seqlens_k,
+    #     max_seqlen_q,
+    #     max_seqlen_k,
+    #     True,  # causal
+    #     sm_scale,
+    #     None,  # bias
+    #     # fp8_scales,
+    #     # fp8_out_scale,
+    #     )
         
-        # Reshape output back to (B, T, H, N)
-        attn_output = attn_output.view(B, T, H, N)
+    #     # Reshape output back to (B, T, H, N)
+    #     attn_output = attn_output.view(B, T, H, N)
         
-        # For GQA, if we had repeated KV heads, the output already accounts for this
-        # Reshape and output projection
-        attn_output = attn_output.contiguous().view(B, T, HN)
-        out = fpx_matmul(attn_output, O_, O_state, ebits, mbits)
-        x_out = x_in + out
+    #     # For GQA, if we had repeated KV heads, the output already accounts for this
+    #     # Reshape and output projection
+    #     attn_output = attn_output.contiguous().view(B, T, HN)
+    #     out = fpx_matmul(attn_output, O_, O_state, ebits, mbits)
+    #     x_out = x_in + out
         
-        return T5RMSNorm(x_out, ln2, rmsnorm_epsilon), x_out, past_key_value
+    #     return T5RMSNorm(x_out, ln2, rmsnorm_epsilon), x_out, past_key_value
 
     
 
@@ -1363,7 +1365,7 @@ class HRWKV_7(nn.Module):
             if z['model.embed_tokens.weight'].device.type == 'cpu':
                 x = z['model.embed_tokens.weight'][idx.cpu()].to(device=self.device,dtype=self.base_precision)
             else:
-                x = z['model.embed_tokens.weight'][idx]
+                x = z['model.embed_tokens.weight'][idx].to(dtype=self.base_precision)
 
             
 

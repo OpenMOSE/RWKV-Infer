@@ -242,6 +242,9 @@ async def loadmodel(request: Request):
         elif model_strategy == 'nf4':
             Quant = False
             precision = 'nf4'
+        elif model_strategy == 'attn_int8_ffn_int4':
+            Quant = False
+            precision = 'attn_int8_ffn_int4'
         # if model_strategy == 'quant':
         #     Quant = True
         #     precision = ''
@@ -533,7 +536,7 @@ def normalize_messages(messages):
 
 @app.post("/v1/chat/completions")
 @app.post("/chat/completions")
-async def rwkv_completions(request: Request):
+async def rwkv_chat_completions(request: Request):
     global engine1
     data = await request.json()
 
@@ -851,6 +854,316 @@ async def rwkv_completions(request: Request):
                     ],
                 }
         return (jsonResponse)
+    
+@app.post("/v1/completions")
+@app.post("/completions")
+async def rwkv_completions(request: Request):
+    global engine1
+    data = await request.json()
+
+    print(data)
+
+    if args.debug:
+        print(data)
+
+    mrss_gatingweight = data.get('mrss_gatingweight', None)    
+
+    input_logits_record = data.get('input_logits_record', False)
+
+    model = data.get('model')
+    state = data.get('state', '')
+    stream = data.get('stream', False)
+
+    if stream == True and input_logits_record == True:
+        input_logits_record = False
+
+    delete_ragprompt = data.get('delete_ragprompt', False)
+    minimum_gen_count = data.get('minimum_gen_count', 1)
+
+    CompletionMode = 'completion'
+    
+    # Completion APIではpromptを使用（messagesではなく）
+    prompt = data.get('prompt', '')
+    if isinstance(prompt, list):
+        # 複数プロンプトの場合は最初のものを使用
+        prompt = prompt[0] if prompt else ''
+
+    if prompt == "":
+        print(f'error {str("prompt is empty")}')
+        raise HTTPException(status_code=500, detail=str("prompt is empty"))
+
+    params = data.get('params', params_base)
+    
+    # Completion APIでは通常これらのrole名は不要だが、内部処理用に保持
+    system_name = params.get('system_name', 'system')
+    rag_name = params.get('rag_name', 'rag')
+    user_name = params.get('user_name', 'user')
+    assistant_name = params.get('assistant_name', 'assistant')
+
+    max_tokens = params.get('max_tokens', 1000)  
+
+    presence_penalty = params.get('presence_penalty', 0.3)
+    frequency_penalty = params.get('frequency_penalty', 0.3)
+    penalty_decay = params.get('penalty_decay', 0.996)
+
+    max_tokens = data.get('max_tokens', max_tokens)
+    if max_tokens > 8192:
+        max_tokens = 8192
+
+    presence_penalty = data.get('presence_penalty', presence_penalty)
+    frequency_penalty = data.get('frequency_penalty', frequency_penalty)
+    penalty_decay = data.get('penalty_decay', penalty_decay)
+    stop = data.get('stop', Endtoken)
+    
+    # stopは文字列またはリストを受け入れる
+    if isinstance(stop, str):
+        stop = [stop]
+    elif stop is None:
+        stop = [Endtoken]
+
+    # Completion APIでは直接プロンプトを使用
+    input_prompt = [prompt]
+    input_prompt_stm = prompt
+
+    print(f"Prompt: {prompt}")
+
+    models2 = [ModelList[0]]
+    models2[0]['filename'] = ""
+    models2[0]['state_tensor'] = None
+    models2[0]['state_tensor_offset'] = None
+
+    for State in StateList:
+        models2.append({
+            "object": "models",
+            "id": f"{ModelList[0]['id']} {State['state_viewname']}",
+            "filename": State['state_filename'],
+            "state_tensor": State['state_tensor'],
+            "state_tensor_offset": State['state_tensor_offset'],
+            'contain_originalstate': State.get('contain_originalstate', False),
+            'state_gatingweight': State.get('state_gatingweight', []),
+            'mrssmode': State.get('mrssmode', False),
+            'default_temperature': State.get('default_temperature', None),
+            'default_top_p': State.get('default_top_p', None),
+        })
+
+    target_state_filename = ''
+    target_state_tensor_wkv = None
+
+    if mrss_gatingweight is not None:
+        for i in range(len(mrss_gatingweight)):
+            mrss_gatingweight[i] = float(mrss_gatingweight[i])
+
+    for modelname in models2:
+        if modelname['id'] == model:
+            target_state_filename = modelname['filename']
+            target_state_tensor_wkv = modelname['state_tensor']
+            target_state_tensor_wkv_offset = modelname['state_tensor_offset']
+            default_temperature = modelname.get('default_temperature', None)
+            default_top_p = modelname.get('default_top_p', None)
+            if modelname.get('mrssmode', False) == True:
+                # MRSS Mode
+                if mrss_gatingweight is None:
+                    mrssmode = True
+                    mrss_gatingweight = modelname['state_gatingweight']
+                    contain_originalstate = modelname['contain_originalstate']
+                else:
+                    mrssmode = True
+                    contain_originalstate = modelname['contain_originalstate']
+            else:
+                mrssmode = False
+            break
+    
+    if default_temperature is not None:
+        temperature = default_temperature
+    else:
+        temperature = params.get('temperature', 1.0)
+    
+    if default_top_p is not None:
+        top_p = default_top_p
+    else:
+        top_p = params.get('top_p', 0.3)
+
+    # prioritize temp top_p from batch
+    top_p = data.get('top_p', top_p)
+    temperature = data.get('temperature', temperature)
+
+    print(f'Target Temperature = {temperature}')
+    print(f'Target Top_p = {top_p}')
+
+    QueryDatas = Prompt()
+    searchtext = prompt
+
+    wkv_state, shift_state = None, None
+
+    if wkv_state is not None and shift_state is not None:
+        if args.debug:
+            print('resume state detected.')
+        QueryDatas.base_state_tuned = target_state_filename
+        QueryDatas.use_exist_state_wkv = wkv_state
+        QueryDatas.use_exist_state_shift = shift_state
+        QueryDatas.use_exist_state_wkv_offset = copy.deepcopy(target_state_tensor_wkv_offset)
+ 
+        if mrssmode:
+            QueryDatas.use_mrss = True
+            QueryDatas.use_contain_originalstate = contain_originalstate
+            QueryDatas.mrss_gating_param = mrss_gatingweight
+            QueryDatas.fixed_state_count = len(target_state_tensor_wkv)
+            print(f'MRSS GatingParam = {QueryDatas.mrss_gating_param}')
+
+    else:
+        if args.debug:
+            print('plane state')
+        if target_state_tensor_wkv is not None:
+            QueryDatas.use_exist_state_wkv = copy.deepcopy(target_state_tensor_wkv)
+            QueryDatas.use_exist_state_wkv_offset = copy.deepcopy(target_state_tensor_wkv_offset)
+            if mrssmode:
+                QueryDatas.use_mrss = True
+                QueryDatas.use_contain_originalstate = contain_originalstate
+                QueryDatas.mrss_gating_param = mrss_gatingweight
+                QueryDatas.fixed_state_count = len(target_state_tensor_wkv)
+                print(f'MRSS GatingParam = {QueryDatas.mrss_gating_param}')
+
+    QueryDatas.prompts = prompt
+    QueryDatas.maxtokens = max_tokens
+    QueryDatas.temperature = temperature
+    QueryDatas.top_p = top_p
+    QueryDatas.endtoken = stop
+    QueryDatas.input_logits_record = input_logits_record
+
+    # echo パラメータのサポート（オプション）
+    echo = data.get('echo', False)
+    logprobs = data.get('logprobs', None)
+    suffix = data.get('suffix', None)
+    
+    # best_of と n のサポート（複数の補完を生成）
+    n = data.get('n', 1)
+    best_of = data.get('best_of', 1)
+    if best_of < n:
+        best_of = n
+
+    def handle_stream_disconnection(f):
+        @wraps(f)
+        def decorated_function(*argss, **kwargss):
+            global args
+            try:
+                if args.debug:
+                    print('handle_stream_disconnection start')
+                return f(*argss, **kwargss)
+            except GeneratorExit:
+                if args.debug:
+                    print("Stream disconnected")
+            except Exception as e:
+                if args.debug:
+                    print("Stream disconnected")
+
+        return decorated_function
+
+    @handle_stream_disconnection
+    async def sync_stream():
+        totaltext = ''
+        wkv_state = None
+        shift_state = None
+        
+        try:
+            async for response_chunk, d1, d2 in engine1.FLAGenerate(QueryDatas):
+                if d1 is not None:
+                    wkv_state = d1
+                if d2 is not None:
+                    shift_state = d2
+                totaltext = totaltext + response_chunk
+                
+                # Completion API用のストリーミングレスポンス形式
+                response_data = {
+                    "object": "text_completion",
+                    "model": model,
+                    "choices": [
+                        {
+                            "text": response_chunk,
+                            "index": 0,
+                            "logprobs": None,
+                            "finish_reason": None
+                        }
+                    ]
+                }
+                yield f'data: {json.dumps(response_data)}\n\n'
+                
+        except StopAsyncIteration:
+            if args.debug:
+                print('Stop Async Iteration detected.')
+            yield f'data: [DONE]\n\n'
+            pass
+        except Exception as e:
+            if args.debug:
+                print(f"An error occurred during generation: {str(e)}")
+        finally:
+            if args.debug:
+                print('Stop Async Iteration detected.')
+            yield "data: [DONE]\n\n"
+            pass
+
+    if stream:
+        generator = sync_stream()
+        return StreamingResponse(generator, media_type='text/event-stream', background=BackgroundTask(sync_stream))
+    else:
+        response_chunk = []
+        if args.debug:
+            print('Non Stream Start Generate')
+        wkv_state = None
+        shift_state = None
+        
+        async for item, d1, d2 in engine1.FLAGenerate(QueryDatas):
+            response_chunk.append(item)
+            if d1 is not None:
+                wkv_state = d1
+            if d2 is not None:
+                shift_state = d2
+                
+        response = ''
+        for chunk in response_chunk:
+            response = response + chunk
+
+        OutputText = response
+
+        if args.debug:
+            print(f'Non Stream: {OutputText}')
+
+        # echoがTrueの場合、プロンプトを含める
+        if echo:
+            OutputText = prompt + OutputText
+
+        # Completion API用のレスポンス形式
+        jsonResponse = {
+            "object": "text_completion",
+            "model": model,
+            "choices": [
+                {
+                    "text": OutputText,
+                    "index": 0,
+                    "logprobs": None,  # logprobsが必要な場合は実装が必要
+                    "finish_reason": "stop"
+                }
+            ],
+            "usage": {
+                "prompt_tokens": len(prompt.split()),  # 簡易的なトークン数計算
+                "completion_tokens": len(OutputText.split()),
+                "total_tokens": len(prompt.split()) + len(OutputText.split())
+            }
+        }
+        
+        # 複数の補完を要求された場合（n > 1）の処理
+        if n > 1:
+            # 簡易的な実装：同じ生成を複数回返す
+            # 実際には異なる生成をする必要がある
+            jsonResponse["choices"] = []
+            for i in range(n):
+                jsonResponse["choices"].append({
+                    "text": OutputText,
+                    "index": i,
+                    "logprobs": None,
+                    "finish_reason": "stop"
+                })
+        
+        return jsonResponse
 
 async def run_uvicorn(host, port):
     config = uvicorn.Config(app, host=host, port=port)

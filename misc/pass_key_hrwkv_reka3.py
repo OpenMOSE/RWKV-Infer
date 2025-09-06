@@ -31,7 +31,7 @@ import seaborn as sns
 #RWKV Infer
 from rwkvengine.rwkvcore import RWKV_x, PIPELINE
 
-model_path = "/home/client/Projects/llm/hxa079-reka-flash3-stage2-hybrid.pth"
+model_path = "/home/client/Projects/llm/RWKV-Reka-Flash-Gen2/"
 model_adapter_path = "" # can realtime merge LoRA,Bone,DoRA
 model_adapter_mode = "" # set lora,bone,dora
 quant_mode = "int8" # int8, OpenMOSE Silly 8bit matmul kernel(triton)
@@ -56,9 +56,9 @@ def parse_config():
     parser = argparse.ArgumentParser(description='arg parser')
     #parser.add_argument('hf_model', type=str)
     parser.add_argument('--cache_dir', type=str, default="./cache")
-    parser.add_argument('--min_tokens', type=int, default=1024, help='minimum token length to start evaluation')
-    parser.add_argument('--max_tokens', type=int, default=32768, help='maximum token length for evaluation')
-    parser.add_argument('--interval', type=int, default=2048, help='interval for evaluation')
+    parser.add_argument('--min_tokens', type=int, default=4096, help='minimum token length to start evaluation')
+    parser.add_argument('--max_tokens', type=int, default=65536, help='maximum token length for evaluation')
+    parser.add_argument('--interval', type=int, default=4096, help='interval for evaluation')
     parser.add_argument('--num_tests', type=int, default=3, help='number of repeat testing for each length')
     parser.add_argument('--max_depth', type=float, default=1.0, help='max depth ratio to test')
     parser.add_argument('--device', type=str, default='cuda:0', help='device to use for computation')

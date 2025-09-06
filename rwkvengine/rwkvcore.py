@@ -493,8 +493,8 @@ class RWKV_x(nn.Module):
             #blocks = ['layers.0.','layers.1.','layers.2.','layers.3.','layers.4.','layers.5.','layers.6.','layers.7.','layers.8.','layers.9.','layers.10.','layers.11.','layers.12.','layers.13.','layers.14.']
             for k in keys:
                 is_in_blocks = any(block in k for block in offload_blocks)
-                
-                if not k.endswith('qstate') and 'emb' not in k and 'ln0' not in k:# or is_in_blocks):  and ('mlp' not in k or is_in_blocks)
+                #and 'emb' not in k
+                if not k.endswith('qstate')  and 'ln0' not in k:# or is_in_blocks):  and ('mlp' not in k or is_in_blocks)
                     print(f'{k} move to device {device}')
                     z[k] = z[k].to(device=self.device)
 
