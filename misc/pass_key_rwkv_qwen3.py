@@ -32,14 +32,14 @@ import seaborn as sns
 from rwkvengine.rwkvcore import RWKV_x, PIPELINE
 
 pattern = "07a_21b_niah"
-model_path = "/home/client/Projects/llm/RWKV-Reka-Flash-07A/"
+model_path = "/home/client/output/qwen3-4b/rwkv-qwen3-cxa07a/"
 max_kv_size = 131072
 model_adapter_path = "" # can realtime merge LoRA,Bone,DoRA
 model_adapter_mode = "" # set lora,bone,dora
 quant_mode = "int8" # int8, OpenMOSE Silly 8bit matmul kernel(triton)
-template = "rekaflash3"
+template = "qwen3"
 rope_theta=8000000.0
-rms_norm_eps=1e-5    
+rms_norm_eps=1e-6    
 
 def get_gpu_memory():
     """Returns the current GPU memory usage in MB."""
@@ -58,9 +58,9 @@ def parse_config():
     parser = argparse.ArgumentParser(description='arg parser')
     #parser.add_argument('hf_model', type=str)
     parser.add_argument('--cache_dir', type=str, default="./cache")
-    parser.add_argument('--min_tokens', type=int, default=4096, help='minimum token length to start evaluation')
-    parser.add_argument('--max_tokens', type=int, default=24576, help='maximum token length for evaluation')
-    parser.add_argument('--interval', type=int, default=4096, help='interval for evaluation')
+    parser.add_argument('--min_tokens', type=int, default=1024, help='minimum token length to start evaluation')
+    parser.add_argument('--max_tokens', type=int, default=8192, help='maximum token length for evaluation')
+    parser.add_argument('--interval', type=int, default=1024, help='interval for evaluation')
     parser.add_argument('--num_tests', type=int, default=2, help='number of repeat testing for each length')
     parser.add_argument('--max_depth', type=float, default=1.0, help='max depth ratio to test')
     parser.add_argument('--device', type=str, default='cuda:0', help='device to use for computation')

@@ -319,7 +319,8 @@ def sdpa_attention_forward(
 
 
 class HRWKV_7(nn.Module):
-    @torch.compile()
+    #@torch.compile()
+    @torch.compile(mode="max-autotune-no-cudagraphs")
     def hxa079_TimeMix(layer_id: int, H: int, N: int,
                         x_in, x_prev, v_first,k_first,state,cache_position,
                         calc_cos,calc_sin,
@@ -1404,6 +1405,7 @@ class HRWKV_7(nn.Module):
 
     #@torch.compile
    # @torch.compile()
+    @torch.compile(mode="max-autotune-no-cudagraphs")
     def hxa079r_forward(self, idx, 
                 last_wkv_states: List[torch.Tensor], kv_cache: List[torch.Tensor],pos_cache,  full_output:bool=False):
         
