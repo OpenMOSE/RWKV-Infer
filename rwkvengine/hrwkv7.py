@@ -2,7 +2,7 @@
 # 2025 OpenMOSE
 
 import os
-
+import os, torch as th
 os.environ["FLASH_ATTENTION_TRITON_AMD_ENABLE"] = "True"
 os.environ["FLASH_ATTENTION_TRITON_AMD_AUTOTUNE"] = "True"
 
@@ -15,16 +15,16 @@ from torch.nn.attention import SDPBackend, sdpa_kernel
 
 
 import torch._dynamo
-torch._dynamo.config.cache_size_limit = 32  # 例えば32に拡張
+torch._dynamo.config.cache_size_limit = 256  # 例えば32に拡張
 
 
-try:
-    import bitsandbytes as bnb
-    HAS_BITSANDBYTES = True
-except ImportError:
-    print('Bitsandbytes not found')
-    HAS_BITSANDBYTES = False
-    bnb = None
+# try:
+#     import bitsandbytes as bnb
+#     HAS_BITSANDBYTES = True
+# except ImportError:
+print('Bitsandbytes not found')
+HAS_BITSANDBYTES = False
+bnb = None
 
 
 import torch
@@ -54,19 +54,58 @@ from rwkvengine.cuda.wkv7triton import rwkv7_attn_triton
 
 from rwkvengine.flashattention_triton import triton_attention
 
-##torch.backends.cudnn.benchmark = True
-# torch.backends.cudnn.allow_tf32 = True
-# torch.backends.cuda.matmul.allow_tf32 = True
-# torch.backends.cuda.matmul.allow_fp16_reduced_precision_reduction = True
-# torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction = True
-#torch._C._jit_set_autocast_mode(True)
-
 
 MyStatic = torch.jit.script
 
 
+# DTYPE = torch.bfloat16
 
-#@torch.compile
+# from torch.utils.cpp_extension import load
+# HEAD_SIZE = 64
+# current_path = os.path.dirname(os.path.abspath(__file__))
+
+# device_props = th.cuda.get_device_properties(th.cuda.current_device())
+# if 'AMD' in device_props.name:
+#     load(name="rwkv7_state_fwd_fp16", sources=[f"{current_path}/cuda/rwkv7_state_fwd_fp16.cpp", f"{current_path}/cuda/rwkv7_state_fwd_fp16.cu"], is_python_module=False,
+#                     verbose=True, extra_cuda_cflags=['-O3', '-ffast-math', '-DAMD', f"-D_N_={HEAD_SIZE}"])
+# else:
+#     load(name="rwkv7_state_fwd_fp16", sources=[f"{current_path}/cuda/rwkv7_state_fwd_fp16.cpp", f"{current_path}/cuda/rwkv7_state_fwd_fp16.cu"], is_python_module=False,
+#                     verbose=True, extra_cuda_cflags=["-res-usage", "--use_fast_math", "-O3", "-Xptxas -O3", "--extra-device-vectorization", f"-D_N_={HEAD_SIZE}"])
+# class WKV_7(torch.autograd.Function):
+#     @staticmethod
+#     def forward(ctx, state, r, w, k, v, a, b):
+#         with torch.no_grad():
+#             T, C = r.size()
+#             H = C // HEAD_SIZE
+#             N = HEAD_SIZE
+#             assert HEAD_SIZE == C // H
+#             assert all(x.dtype == DTYPE for x in [r,w,k,v,a,b])
+#             assert all(x.is_contiguous() for x in [r,w,k,v,a,b])
+#             y = torch.empty((T, C), device=k.device, dtype=DTYPE, requires_grad=False, memory_format=torch.contiguous_format)
+#             torch.ops.rwkv7_state_fwd_fp16.forward(1, T, C, H, state, r, w, k, v, a, b, y)
+#             return y
+# def RWKV7_OP(state, r, w, k, v, a, b):
+#     return WKV_7.apply(state, r, w, k, v, a, b)
+
+# class WKV_7_batch(torch.autograd.Function):
+#     @torch.compiler.disable
+#     def forward(ctx, state, r, w, k, v, a, b):
+#         with torch.no_grad():
+#             B, T, C = r.size()
+#             H = C // HEAD_SIZE
+#             N = HEAD_SIZE
+#             assert HEAD_SIZE == C // H
+#             assert all(x.dtype == DTYPE for x in [r,w,k,v,a,b])
+#             assert all(x.is_contiguous() for x in [r,w,k,v,a,b])
+#             y = torch.empty((B, T, C), device=k.device, dtype=DTYPE, requires_grad=False, memory_format=torch.contiguous_format)
+#             torch.ops.rwkv7_state_fwd_fp16.forward(B, T, C, H, state, r, w, k, v, a, b, y)
+#             return y
+# def RWKV7_BATCH_OP(state, r, w, k, v, a, b):
+#     return WKV_7_batch.apply(state, r, w, k, v, a, b)
+
+
+
+@torch.compile
 def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
     """
     Repeat KV heads along the head dimension (GQA).
@@ -80,7 +119,7 @@ def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
     hidden_states = hidden_states[:, :, :, None, :]  # (B, T, H_kv, 1, D)
     hidden_states = hidden_states.expand(B, T, H_kv, n_rep, D)  # (B, T, H_kv, n_rep, D)
     return hidden_states.reshape(B, T, H_kv * n_rep, D).contiguous()
-#@torch.compile
+@torch.compile
 def repeat_kv_original(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
     """
     This is the equivalent of torch.repeat_interleave(x, dim=1, repeats=n_rep). The hidden states go from (batch,
@@ -184,95 +223,7 @@ def compute_rope_cache_range(cache_pos, seq_len, rotary_dim, device, dtype, rope
 
     return cos, sin, inv_freq
 
-def compute_rope_cache_range_ntk(cache_pos, seq_len, rotary_dim, device, dtype, rope_theta, ntk_alpha=10.0):
-    """
-    RoPEのcos/sinをバッチごとに cache_pos から始まる Tトークン分生成（NTKスケーリング対応）
 
-    Args:
-        cache_pos: [B, 1]  - 各バッチの開始位置
-        seq_len: int       - Tステップ分のRoPE計算を行う
-        rotary_dim: int    - 回転に使う次元数（通常は Head_dim）
-        rope_theta: float  - RoPEのthetaパラメータ（例: 10000.0）
-        ntk_alpha: float   - NTK拡張倍率（例: 10.0〜16.0）
-
-    Returns:
-        cos: [B, T, rotary_dim]
-        sin: [B, T, rotary_dim]
-        inv_freq: [half_dim]  # 使用したinv_freq（デバッグや可視化用）
-    """
-    B = cache_pos.shape[0]
-    half_dim = rotary_dim // 2
-
-    # 周波数ベーススケーリング（NTK RoPE）
-    freq_seq = torch.arange(half_dim, dtype=dtype, device=device)
-    inv_freq = 1.0 / (rope_theta * (ntk_alpha ** (freq_seq / half_dim)))  # NTKスケーリング適用
-
-    # 相対位置 [T]
-    rel_pos = torch.arange(seq_len, dtype=dtype, device=device)
-
-    # 絶対位置 [B, T] = cache_pos[b, 0] + rel_pos[t]
-    pos = cache_pos.to(dtype) + rel_pos.view(1, -1)
-
-    # 周波数乗算 [B, T, half_dim]
-    freqs = torch.einsum("bt,d->btd", pos, inv_freq)
-
-    # rotary_dimへの変換 [B, T, rotary_dim]
-    emb = torch.cat([freqs, freqs], dim=-1)
-    cos = emb.cos()
-    sin = emb.sin()
-
-    return cos, sin, inv_freq
-
-#Yarn Version
-def compute_rope_cache_range_YaRN(cache_pos, seq_len, rotary_dim, device, dtype, rope_theta,
-                                  ntk_alpha=10.0, yarn_interp_max_pos=4096.0):
-    """
-    YaRN: 短距離RoPEと長距離RoPEの補間によるRoPE安定化。
-    cache_pos から始まる Tトークン分のcos/sinを生成。
-
-    Args:
-        cache_pos: [B, 1]  - 各バッチの開始位置
-        seq_len: int       - Tトークン数
-        rotary_dim: int    - 回転次元数（通常はHead_dim）
-        device, dtype      - 計算用設定
-        rope_theta: float  - 標準RoPEのtheta（通常10000）
-        ntk_alpha: float   - 長距離RoPE拡張係数（例: 10.0〜16.0）
-        yarn_interp_max_pos: float - 補間のスイッチ位置（推奨4096）
-
-    Returns:
-        cos, sin: [B, T, rotary_dim]
-        inv_freq_short: 短距離RoPEの周波数（参考用）
-    """
-    B = cache_pos.shape[0]
-    half_dim = rotary_dim // 2
-
-    freq_seq = torch.arange(half_dim, dtype=dtype, device=device)
-
-    # RoPE 周波数（短距離 / 長距離）
-    inv_freq_short = 1.0 / (rope_theta ** (freq_seq / half_dim))
-    inv_freq_long  = 1.0 / (rope_theta * (ntk_alpha ** (freq_seq / half_dim)))
-
-    # 相対位置 [T]
-    rel_pos = torch.arange(seq_len, dtype=dtype, device=device)
-
-    # 絶対位置 [B, T]
-    pos = cache_pos.to(dtype) + rel_pos.view(1, -1)
-
-    # 周波数×位置 → [B, T, half_dim]
-    freqs_short = torch.einsum("bt,d->btd", pos, inv_freq_short)
-    freqs_long  = torch.einsum("bt,d->btd", pos, inv_freq_long)
-
-    # 線形補間係数（位置が大きいほど長距離RoPEに寄る）
-    mix_ratio = torch.clamp(pos / yarn_interp_max_pos, 0.0, 1.0).unsqueeze(-1)  # [B, T, 1]
-
-    freqs = (1.0 - mix_ratio) * freqs_short + mix_ratio * freqs_long  # 補間
-
-    # rotary次元に展開
-    emb = torch.cat([freqs, freqs], dim=-1)
-    cos = emb.cos()
-    sin = emb.sin()
-
-    return cos, sin, inv_freq_short
 
 def rotate_half(x):
     """Rotates half the hidden dims of the input."""
@@ -368,7 +319,7 @@ def sdpa_attention_forward(
 
 
 class HRWKV_7(nn.Module):
-    @torch.compile
+    @torch.compile()
     def hxa079_TimeMix(layer_id: int, H: int, N: int,
                         x_in, x_prev, v_first,k_first,state,cache_position,
                         calc_cos,calc_sin,
@@ -391,6 +342,9 @@ class HRWKV_7(nn.Module):
                         ln1,ln2,rope_theta,
                         ebits:int, mbits:int
                         ):
+        
+        #idx = idx.clone()
+        #state = state.clone() if state is not None else None
         
         x = T5RMSNorm(x_in,ln1,variance_epsilon=rmsnorm_epsilon)
         xw,xa,xv,xg,xk = (x @ wavgk1).split(wavgk_split_list, dim=-1)
@@ -423,10 +377,7 @@ class HRWKV_7(nn.Module):
             v_first = v
             k_first = k 
         else:
-            # gate = torch.sigmoid(xv@v2 + v0).view(B, T, kv_per_head, N)
-            # v = v + (v_first - v) * gate
-            # gate2 = torch.sigmoid(xk@k2 + k0).view(B, T, kv_per_head, N)
-            # k = k + (k_first - k) * gate2
+
             v = v + (v_first - v) * torch.sigmoid(xv@v2 + v0).view(B, T, kv_per_head, N)
             k = k + (k_first - k) * torch.sigmoid(xk@k2 + k0).view(B, T, kv_per_head, N)
 
@@ -446,7 +397,7 @@ class HRWKV_7(nn.Module):
         aa = -kk
         bb = kk * a
 
-        w = -w.to(dtype=torch.float32).exp()
+        w = -w.exp()#.to(dtype=torch.float32).exp()
         r_,w_,k_,v_,aa_,bb_ = [i.view(B,T,H,N) for i in [r,w,k,v,aa,bb]]
         B,T,_,_ = r_.shape
         xx, state = fused_recurrent_rwkv7(r_, w_, k_, v_, aa_, bb_, scale=1.0, initial_state=state, output_final_state=True, head_first=False)
@@ -462,77 +413,43 @@ class HRWKV_7(nn.Module):
         output = T5RMSNorm(x_in,ln2,variance_epsilon=rmsnorm_epsilon)
 
         return  output, x[:,-1], state, v_first, k_first, x_in
+    
 
-
-    @torch.compile
-    def hxa079_TimeMix_x(layer_id: int, H: int, N: int,
-                        x_in, x_prev, v_first,k_first,state,cache_position,
-                        calc_cos,calc_sin,
-                        # w0, w1, w2, a0, a1, a2,
-                        # v0, v1, v2, g1, g2,
-                        # k0, k1, k2,
-                        wavgk1,wavgk_split_list,
+    #@torch.compile()
+    @torch.compile(mode="max-autotune-no-cudagraphs")
+    def hxa07A_TimeMix(layer_id: int, H: int, N: int,
+                        x_in, x_prev,state,cache_position,
+                     
+                        wag1,wag_split_list,
                         w0, w2, a0, a2,
-                        v0, v2, g2,
-                        k0, k2,
+                        g2,
                         r_k, 
-                        #R_, K_, V_,
                         RKV_,rkv_split_list,
                         O_,
-                        #R_state,K_state,V_state,
                         RKV_state,
                         O_state,
-                        R_bias, K_bias, V_bias, O_bias,
-                        ln_r,ln_k,rmsnorm_epsilon:float,
-                        ln1,ln2,rope_theta,
+                        rmsnorm_epsilon:float,
+                        ln1,ln2,
                         ebits:int, mbits:int
                         ):
         
+
         x = T5RMSNorm(x_in,ln1,variance_epsilon=rmsnorm_epsilon)
-        xw,xa,xv,xg,xk = (x @ wavgk1).split(wavgk_split_list, dim=-1)
+        xw,xa,xg = (x @ wag1).split(wag_split_list, dim=-1)
 
         B, T, C = x.shape
-        HN = H*N
 
         rkv = fpx_matmul(x, RKV_,RKV_state, ebits, mbits)
         r,k,v = rkv.split(rkv_split_list,dim=-1)
 
         kv_dim = k.shape[2] # B,T,kv_dim
-        kv_repeat = HN // kv_dim
+        kv_repeat = (H*N) // kv_dim
         kv_per_head = kv_dim // N
+     
 
-        r = r.add_(R_bias)
-        k = k.add_(K_bias).view(B, T, kv_per_head, N)
-        v = v.add_(V_bias).view(B, T, kv_per_head, N)
+        k = repeat_kv(k.view(B, T, kv_per_head, N), kv_repeat).view(B, T, -1)#.contiguous()
+        v = repeat_kv(v.view(B, T, kv_per_head, N), kv_repeat).view(B, T, -1)#.contiguous()
 
-        if ln_r == None:
-            r = r.view(B,T,H,N)
-            k = k
-        else:
-            r = T5RMSNorm(r.view(B,T,H,N), ln_r, variance_epsilon=rmsnorm_epsilon)
-            k = T5RMSNorm(k, ln_k, variance_epsilon=rmsnorm_epsilon)
-
-        # Rotary embedding
-        cos, sin = calc_cos.to(k.dtype), calc_sin.to(k.dtype)
-        r, k = apply_rotary_pos_emb(r, k, cos, sin,unsqueeze_dim=2)
-
-        if layer_id == 0:
-            v_first = v
-            k_first = k 
-        else:
-            # gate = torch.sigmoid(xv@v2 + v0).view(B, T, kv_per_head, N)
-            # v = v + (v_first - v) * gate
-            # gate2 = torch.sigmoid(xk@k2 + k0).view(B, T, kv_per_head, N)
-            # k = k + (k_first - k) * gate2
-            v = v + (v_first - v) * torch.sigmoid(xv@v2 + v0).view(B, T, kv_per_head, N)
-            k = k + (k_first - k) * torch.sigmoid(xk@k2 + k0).view(B, T, kv_per_head, N)
-
- 
-
-        k = repeat_kv(k, kv_repeat).view(B, T, -1)
-        v = repeat_kv(v, kv_repeat).view(B, T, -1)
-
-  
         a = torch.sigmoid(xa @ a2 + a0)
         
         kk = F.normalize(k.view(B, T, H, N), p=2.0, dim=-1).view(B, T, H*N)
@@ -542,23 +459,122 @@ class HRWKV_7(nn.Module):
 
         aa = -kk
         bb = kk * a
-
-        w = -w.to(dtype=torch.float32).exp()
-        r_,w_,k_,v_,aa_,bb_ = [i.view(B,T,H,N) for i in [r,w,k,v,aa,bb]]
+        w = -w.exp()
+        r_,w_,k_,v_,aa_,bb_ = [i.view(B,T,H,N).to(dtype=torch.bfloat16) for i in [r,w,k,v,aa,bb]]
         B,T,_,_ = r_.shape
         xx, state = fused_recurrent_rwkv7(r_, w_, k_, v_, aa_, bb_, scale=1.0, initial_state=state, output_final_state=True, head_first=False)
-
+        xx = xx.to(dtype=x.dtype)
         
         xx = xx.view(B,T,-1) * (float(N) ** -0.5)
+        xx = xx.to(dtype=r.dtype) + ((r.view(B,T,H,N)*k.view(B,T,H,N)*r_k.view(H,N)).sum(dim=-1, keepdim=True) * v.view(B,T,H,N)).view(B,T,(H*N))
 
-        xx = xx.to(dtype=r.dtype) + ((r.view(B,T,H,N)*k.view(B,T,H,N)*r_k.view(H,N)).sum(dim=-1, keepdim=True) * v.view(B,T,H,N)).view(B,T,HN)
+        #print(f'Layer:{layer_id} r={r.sum()} k={k.sum()} v={v.sum()} w={w.sum()} gatedxx = {gatedxx.sum()} x_in ={x_in.sum()} x = {x.sum()} x = {x}')
 
         output = fpx_matmul((xx * (torch.sigmoid(xg) @ g2)), O_, O_state,ebits,mbits)
 
         x_in = x_in + output
         output = T5RMSNorm(x_in,ln2,variance_epsilon=rmsnorm_epsilon)
 
-        return  output, x[:,-1], state, v_first, k_first, x_in
+        return  output, x[:,-1], state, x_in
+    
+  
+
+
+    # @torch.compile
+    # def hxa079_TimeMix_x(layer_id: int, H: int, N: int,
+    #                     x_in, x_prev, v_first,k_first,state,cache_position,
+    #                     calc_cos,calc_sin,
+    #                     # w0, w1, w2, a0, a1, a2,
+    #                     # v0, v1, v2, g1, g2,
+    #                     # k0, k1, k2,
+    #                     wavgk1,wavgk_split_list,
+    #                     w0, w2, a0, a2,
+    #                     v0, v2, g2,
+    #                     k0, k2,
+    #                     r_k, 
+    #                     #R_, K_, V_,
+    #                     RKV_,rkv_split_list,
+    #                     O_,
+    #                     #R_state,K_state,V_state,
+    #                     RKV_state,
+    #                     O_state,
+    #                     R_bias, K_bias, V_bias, O_bias,
+    #                     ln_r,ln_k,rmsnorm_epsilon:float,
+    #                     ln1,ln2,rope_theta,
+    #                     ebits:int, mbits:int
+    #                     ):
+        
+    #     x = T5RMSNorm(x_in,ln1,variance_epsilon=rmsnorm_epsilon)
+    #     xw,xa,xv,xg,xk = (x @ wavgk1).split(wavgk_split_list, dim=-1)
+
+    #     B, T, C = x.shape
+    #     HN = H*N
+
+    #     rkv = fpx_matmul(x, RKV_,RKV_state, ebits, mbits)
+    #     r,k,v = rkv.split(rkv_split_list,dim=-1)
+
+    #     kv_dim = k.shape[2] # B,T,kv_dim
+    #     kv_repeat = HN // kv_dim
+    #     kv_per_head = kv_dim // N
+
+    #     r = r.add_(R_bias)
+    #     k = k.add_(K_bias).view(B, T, kv_per_head, N)
+    #     v = v.add_(V_bias).view(B, T, kv_per_head, N)
+
+    #     if ln_r == None:
+    #         r = r.view(B,T,H,N)
+    #         k = k
+    #     else:
+    #         r = T5RMSNorm(r.view(B,T,H,N), ln_r, variance_epsilon=rmsnorm_epsilon)
+    #         k = T5RMSNorm(k, ln_k, variance_epsilon=rmsnorm_epsilon)
+
+    #     # Rotary embedding
+    #     cos, sin = calc_cos.to(k.dtype), calc_sin.to(k.dtype)
+    #     r, k = apply_rotary_pos_emb(r, k, cos, sin,unsqueeze_dim=2)
+
+    #     if layer_id == 0:
+    #         v_first = v
+    #         k_first = k 
+    #     else:
+    #         # gate = torch.sigmoid(xv@v2 + v0).view(B, T, kv_per_head, N)
+    #         # v = v + (v_first - v) * gate
+    #         # gate2 = torch.sigmoid(xk@k2 + k0).view(B, T, kv_per_head, N)
+    #         # k = k + (k_first - k) * gate2
+    #         v = v + (v_first - v) * torch.sigmoid(xv@v2 + v0).view(B, T, kv_per_head, N)
+    #         k = k + (k_first - k) * torch.sigmoid(xk@k2 + k0).view(B, T, kv_per_head, N)
+
+ 
+
+    #     k = repeat_kv(k, kv_repeat).view(B, T, -1)
+    #     v = repeat_kv(v, kv_repeat).view(B, T, -1)
+
+  
+    #     a = torch.sigmoid(xa @ a2 + a0)
+        
+    #     kk = F.normalize(k.view(B, T, H, N), p=2.0, dim=-1).view(B, T, H*N)
+    #     w = torch.tanh(xw) @ w2 + w0
+    #     w = -F.softplus(-w) - 0.5
+    #     k = k * (1.0 - w + a)
+
+    #     aa = -kk
+    #     bb = kk * a
+
+    #     w = -w.to(dtype=torch.float32).exp()
+    #     r_,w_,k_,v_,aa_,bb_ = [i.view(B,T,H,N) for i in [r,w,k,v,aa,bb]]
+    #     B,T,_,_ = r_.shape
+    #     xx, state = fused_recurrent_rwkv7(r_, w_, k_, v_, aa_, bb_, scale=1.0, initial_state=state, output_final_state=True, head_first=False)
+
+        
+    #     xx = xx.view(B,T,-1) * (float(N) ** -0.5)
+
+    #     xx = xx.to(dtype=r.dtype) + ((r.view(B,T,H,N)*k.view(B,T,H,N)*r_k.view(H,N)).sum(dim=-1, keepdim=True) * v.view(B,T,H,N)).view(B,T,HN)
+
+    #     output = fpx_matmul((xx * (torch.sigmoid(xg) @ g2)), O_, O_state,ebits,mbits)
+
+    #     x_in = x_in + output
+    #     output = T5RMSNorm(x_in,ln2,variance_epsilon=rmsnorm_epsilon)
+
+    #     return  output, x[:,-1], state, v_first, k_first, x_in
 
 
     @torch.compile
@@ -725,7 +741,7 @@ class HRWKV_7(nn.Module):
 
     
 
-    #@torch.compile()
+    @torch.compile()
     def GQA_Attention_Nested(layer_id: int, gqa_layer_id: int, H: int, N: int,
                         x_in, past_key_value, cache_position,
                         calc_cos, calc_sin,
@@ -838,6 +854,38 @@ class HRWKV_7(nn.Module):
         return T5RMSNorm(x_out, ln2, rmsnorm_epsilon), x_out, past_key_value
     #@torch.compile()
     #@torch.compile
+    #@torch.compiler.disable
+    def triton_attention_wrapper(
+            q_flash,
+            k_flash,
+            v_flash,
+            o_flash,
+            cu_seqlens_q,
+            cu_seqlens_k,
+            max_seqlen_q,
+            max_seqlen_k,
+            causal,  # causal
+            sm_scale,
+            bias,  # bias
+
+        ):
+        return triton_attention(
+            q_flash,
+            k_flash,
+            v_flash,
+            o_flash,
+            cu_seqlens_q,
+            cu_seqlens_k,
+            max_seqlen_q,
+            max_seqlen_k,
+            causal,  # causal
+            sm_scale,
+            bias,  # bias
+        )
+
+
+    #@torch.compile#r.disable
+    #@torch.compile(mode="max-autotune-no-cudagraphs")
     @torch.compiler.disable
     def GQA_Attention_Flash_(layer_id: int, gqa_layer_id: int, H: int, N: int,
                        x_in, past_key_value, cache_position,
@@ -957,7 +1005,7 @@ class HRWKV_7(nn.Module):
         
         # Prepare tensors for Flash Attention
         # Query: reshape to (total_q_tokens, H, N)
-        q_flash = q.reshape(B * T, H, N)
+        q_flash = q.view(B * T, H, N)
         
         # Key and Value: gather all valid tokens from cache
         k_all_list = []
@@ -1021,7 +1069,7 @@ class HRWKV_7(nn.Module):
         )
         
         # Reshape output back to (B, T, H, N)
-        attn_output = attn_output.view(B, T, H, N)
+        #heattn_output = attn_output.view(B, T, H, N)
         
         # For GQA, if we had repeated KV heads, the output already accounts for this
         # Reshape and output projection
@@ -1355,7 +1403,7 @@ class HRWKV_7(nn.Module):
 
 
     #@torch.compile
-    @torch.compile()
+   # @torch.compile()
     def hxa079r_forward(self, idx, 
                 last_wkv_states: List[torch.Tensor], kv_cache: List[torch.Tensor],pos_cache,  full_output:bool=False):
         
@@ -1476,6 +1524,88 @@ class HRWKV_7(nn.Module):
             pos_cache += T
 
             return x, None, last_wkv_states, kv_cache, pos_cache
+    @torch.compile(mode="max-autotune-no-cudagraphs")
+    def hxa07A_forward(self, idx, 
+                last_wkv_states: List[torch.Tensor], kv_cache: List[torch.Tensor],pos_cache,  full_output:bool=False):
+        
+        with torch.no_grad(): 
+            z = self.z
+
+            if z['model.embed_tokens.weight'].device.type == 'cpu':
+                x = z['model.embed_tokens.weight'][idx.cpu()].to(device=self.device,dtype=self.base_precision)
+            else:
+                x = z['model.embed_tokens.weight'][idx].to(dtype=self.base_precision)
+
+            
+            cache_pos = pos_cache
+
+            B, T, C = x.shape
+
+            dummytensor = self.dummytensor
+
+       
+
+            for i in range(self.n_layer):
+                bbb = f'model.layers.{i}.'
+                att = f'model.layers.{i}.self_attn.'
+                ffn = f'model.layers.{i}.mlp.'
+
+                time_mix_shift = dummytensor
+
+
+                if self.HRWKV_Block_Mode[i][0] == 0:
+                    time_mix_state = last_wkv_states[self.HRWKV_Block_Mode[i][2]]
+
+                    xx, time_mix_shift, time_mix_state, x = HRWKV_7.hxa07A_TimeMix(self.HRWKV_Block_Mode[i][2], self.rwkv_n_head, self.rwkv_head_size, x, time_mix_shift, time_mix_state,cache_pos,
+                                                 
+                                                                        z[att+'wag_fused'],self.HRWKV_Misc[att+'wag_split_list'],
+                                                                        z[att+'w0'], z[att+'w2'], z[att+'a0'], z[att+'a2'], 
+                                                                        z[att+'g2'],
+                                                                     
+                                                                        z[att+'r_k'],
+                                                                        z[att+'rkv_fused.weight'],self.HRWKV_Misc[att+'rkv_split_list'],
+                                                                        z[att+'output.weight'],
+                                                                        z[att+'rkv_fused.weight.qstate'],
+                                                                        z[att+'output.weight.qstate'],
+                                                                        self.rms_norm_eps,
+                                                                        z[bbb+'input_layernorm.weight'],z[bbb+'post_attention_layernorm.weight'],
+                                                                        self.attn_ebits,self.attn_mbits
+                                                                        )
+                 
+                    last_wkv_states[self.HRWKV_Block_Mode[i][2]] = time_mix_state
+
+                else:
+
+                    xx, x, kv_cache= HRWKV_7.GQA_Attention_Flash_(i,self.HRWKV_Block_Mode[i][2],self.att_n_head,self.att_head_size,x,kv_cache,cache_pos,
+                                                                        None,None,
+                                                                        z[att+'qkv_fused.weight'],self.HRWKV_Misc[att+'qkv_split_list'],
+                                                                        z[att+'o_proj.weight'],
+                                                                        z[att+'qkv_fused.weight.qstate'],
+                                                                        z[att+'o_proj.weight.qstate'],
+                                                                        z[att+'q_proj.bias'], z[att+'k_proj.bias'], z[att+'v_proj.bias'], dummytensor,
+                                                                        z.get(att+'q_norm.weight',None),z.get(att+'k_norm.weight',None),self.rms_norm_eps,
+                                                                        z[bbb+'input_layernorm.weight'],z[bbb+'post_attention_layernorm.weight'],self.rope_theta,
+                                                                        self.attn_ebits,self.attn_mbits )
+         
+
+                xx,x = HRWKV_7.SwiGLU_MLP_forward_fpx_w_add(xx,
+                                                            z[ffn+'gateup.weight'],self.HRWKV_Misc[ffn+'gateup_split_list'],
+                                                            z[ffn+'down_proj.weight'],
+
+                                                            z[ffn+'gateup.weight.qstate'],
+                                                            z[ffn+'down_proj.weight.qstate'],
+                                                            self.mlp_ebits,self.mlp_mbits,
+                                                            x
+                                                            )
+         
+
+
+            x = T5RMSNorm(x,z['model.norm.weight'],variance_epsilon=self.rms_norm_eps)
+            x = fpx_matmul(x , z['lm_head.weight'],z.get('lm_head.weight.qstate',None),self.head_ebits,self.head_mbits)
+            if not full_output: x = x[:, -1, :]  # 最後のタイムステップだけを選択し、バッチ次元を保持
+            pos_cache += T
+
+            return x, None, last_wkv_states, kv_cache, pos_cache
 
     @torch.compile()
     def hxa079r_moe_forward(self, idx, 
@@ -1557,7 +1687,7 @@ class HRWKV_7(nn.Module):
 
                 else:
 
-                    xx, x, kv_cache= HRWKV_7.GQA_Attention_Flash_(i,self.HRWKV_Block_Mode[i][2],self.n_head,self.head_size,x,kv_cache,cache_pos,
+                    xx, x, kv_cache= HRWKV_7.GQA_Attention_Flash_ZeroCopy(i,self.HRWKV_Block_Mode[i][2],self.n_head,self.head_size,x,kv_cache,cache_pos,
                                                                         calc_cos,calc_sin,
                                                                         #z[att+'q_proj.weight'], z[att+'k_proj.weight'], z[att+'v_proj.weight'],
                                                                         z[att+'qkv_fused.weight'],self.HRWKV_Misc[att+'qkv_split_list'],

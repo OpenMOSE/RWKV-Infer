@@ -7,7 +7,7 @@ from torch.nn import functional as F
 import numpy as np
 import os, sys
 import time
-import bitsandbytes as bnb
+ 
 import functools
 import torch
 import torch.nn as nn
@@ -416,8 +416,11 @@ class PIPELINE():
         #print(samples)
         
         return samples.tolist()
-    @torch.compile
-    def improved_nucleus_sampling_multi_static(self,logits, temperature, top_p):
+    #@torch.compile
+    @torch.jit.script
+    def improved_nucleus_sampling_multi_static(logits, temperature, top_p):
+        #print(f'sampling start logits={logits.shape}')
+       # print(f"{logits}")
         device = logits.device
 
         temperature = temperature.view(-1, 1).to(device=device,dtype=logits.dtype)
@@ -451,6 +454,8 @@ class PIPELINE():
         
         # サンプリングを実行
         samples = torch.multinomial(probs, num_samples=1).squeeze(-1)
+
+        #print('sampling finished')
         
         return samples#
     @torch.compile
@@ -667,6 +672,14 @@ class BlockStateList:
         result.kv_cache[:] = 0
         result.pos_cache[:] = 0
         return result
+    
+    def hx07A_create(N,GQA_N, B, rwkv_n_attn,att_n_attn,rwkv_n_kv,att_n_kv,rwkv_head_size,att_head_size,max_len,device, dtype):
+        result = BlockStateList.hx07A_empty(N,GQA_N, B, rwkv_n_attn,att_n_attn,rwkv_n_kv,att_n_kv,rwkv_head_size,att_head_size,max_len,device, dtype)
+        result.wkv_states[:] = 0
+        result.shift_states[:] = 0
+        result.kv_cache[:] = 0
+        result.pos_cache[:] = 0
+        return result
 
     @staticmethod
     def empty(N, B, C, H, device, dtype):
@@ -690,8 +703,24 @@ class BlockStateList:
                                  device=device,
                                  dtype=dtype) 
         shift_states = torch.zeros((N*2,B,1,n_attn*head_size), device=device, dtype=dtype)
-
-        kv_cache = torch.zeros((GQA_N,B,2,max_len,head_size*n_kv), device=device, dtype=dtype)
+        if GQA_N == 0:
+            kv_cache = torch.zeros((1,B,2,1,head_size*n_kv), device=device, dtype=dtype) # Dummy Tensor
+        else:
+            kv_cache = torch.zeros((GQA_N,B,2,max_len,head_size*n_kv), device=device, dtype=dtype)
+        #kv_cache = torch.zeros((GQA_N,B,max_len,2,head_size*n_kv), device=device, dtype=dtype)
+        pos_cache = torch.zeros((B,1), device=device, dtype=torch.int64)
+        return BlockStateList(shift_states, wkv_states,kv_cache=kv_cache,pos_cache=pos_cache)
+    
+    @staticmethod
+    def hx07A_empty(N,GQA_N, B, rwkv_n_attn,att_n_attn,rwkv_n_kv,att_n_kv,rwkv_head_size,att_head_size,max_len,device, dtype):
+        wkv_states = torch.zeros((N, B, rwkv_n_attn, rwkv_head_size, rwkv_head_size),
+                                 device=device,
+                                 dtype=torch.bfloat16) 
+        shift_states = torch.zeros((N*2,B,1,rwkv_n_attn*rwkv_head_size), device=device, dtype=dtype)
+        if GQA_N == 0:
+            kv_cache = torch.zeros((1,B,2,1,att_head_size*att_n_kv), device=device, dtype=dtype) # Dummy Tensor
+        else:
+            kv_cache = torch.zeros((GQA_N,B,2,max_len,att_head_size*att_n_kv), device=device, dtype=dtype)
         #kv_cache = torch.zeros((GQA_N,B,max_len,2,head_size*n_kv), device=device, dtype=dtype)
         pos_cache = torch.zeros((B,1), device=device, dtype=torch.int64)
         return BlockStateList(shift_states, wkv_states,kv_cache=kv_cache,pos_cache=pos_cache)

@@ -271,7 +271,7 @@ class LLMWorker:
         currentoutputcount = 0
         beforecount = 0
         
-        endtoken = "\n <sep>"
+        endtoken = " <sep>"
         buffer = ""
         
         def process_buffer(buffer, is_final=False):
@@ -1009,13 +1009,13 @@ class LLMWorker:
                                     #print(outputs[j])
                                 exit_flag = False
 
-                                for stop in end_token[j]:
-                                    if stop in tmp:
+                                # for stop in end_token[j]:
+                                #     if stop in tmp:
                                
-                                        print(f'Endtoken = {repr(tmp)}')
-                                        tmp = tmp.replace(stop,'')
+                                #         print(f'Endtoken = {repr(tmp)}')
+                                #         tmp = tmp.replace(stop,'')
                                    
-                                        exit_flag = True
+                                #         exit_flag = True
                                 for stop in end_token[j]:
                                     # 末尾から文字列を構築
                                     target_len = len(stop)

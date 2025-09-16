@@ -13,13 +13,13 @@ from collections import defaultdict
 import torch._dynamo
 torch._dynamo.config.cache_size_limit = 64  # 例えば32に拡張
 
-try:
-    import bitsandbytes as bnb
-    HAS_BITSANDBYTES = True
-except ImportError:
-    print('Bitsandbytes not found')
-    HAS_BITSANDBYTES = False
-    bnb = None
+# try:
+#     import bitsandbytes as bnb
+#     HAS_BITSANDBYTES = True
+# except ImportError:
+print('Bitsandbytes not found')
+HAS_BITSANDBYTES = False
+bnb = None
 
 import torch
 import torch.nn as nn
@@ -90,11 +90,11 @@ class RWKV_7(nn.Module):
         bb = kk * a
         w = -w.to(dtype=torch.float32).exp()
 
-        r_,w_,k_,v_,aa_,bb_ = [i.view(B,T,H,N) for i in [r,w,k,v,aa,bb]]
+        r_,w_,k_,v_,aa_,bb_ = [i.view(B,T,H,N).to(dtype=torch.bfloat16) for i in [r,w,k,v,aa,bb]]
         B,T,_,_ = r_.shape
         xx, state = fused_recurrent_rwkv7(r_, w_, k_, v_, aa_, bb_, scale=1.0, initial_state=state, output_final_state=True, head_first=False)
 
-        xx = xx.view(B * T, -1)
+        xx = xx.view(B * T, -1).to(dtype=x.dtype)
         xx = torch.nn.functional.group_norm(xx.to(dtype=ln_x_w.dtype),num_groups = H, weight=ln_x_w,bias=ln_x_b, eps= 64e-5).view(B, T, -1)
 
         xx = xx.to(dtype=r.dtype) + ((r.view(B,T,H,N)*k.view(B,T,H,N)*r_k.view(H,N)).sum(dim=-1, keepdim=True) * v.view(B,T,H,N)).view(B,T,HN)

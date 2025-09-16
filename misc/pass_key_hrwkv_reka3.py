@@ -31,7 +31,9 @@ import seaborn as sns
 #RWKV Infer
 from rwkvengine.rwkvcore import RWKV_x, PIPELINE
 
+pattern = "sliding_1024"
 model_path = "/home/client/Projects/llm/RWKV-Reka-Flash-Gen2/"
+max_kv_size = 1024
 model_adapter_path = "" # can realtime merge LoRA,Bone,DoRA
 model_adapter_mode = "" # set lora,bone,dora
 quant_mode = "int8" # int8, OpenMOSE Silly 8bit matmul kernel(triton)
@@ -56,10 +58,10 @@ def parse_config():
     parser = argparse.ArgumentParser(description='arg parser')
     #parser.add_argument('hf_model', type=str)
     parser.add_argument('--cache_dir', type=str, default="./cache")
-    parser.add_argument('--min_tokens', type=int, default=4096, help='minimum token length to start evaluation')
-    parser.add_argument('--max_tokens', type=int, default=65536, help='maximum token length for evaluation')
-    parser.add_argument('--interval', type=int, default=4096, help='interval for evaluation')
-    parser.add_argument('--num_tests', type=int, default=3, help='number of repeat testing for each length')
+    parser.add_argument('--min_tokens', type=int, default=1024, help='minimum token length to start evaluation')
+    parser.add_argument('--max_tokens', type=int, default=8192, help='maximum token length for evaluation')
+    parser.add_argument('--interval', type=int, default=1024, help='interval for evaluation')
+    parser.add_argument('--num_tests', type=int, default=2, help='number of repeat testing for each length')
     parser.add_argument('--max_depth', type=float, default=1.0, help='max depth ratio to test')
     parser.add_argument('--device', type=str, default='cuda:0', help='device to use for computation')
     # #parser.add_argument('--hf_model_args', type=str, default='{}',
@@ -143,7 +145,7 @@ def passkey_retrieval_test(model, tokenizer, device, context_length, depth, seed
     prefill_len = prefill_ids.shape[1]
     chunk_size = 8192
 
-    States = model.new_state(1,65536)
+    States = model.new_state(1,max_kv_size)
     shift_states = States.shift_states
     wkv_states = States.wkv_states
     kv_caches = States.kv_cache
@@ -356,8 +358,8 @@ def main(args):
     model_path_parts = model_path.split('/')
     sanitized_model_name = '_'.join(model_path_parts[-2:] if len(model_path_parts) > 1 else model_path_parts[-1:])
    
-    plt.savefig(f"misc/data/heatmap_tokenized_{args.max_tokens}_{sanitized_model_name}.png")
-    df_summary.to_csv(f"misc/data/results_tokenized_{args.max_tokens}_{sanitized_model_name}.csv", index=False)
+    plt.savefig(f"misc/data/heatmap_tokenized_{args.max_tokens}_{sanitized_model_name}{pattern}.png")
+    df_summary.to_csv(f"misc/data/results_tokenized_{args.max_tokens}_{sanitized_model_name}{pattern}.csv", index=False)
 
 if __name__ == "__main__":
     args = parse_config()

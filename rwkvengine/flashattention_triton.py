@@ -329,7 +329,7 @@ def get_rdna_autotune_configs():
             {
                 'BLOCK_M': 32,
                 'BLOCK_N': 32,
-               # 'waves_per_eu': 4,
+            #    'waves_per_eu': 4,
                 'PRE_LOAD_V': False
             },
             num_stages=1,
@@ -338,7 +338,7 @@ def get_rdna_autotune_configs():
             {
                 'BLOCK_M': 32,
                 'BLOCK_N': 32,
-             #   'waves_per_eu': 2,
+            #    'waves_per_eu': 2,
                 'PRE_LOAD_V': False
             },
             num_stages=1,
@@ -347,7 +347,7 @@ def get_rdna_autotune_configs():
             {
                 'BLOCK_M': 32,
                 'BLOCK_N': 16,
-               # 'waves_per_eu': 4,
+           #     'waves_per_eu': 4,
                 'PRE_LOAD_V': False
             },
             num_stages=1,
@@ -467,8 +467,8 @@ def attn_fwd(
     BIAS_TYPE: tl.constexpr,
     ENABLE_DROPOUT: tl.constexpr,
     RETURN_ENCODED_SOFTMAX: tl.constexpr,
-    FP8_MIN: tl.constexpr = -448.0,
-    FP8_MAX: tl.constexpr = +448.0,
+    # FP8_MIN: tl.constexpr = -448.0,
+    # FP8_MAX: tl.constexpr = +448.0,
 ):
     start_m = tl.program_id(0)
     off_h_q = tl.program_id(1)
@@ -749,9 +749,9 @@ def attn_fwd(
     end_m_idx = (start_m + 1) * BLOCK_M
     start_m_idx = start_m * BLOCK_M
     causal_start_idx = seqlen_q - seqlen_k
-    if USE_FP8_OUT:
-        acc *= o_descale
-        acc = tl.clamp(acc, FP8_MIN, FP8_MAX)
+    # if USE_FP8_OUT:
+    #     acc *= o_descale
+    #     acc = tl.clamp(acc, FP8_MIN, FP8_MAX)
     acc = acc.to(Out.type.element_ty)
     if IS_CAUSAL:  # noqa: SIM102
         if causal_start_idx > start_m_idx and causal_start_idx < end_m_idx:
@@ -853,15 +853,15 @@ class _attention(torch.autograd.Function):
         if o is None:
             o = torch.empty_like(q, dtype=v.dtype)
 
-        check_args(
-            q,
-            k,
-            v,
-            o,
-            varlen=True,
-            cu_seqlens_q=cu_seqlens_q,
-            cu_seqlens_k=cu_seqlens_k,
-        )
+        # check_args(
+        #     q,
+        #     k,
+        #     v,
+        #     o,
+        #     varlen=True,
+        #     cu_seqlens_q=cu_seqlens_q,
+        #     cu_seqlens_k=cu_seqlens_k,
+        # )
         if True:  # varlen
             total_q, nheads_q, head_size = q.shape
             total_k, nheads_k, _ = k.shape

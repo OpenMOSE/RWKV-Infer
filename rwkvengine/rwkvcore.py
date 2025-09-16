@@ -112,11 +112,27 @@ class RWKV_x(nn.Module):
                 with open(f'{load_model}/config.json', 'r', encoding='utf-8') as file:
                     modelconfig = json.load(file)
                 self.n_layer = modelconfig['num_hidden_layers']
-                self.n_kv = modelconfig['num_key_value_heads']#//modelconfig['head_dim']
-                self.head_size = modelconfig['head_dim']
-                self.n_head=modelconfig['num_attention_heads']
-                self.rms_norm_eps = modelconfig['rms_norm_eps']
-                self.rope_theta = modelconfig['rope_theta']
+
+                self.tie_word_embeddings = False
+
+
+                if modelconfig['rwkv_architecture'] == 'hxa07a':
+                    self.rwkv_n_kv = modelconfig['rwkv_num_key_value_heads']
+                    self.att_n_kv = modelconfig['att_num_key_value_heads']
+                    self.rwkv_head_size = modelconfig['head_dim_rwkv']
+                    self.att_head_size = modelconfig['head_dim_att']
+                    self.rwkv_n_head=modelconfig['rwkv_num_attention_heads']
+                    self.att_n_head=modelconfig['att_num_attention_heads']
+                    self.rms_norm_eps = modelconfig['rms_norm_eps']
+                    self.tie_word_embeddings = modelconfig['tie_word_embeddings']
+                else:
+                    self.n_kv = modelconfig['num_key_value_heads']#//modelconfig['head_dim']
+                    self.head_size = modelconfig['head_dim']
+                    self.n_head=modelconfig['num_attention_heads']
+                    self.rms_norm_eps = modelconfig['rms_norm_eps']
+                    self.rope_theta = modelconfig['rope_theta']
+
+
 
             else:
                 modelconfig = {}
@@ -281,6 +297,8 @@ class RWKV_x(nn.Module):
 
             if modelconfig['rwkv_architecture'] == 'hxa079':
                 print('hxa079 architecture initializing')
+            elif modelconfig['rwkv_architecture'] == 'hxa07a':
+                print('hxa07a architecture initializing')
             elif modelconfig['rwkv_architecture'] == 'cxa076':
                 print('cxa076 architecture initializing')
             elif modelconfig['rwkv_architecture'] == 'x070':
@@ -447,6 +465,141 @@ class RWKV_x(nn.Module):
                         # z[f'model.layer.{i}.mlp.experts.{j}.gate_proj.weight']
 
 
+                elif modelconfig['rwkv_architecture'] == 'hxa07a':
+                    self.HRWKV_Mode = 1
+                    if self.HFMode == False:
+                        for key in keys:
+                            if f'blocks.{i}.' in key:
+                                z = RenameToHFStyle(z,key,self.HRWKV_Block_Mode[i][0])
+                        keys = sorted(list(z.keys()),key=natural_sort_key)
+
+                    for k in keys:
+                        if f'layers.{i}.' in k:
+                            if self.ModeMode != 'standard':
+                                z[k] = z[k].to(device='cuda', dtype=torch.bfloat16)
+                                z[k] = Attach_Adapter(keyname=k,weight=z[k],adapter=z_adapter,mode=self.ModeMode,scaling=adapter_scale,device='cuda').to(device='cpu')
+
+
+                    bbb = f'model.layers.{i}.'
+                    att = f'model.layers.{i}.self_attn.'
+                    ffn = f'model.layers.{i}.mlp.'
+                    if self.HRWKV_Block_Mode[i][0] == 0:
+                        print(f'r_k flatten')
+                        z[att+'r_k'] = z[att+'r_k'].flatten()
+
+                        print(f'Layer:{i} RWKV hxa07a block r,k,v try to fusion')
+                        #
+                        print(f"r shape = {z[att+'receptance.weight'].shape}")
+                        print(f"k shape = {z[att+'key.weight'].shape}")
+                        print(f"v shape = {z[att+'value.weight'].shape}")
+                        z[att + 'rkv_fused.weight'] = torch.cat([z[att+'receptance.weight'],
+                                                                 z[att+'key.weight'],
+                                                                 z[att+'value.weight'],
+                                                                ],dim=0)
+
+                        self.HRWKV_Misc[att + 'rkv_split_list'] = [z[att+'receptance.weight'].shape[0],
+                                                     z[att+'key.weight'].shape[0],
+                                                     z[att+'value.weight'].shape[0],
+                                                    ]
+
+
+                        print(f"rkv shape = {z[att + 'rkv_fused.weight'].shape}")
+                        #exit()
+
+                        print(f'wag 1 fuse')
+                        z[att + 'wag_fused'] = torch.cat([z[att+'w1'],
+                                                                 z[att+'a1'],
+                                                                 #z[att+'v1'],
+                                                                 z[att+'g1'],
+                                                                 #z[att+'k1'],
+                                                                ],dim=1)
+
+                        self.HRWKV_Misc[att + 'wag_split_list'] = [z[att+'w1'].shape[1],
+                                                     z[att+'a1'].shape[1],
+                                                     #z[att+'v1'].shape[1],
+                                                     z[att+'g1'].shape[1],
+                                                    # z[att+'k1'].shape[1],
+                                                    ]
+
+                        print(self.HRWKV_Misc[att + 'wag_split_list'])
+
+                        print(f"wag shape = {z[att + 'wag_fused'].shape}")
+
+                       
+                        z[att+'receptance.weight'] = None
+                        z[att+'key.weight'] = None
+                        z[att+'value.weight'] = None
+                        z[att+'w1'] = None
+                        z[att+'a1'] = None
+                        #z[att+'v1'] = None
+                        z[att+'g1'] = None
+                        #z[att+'k1'] = None
+                        del z[att+'receptance.weight']
+                        del z[att+'key.weight']
+                        del z[att+'value.weight']
+
+                        del z[att+'w1']
+                        del z[att+'a1']
+                        #del z[att+'v1']
+                        del z[att+'g1']
+                       # del z[att+'k1']
+                    else:
+                        print(f'Layer:{i} Attention block q,k,v try to fusion')
+                        z[att + 'qkv_fused.weight'] = torch.cat([z[att+'q_proj.weight'],
+                                                                 z[att+'k_proj.weight'],
+                                                                 z[att+'v_proj.weight']
+                                                                ],dim=0)
+
+                        self.HRWKV_Misc[att + 'qkv_split_list'] = [z[att+'q_proj.weight'].shape[0],
+                                                     z[att+'k_proj.weight'].shape[0],
+                                                     z[att+'v_proj.weight'].shape[0],
+                                                    ]
+                        
+                        z[att+'q_proj.weight'] = None
+                        z[att+'k_proj.weight'] = None
+                        z[att+'v_proj.weight'] = None
+                        del z[att+'q_proj.weight']
+                        del z[att+'k_proj.weight']
+                        del z[att+'v_proj.weight']
+                    
+                    if self.MoEMode == False:
+                        print('SwiGLU MLP Layer Fusing')
+                        z[ffn+'gate_proj.weight'] = pad_weight_tensor_to_256(z[ffn+'gate_proj.weight'])
+                        z[ffn+'up_proj.weight'] = pad_weight_tensor_to_256(z[ffn+'up_proj.weight'])
+                        z[ffn + 'gateup.weight'] = torch.cat([z[ffn+'gate_proj.weight'],
+                                                                    z[ffn+'up_proj.weight']
+                                                                    ],dim=0)
+
+                        z[ffn+'down_proj.weight'] = pad_weight_tensor_to_256(z[ffn+'down_proj.weight'])
+
+                        self.HRWKV_Misc[ffn + 'gateup_split_list'] = [z[ffn+'gate_proj.weight'].shape[0],
+                                                        z[ffn+'up_proj.weight'].shape[0],
+                                                    ]
+                        z[ffn+'gate_proj.weight'] = None
+                        z[ffn+'up_proj.weight'] = None
+                        del z[ffn+'gate_proj.weight']
+                        del z[ffn+'up_proj.weight']
+                    else:
+                        print('SwiGLU MLP Experts Layer Fusing')
+                        for j in range(self.num_experts):
+                            addfix = f'experts.{j}.'
+                            z[ffn+addfix+'gate_proj.weight'] = pad_weight_tensor_to_256(z[ffn+addfix+'gate_proj.weight'])
+                            z[ffn+addfix+'up_proj.weight'] = pad_weight_tensor_to_256(z[ffn+addfix+'up_proj.weight'])
+                            z[ffn+addfix + 'gateup.weight'] = torch.cat([z[ffn+addfix+'gate_proj.weight'],
+                                                                        z[ffn+addfix+'up_proj.weight']
+                                                                        ],dim=0)
+
+                            self.HRWKV_Misc[ffn+addfix + 'gateup_split_list'] = [z[ffn+addfix+'gate_proj.weight'].shape[0],
+                                                            z[ffn+addfix+'up_proj.weight'].shape[0],
+                                                        ]
+                            z[ffn+addfix+'gate_proj.weight'] = None
+                            z[ffn+addfix+'up_proj.weight'] = None
+                            del z[ffn+addfix+'gate_proj.weight']
+                            del z[ffn+addfix+'up_proj.weight']
+                        
+                        # z[f'model.layer.{i}.mlp.experts.{j}.gate_proj.weight']
+
+
 
 
 
@@ -481,6 +634,9 @@ class RWKV_x(nn.Module):
                     if bbb in key:
                         z = DoQuantizationIfPossible(z,key,self.attn_quant,self.ffn_quant,self.base_precision,self.device) 
 
+            if self.tie_word_embeddings:
+                z['lm_head.weight'] = z['model.embed_tokens.weight'].clone()
+
             z = DoQuantizationIfPossible(z,'lm_head.weight',self.attn_quant,self.ffn_quant,self.base_precision,self.device) 
             
 
@@ -494,7 +650,7 @@ class RWKV_x(nn.Module):
             for k in keys:
                 is_in_blocks = any(block in k for block in offload_blocks)
                 #and 'emb' not in k
-                if not k.endswith('qstate')  and 'ln0' not in k:# or is_in_blocks):  and ('mlp' not in k or is_in_blocks)
+                if not k.endswith('qstate')  and 'ln0' not in k and 'emb' not in k:# or is_in_blocks):  and ('mlp' not in k or is_in_blocks)
                     print(f'{k} move to device {device}')
                     z[k] = z[k].to(device=self.device)
 
@@ -562,6 +718,31 @@ class RWKV_x(nn.Module):
                     for key in NoneCheckList:
                         z[att+key] = z.get(att+key,None)
 
+            if modelconfig['rwkv_architecture'] == 'hxa07a':
+                #self.cos, self.sin, _ = compute_qwen3_rope_cache(1048576,self.head_size,self.device,torch.float32,self.rope_theta)
+                #
+                DummyCheckList = ['receptance.weight.qstate','key.weight.qstate','value.weight.qstate','output.weight.qstate',
+                             'receptance.bias','key.bias','value.bias','output.bias',
+                             'q_proj.weight.qstate','k_proj.weight.qstate','v_proj.weight.qstate','o_proj.weight.qstate',
+                             'q_proj.bias','k_proj.bias','v_proj.bias','o_proj.bias',
+                             'rkv_fused.weight.qstate','qkv_fused.weight.qstate',
+                                ]
+                DummyCheckList2 = ['gate.weight.qstate','down.weight.qstate','up.weight.qstate','gateup.weight.qstate'
+                                ]
+                #NoneCheckList = ['ln_r.weight','ln_k.weight']
+                for i in range(self.n_layer):
+                    bbb = f'model.layers.{i}.'
+                    att = f'model.layers.{i}.self_attn.'
+                    ffn = f'model.layers.{i}.mlp.'
+
+                    for key in DummyCheckList:
+                        z[att+key] = z.get(att+key,self.dummytensor)
+                    for key in DummyCheckList2:
+                        z[ffn+key] = z.get(ffn+key,self.dummytensor)
+
+                    # for key in NoneCheckList:
+                    #     z[att+key] = z.get(att+key,None)
+
         self.modelconfig = modelconfig
         self.z = z
 
@@ -582,6 +763,19 @@ class RWKV_x(nn.Module):
                                                 self.n_head,
                                                 self.n_kv,
                                                 self.head_size,
+                                                max_token,
+                                                self.device,
+                                                self.base_precision                                                
+                                                )
+        elif self.modelconfig['rwkv_architecture'] == 'hxa07a':
+            return BlockStateList.hx07A_create(self.RWKVLayers,self.GQALayers,
+                                                B,
+                                                self.rwkv_n_head,
+                                                self.att_n_head,
+                                                self.rwkv_n_kv,
+                                                self.att_n_kv,
+                                                self.rwkv_head_size,
+                                                self.att_head_size,
                                                 max_token,
                                                 self.device,
                                                 self.base_precision                                                
@@ -707,30 +901,12 @@ class RWKV_x(nn.Module):
         
         if self.modelconfig['rwkv_architecture'] == 'hxa079' and self.MoEMode == False:
             return HRWKV_7.hxa079r_forward(self,idx,last_wkv_states,kv_cache,pos_cache,full_output)
+        elif self.modelconfig['rwkv_architecture'] == 'hxa07a' and self.MoEMode == False:
+            return HRWKV_7.hxa07A_forward(self,idx,last_wkv_states,kv_cache,pos_cache,full_output)
         elif self.modelconfig['rwkv_architecture'] == 'hxa079' and self.MoEMode == True:
             return HRWKV_7.hxa079r_moe_forward(self,idx,last_wkv_states,kv_cache,pos_cache,full_output) 
         elif self.modelconfig['rwkv_architecture'] == 'x070':
             return RWKV_7.x070_forward(self,idx,last_shift_states,last_wkv_states,full_output=full_output) 
-
-        
-        # if self.RWKVMode == 6:
-        #     return RWKV_6.x060_forward(self,idx,last_shift_states,last_wkv_states)
-        # elif self.RWKVMode == 7 and self.ARWKVMode == 0:
-        #     return RWKV_7.x070_forward(self,idx,last_shift_states,last_wkv_states,one_mode=one_mode,KernelMode=KernelMode,full_output=full_output,time_offset_state=time_offset_state)
-        # elif self.RWKVMode == 7 and self.HRWKV_Mode == 1:
-        #     if self.HRWKV_Generation == 79:
-        #         return HRWKV_7.hxa079r_forward(self,idx,last_wkv_states,kv_cache,pos_cache,full_output)
-        #     else:
-        #         return HRWKV_7.hxa078r_forward(self,idx,last_wkv_states,kv_cache,pos_cache,full_output)
-        # elif self.RWKVMode == 7 and self.ARWKVMode == 1 and self.TokenshiftMode == 0:
-        #     #print('ARWKV')
-        #     return ARWKV_7.ax070_forward(self,idx,last_shift_states,last_wkv_states,one_mode=one_mode,KernelMode=KernelMode,full_output=full_output )
-        
-        # elif self.RWKVMode == 7 and self.ARWKVMode == 1 and self.TokenshiftMode == 1:
-        #     #print('PRWKV')
-        #     return PRWKV_7.PRWKV7_forward(self,idx,last_shift_states,last_wkv_states,one_mode=one_mode,KernelMode=KernelMode,full_output=full_output,time_offset_state=time_offset_state)
-    
-
 
 
 
