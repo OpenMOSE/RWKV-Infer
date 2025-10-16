@@ -115,33 +115,32 @@ def dplr_decode_t1_kernel(
     s = tl.zeros([BV], dtype=tl.float32)
     t = tl.zeros([BV], dtype=tl.float32)
 
-    if USE_INITIAL_STATE:
-        p_h0 = h0 + i_nh * (K*V) + (tl.arange(0, K)[:, None]) * V + o_v[None, :]
-        # read H once for both s and t
-        Hblk = tl.load(p_h0, mask=(o_v[None, :] < V), other=0).to(tl.float32)
-        # s = a^T H
-        s += tl.sum((b_av[:, None]) * Hblk, axis=0)
-        # t = (q ⊙ e^g)^T H
-        t += tl.sum(((b_q * b_g)[:, None]) * Hblk, axis=0)
+    p_h0 = h0 + i_nh * (K*V) + (tl.arange(0, K)[:, None]) * V + o_v[None, :]
+    # read H once for both s and t
+    Hblk = tl.load(p_h0, mask=(o_v[None, :] < V), other=0).to(tl.float32)
+    # s = a^T H
+    s += tl.sum((b_av[:, None]) * Hblk, axis=0)
+    # t = (q ⊙ e^g)^T H
+    t += tl.sum(((b_q * b_g)[:, None]) * Hblk, axis=0)
 
     # output: o = t + alpha*s + beta*v
     out = t + alpha * s + beta * b_v
     tl.store(p_o, out.to(o.dtype.element_ty), mask=mask_v, eviction_policy='evict_last')
 
     # optionally write next state H'
-    if STORE_FINAL_STATE:
-        # s is ready; (re)load H (keeps register pressure low)
-        Hprev = tl.zeros([K, BV], dtype=tl.float32)
-        if USE_INITIAL_STATE:
-            p_h0 = h0 + i_nh * (K*V) + (tl.arange(0, K)[:, None]) * V + o_v[None, :]
-            Hprev = tl.load(p_h0, mask=(o_v[None, :] < V), other=0).to(tl.float32)
+ 
+    # s is ready; (re)load H (keeps register pressure low)
+    Hprev = tl.zeros([K, BV], dtype=tl.float32)
 
-        Hnext = (b_g[:, None]) * Hprev \
-              + (b_bv[:, None]) * s[None, :] \
-              + (b_kv[:, None]) * b_v[None, :]
+    p_h0 = h0 + i_nh * (K*V) + (tl.arange(0, K)[:, None]) * V + o_v[None, :]
+    Hprev = tl.load(p_h0, mask=(o_v[None, :] < V), other=0).to(tl.float32)
 
-        p_ht = ht + i_nh * (K*V) + (tl.arange(0, K)[:, None]) * V + o_v[None, :]
-        tl.store(p_ht, Hnext.to(ht.dtype.element_ty), mask=(o_v[None, :] < V))
+    Hnext = (b_g[:, None]) * Hprev \
+            + (b_bv[:, None]) * s[None, :] \
+            + (b_kv[:, None]) * b_v[None, :]
+
+    p_ht = ht + i_nh * (K*V) + (tl.arange(0, K)[:, None]) * V + o_v[None, :]
+    tl.store(p_ht, Hnext.to(ht.dtype.element_ty), mask=(o_v[None, :] < V))
 
 def fused_recurrent_dplr_delta_rule_decode_t1(
     q,k,v,a,b,gk,
