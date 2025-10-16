@@ -1,9 +1,14 @@
 #!/bin/bash
 curl http://127.0.0.1:9000/healthcheck
 
-#curl http://127.0.0.1:9000/loadmodel -X POST -H "Content-Type: application/json" -d '{"model_filename":"models/hxa079-qwen3-8b-stage2-hybrid-final.pth","model_viewname":"hxa079-8B","model_strategy":"nf4","adapter_filename":"","adapter_mode":"", "template":"qwen3", "endtoken":"<|im_end|>","default_temperature":"1.0", "default_top_p":"0.3"}'
+#curl http://127.0.0.1:9000/loadmodel -X POST -H "Content-Type: application/json" -d '{"model_filename":"/home/client/Projects/llm/RWKV-Qwen3-32B-hxa079-Low/","model_viewname":"hxa079+ RWKV-Qwen 32B L8","model_strategy":"int8","adapter_filename":"","adapter_mode":"", "template":"qwen3", "endtoken":"<|im_end|>","default_temperature":"1.0", "default_top_p":"0.3"}'
+curl http://127.0.0.1:9000/loadmodel -X POST -H "Content-Type: application/json" -d '{"model_filename":"/home/client/Projects/llm/RWKV-Qwen3-15B/","model_viewname":"hxa079 RWKV-Qwen 14B L9","model_strategy":"int8","adapter_filename":"","adapter_mode":"", "template":"qwen3", "endtoken":"<|im_end|>","default_temperature":"1.0", "default_top_p":"0.3"}'
 
-curl http://127.0.0.1:9000/loadmodel -X POST -H "Content-Type: application/json" -d '{"model_filename":"/home/client/Projects/llm/RWKV-Reka-Flash-Gen2/","model_viewname":"RWKV-Reka","model_strategy":"int8","adapter_filename":"/home/client/Projects/RWKV-LM-RLHF/main/myfolder/hxa079_output_enjp/rwkv-13.pth","adapter_mode":"bone", "template":"rekaflash31", "endtoken":" <sep>","default_temperature":"0.6", "default_top_p":"0.3"}'
+#curl http://127.0.0.1:9000/loadmodel -X POST -H "Content-Type: application/json" -d '{"model_filename":"/home/client/Projects/llm/RWKV-Reka-Flash-Gen2/","model_viewname":"RWKV-Reka","model_strategy":"int8","adapter_filename":"/home/client/Projects/RWKV-LM-RLHF/main/myfolder/hxa079_output_enjp/rwkv-13.pth","adapter_mode":"bone", "template":"rekaflash31", "endtoken":" <sep>","default_temperature":"0.6", "default_top_p":"0.3"}'
+
+#curl http://127.0.0.1:9000/loadmodel -X POST -H "Content-Type: application/json" -d '{"model_filename":"/home/client/Projects/llm/RWKV-Seed-OSS-36B-hxa07A/","model_viewname":"RWKV-Seed-OSS-07A","model_strategy":"nf4","adapter_filename":"h","adapter_mode":"", "template":"seed-oss", "endtoken":"<seed:eos>","default_temperature":"0.6", "default_top_p":"0.3"}'
+
+
 #
 #curl http://127.0.0.1:9000/loadmodel -X POST -H "Content-Type: application/json" -d '{"model_filename":"models/PRWKV7-cxa075-qwen14b-stage2-final.pth","model_viewname":"PRWKV7-cxa075 Qwen 2.5 14B Stage3 16k e7","model_strategy":"fp6","adapter_filename":"adapters/testlora7.pth","adapter_mode":"lora", "template":"qwen", "endtoken":"<|im_end|>","default_temperature":"0.7", "default_top_p":"0.1"}'
 #

@@ -27,7 +27,7 @@ if __name__ == '__main__':
     pipeline = PIPELINE("qwen3")
 
 
-    model = RWKV_x('models/HRWKV7-hxa079-qwen3-14b-stage2-e1.pth','attn_int8_ffn_int4',
+    model = RWKV_x('/home/client/Projects/llm/RWKV-Qwen3-4B','int8',
                    adapter_model='',
                    adapter_mode='',
                    fully_fusedrecurrent=args.fully_fused,
@@ -70,8 +70,8 @@ if __name__ == '__main__':
 
         #context = context + "<reasoning>\n\n</reasoning>\n"
 
-        States = model.new_state(Target_batch,1024)#tate_empty(32, 1, 2560, 2560 // 32)
-        States2 = model.new_state(Target_batch,1024)#state_empty(32, 1, 2560, 2560 // 32)
+        States = model.new_state(Target_batch,4096)#tate_empty(32, 1, 2560, 2560 // 32)
+        States2 = model.new_state(Target_batch,4096)#state_empty(32, 1, 2560, 2560 // 32)
 
         
 

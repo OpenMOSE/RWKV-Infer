@@ -996,6 +996,10 @@ class LLMWorker:
                                 if ("\ufffd" not in tmp) and (not tmp.endswith("\n")) and (not tmp.endswith(end_token[j][0])):
                                         outputs[j].append(tmp)
                                         out_last[j] = counts[j] + 1
+                                elif len(out_tokens[j]) - out_last[j] > 4:
+                                        outputs[j].append(tmp)
+                                        out_last[j] = counts[j] + 1
+
 
                                 if int(counts[j]) > int(max_tokens[j]):
                                     #Reached Max Token

@@ -31,7 +31,7 @@ parser.add_argument("--debug", default=False, type=bool)
 parser.add_argument("--workers", default=64, type=int)
 parser.add_argument("--mrssmax", default=4, type=int) #If workers 8, mrssmax 4, maximum batch inference = 8 * (4 + 1) = 40
 
-parser.add_argument("--max_ctxlen", default=8192, type=int)
+parser.add_argument("--max_ctxlen", default=4096, type=int)
 
 parser.add_argument("--dynamic_state_cache_size", default=512, type=int)  # for 14B need 16GB of PC RAM
 parser.add_argument("--dynamic_state_cache_store", default='cpu', type=str) #if gpu need more vram for storing state 

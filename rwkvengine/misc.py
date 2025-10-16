@@ -194,6 +194,7 @@ class PIPELINE():
             self.hfmode = True
             self.tokenizer = AutoTokenizer.from_pretrained(os.path.dirname(os.path.abspath(__file__)) + f"/{mode}") #, add_prefix_space=True
             self.modeltemplate = self.load_tokenizer_config(os.path.dirname(os.path.abspath(__file__)) + f"/{mode}")
+            self.path = os.path.dirname(os.path.abspath(__file__)) + f"/{mode}"
             self.default_eos_token = self.modeltemplate.get("eos_token", "<|endoftext|>")
 
     def load_tokenizer_config(self, config_path: str) -> dict:
@@ -203,7 +204,7 @@ class PIPELINE():
         with open(config_path + "/tokenizer_config.json", "r", encoding="utf-8") as f:
             return json.load(f)
 
-    def generate_prompt_from_config(self, tokenizer_config: dict, messages: list, add_generation_prompt: bool = False) -> str:
+    def generate_prompt_from_config_(self, tokenizer_config: dict, messages: list, add_generation_prompt: bool = False) -> str:
         """
         tokenizer_config 内の chat_template を元に、messages (role, content) をまとめた文字列を生成する
         """
@@ -233,6 +234,45 @@ class PIPELINE():
             eos_token=eos_token,
             enable_thinking = False,
 
+        )
+        return rendered_text
+    
+    def generate_prompt_from_config(self, tokenizer_config: dict, messages: list, add_generation_prompt: bool = False) -> str:
+        """
+        tokenizer_config 内の chat_template またはファイルを元に、
+        messages (role, content) をまとめた文字列を生成する
+        """
+        # chat_template を取り出す
+        chat_template_str = tokenizer_config.get("chat_template", None)
+
+        # chat_template が存在しない場合は、ファイルを探す
+        if not chat_template_str:
+            template_path = os.path.join(self.path, "chat_template.jinja")
+            if os.path.exists(template_path):
+                with open(template_path, "r", encoding="utf-8") as f:
+                    chat_template_str = f.read()
+            else:
+                raise ValueError("chat_template が TokenizerConfig に存在せず、chat_template.jinja も見つかりません。")
+
+        # eos_token など必要なトークンも取り出す
+        eos_token = tokenizer_config.get("eos_token", "<|endoftext|>")
+
+        # テンプレートを読み込む
+        template = Template(chat_template_str)
+        from datetime import datetime
+
+        # カスタム関数の定義
+        def strftime_now(format_string):
+            return datetime.now().strftime(format_string)
+        template.globals['strftime_now'] = strftime_now
+
+        # テンプレート変数を指定してレンダリング
+        rendered_text = template.render(
+            messages=messages,
+            add_generation_prompt=add_generation_prompt,
+            eos_token=eos_token,
+            enable_thinking=False,
+            thinking_budget = 0
         )
         return rendered_text
 

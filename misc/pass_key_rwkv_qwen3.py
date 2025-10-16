@@ -31,15 +31,15 @@ import seaborn as sns
 #RWKV Infer
 from rwkvengine.rwkvcore import RWKV_x, PIPELINE
 
-pattern = "07a_21b_niah"
-model_path = "/home/client/output/qwen3-4b/rwkv-qwen3-cxa07a/"
-max_kv_size = 131072
+pattern = "079_Qwen3-32B-L12-GQA-rope10000000"
+model_path = "/home/client/Projects/llm/RWKV-Qwen3-32B-hxa079-Low"
+max_kv_size = 8192
 model_adapter_path = "" # can realtime merge LoRA,Bone,DoRA
 model_adapter_mode = "" # set lora,bone,dora
 quant_mode = "int8" # int8, OpenMOSE Silly 8bit matmul kernel(triton)
 template = "qwen3"
-rope_theta=8000000.0
-rms_norm_eps=1e-6    
+rope_theta=-1
+rms_norm_eps=-1    
 
 def get_gpu_memory():
     """Returns the current GPU memory usage in MB."""
@@ -59,9 +59,9 @@ def parse_config():
     #parser.add_argument('hf_model', type=str)
     parser.add_argument('--cache_dir', type=str, default="./cache")
     parser.add_argument('--min_tokens', type=int, default=1024, help='minimum token length to start evaluation')
-    parser.add_argument('--max_tokens', type=int, default=8192, help='maximum token length for evaluation')
-    parser.add_argument('--interval', type=int, default=1024, help='interval for evaluation')
-    parser.add_argument('--num_tests', type=int, default=2, help='number of repeat testing for each length')
+    parser.add_argument('--max_tokens', type=int, default=65536, help='maximum token length for evaluation')
+    parser.add_argument('--interval', type=int, default=16384, help='interval for evaluation')
+    parser.add_argument('--num_tests', type=int, default=1, help='number of repeat testing for each length')
     parser.add_argument('--max_depth', type=float, default=1.0, help='max depth ratio to test')
     parser.add_argument('--device', type=str, default='cuda:0', help='device to use for computation')
     # #parser.add_argument('--hf_model_args', type=str, default='{}',
@@ -122,9 +122,9 @@ def generate_prompt_landmark(tokenizer, pass_key, context_length, depth, final_c
 def passkey_retrieval_test(model, tokenizer, device, context_length, depth, seed=666):
     # Generate random pass key
     rnd_state = random.get_state()
-    random.seed(seed)
+    # random.seed(seed)
     pass_key = random.randint(1, 50000)
-    random.set_state(rnd_state)
+    # random.set_state(rnd_state)
 
     prompt = generate_prompt_landmark(tokenizer, pass_key, context_length=context_length, depth=depth)
     answer = str(pass_key)
@@ -287,7 +287,7 @@ def main(args):
         current_tokens = args.min_tokens + (i * args.interval)
         
         # Calculate depth steps to max_depth
-        depth_steps = np.linspace(0, args.max_depth, 5) # 10 steps from 0 to max_depth
+        depth_steps = np.linspace(0, args.max_depth, 4) # 10 steps from 0 to max_depth
         
         for depth in depth_steps:
             passed_tests = 0

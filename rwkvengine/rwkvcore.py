@@ -117,13 +117,14 @@ class RWKV_x(nn.Module):
 
 
                 if modelconfig['rwkv_architecture'] == 'hxa07a':
-                    self.rwkv_n_kv = modelconfig['rwkv_num_key_value_heads']
-                    self.att_n_kv = modelconfig['att_num_key_value_heads']
-                    self.rwkv_head_size = modelconfig['head_dim_rwkv']
-                    self.att_head_size = modelconfig['head_dim_att']
-                    self.rwkv_n_head=modelconfig['rwkv_num_attention_heads']
-                    self.att_n_head=modelconfig['att_num_attention_heads']
+                    self.rwkv_n_kv = modelconfig['num_key_value_heads']
+                    self.att_n_kv = modelconfig['num_key_value_heads']
+                    self.rwkv_head_size = modelconfig['head_dim']
+                    self.att_head_size = modelconfig['head_dim']
+                    self.rwkv_n_head=modelconfig['num_attention_heads']
+                    self.att_n_head=modelconfig['num_attention_heads']
                     self.rms_norm_eps = modelconfig['rms_norm_eps']
+                    self.rope_theta = modelconfig['rope_theta']
                     self.tie_word_embeddings = modelconfig['tie_word_embeddings']
                 else:
                     self.n_kv = modelconfig['num_key_value_heads']#//modelconfig['head_dim']
@@ -131,6 +132,7 @@ class RWKV_x(nn.Module):
                     self.n_head=modelconfig['num_attention_heads']
                     self.rms_norm_eps = modelconfig['rms_norm_eps']
                     self.rope_theta = modelconfig['rope_theta']
+                    self.tie_word_embeddings = modelconfig['tie_word_embeddings']
 
 
 
@@ -226,7 +228,7 @@ class RWKV_x(nn.Module):
             for i in range(self.n_layer):
                 Found = False
                 for key in keys:
-                    if ( f'blocks.{i}.' in key or f'layers.{i}.' in key) and 'q_proj' in key:
+                    if ( f'blocks.{i}.' in key or f'layers.{i}.' in key) and 'q_proj.weight' in key:
                         Found = True
                         self.HRWKV_Block_Mode.append([1,i,self.GQALayers])
                         self.GQALayers = self.GQALayers + 1
@@ -484,8 +486,6 @@ class RWKV_x(nn.Module):
                     att = f'model.layers.{i}.self_attn.'
                     ffn = f'model.layers.{i}.mlp.'
                     if self.HRWKV_Block_Mode[i][0] == 0:
-                        print(f'r_k flatten')
-                        z[att+'r_k'] = z[att+'r_k'].flatten()
 
                         print(f'Layer:{i} RWKV hxa07a block r,k,v try to fusion')
                         #
@@ -652,7 +652,7 @@ class RWKV_x(nn.Module):
                 #and 'emb' not in k
                 if not k.endswith('qstate')  and 'ln0' not in k and 'emb' not in k:# or is_in_blocks):  and ('mlp' not in k or is_in_blocks)
                     print(f'{k} move to device {device}')
-                    z[k] = z[k].to(device=self.device)
+                    z[k] = z[k].to(device=self.device)#.contiguous()
 
             self.emboncpu = True
             
@@ -719,7 +719,7 @@ class RWKV_x(nn.Module):
                         z[att+key] = z.get(att+key,None)
 
             if modelconfig['rwkv_architecture'] == 'hxa07a':
-                #self.cos, self.sin, _ = compute_qwen3_rope_cache(1048576,self.head_size,self.device,torch.float32,self.rope_theta)
+                self.cos, self.sin, _ = compute_qwen3_rope_cache(65536,self.att_head_size,self.device,torch.float32,self.rope_theta)
                 #
                 DummyCheckList = ['receptance.weight.qstate','key.weight.qstate','value.weight.qstate','output.weight.qstate',
                              'receptance.bias','key.bias','value.bias','output.bias',

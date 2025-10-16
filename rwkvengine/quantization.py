@@ -303,24 +303,24 @@ QuantizationModeList = ['hqq_int4','bnb_int4','ao_fp5','ao_fp6','op_int8']
 
 def CleanQuantizationMode(quantname:str):
     if 'int4' == quantname or 'nf4' == quantname:
-        return 'hqq_int4','hqq_int4', torch.float16,-44,-44,  -44,-44
+        return 'hqq_int4','hqq_int4', torch.bfloat16,-44,-44,  -44,-44
     if 'bnb_int4' == quantname:
-        return 'bnb_int4','bnb_int4', torch.float16,-4,-4,-4,-4
+        return 'bnb_int4','bnb_int4', torch.bfloat16,-4,-4,-4,-4
     
     if 'attn_int8_ffn_int4' in quantname:
-        return 'op_int8','hqq_int4', torch.float16,-8,-8,-44,-44
+        return 'op_int8','hqq_int4', torch.bfloat16,-8,-8,-44,-44
     if 'attn_int8_ffn_fp5' in quantname:
-        return 'op_int8','ao_fp5', torch.float16,-8,-8, 2,2
+        return 'op_int8','ao_fp5', torch.bfloat16,-8,-8, 2,2
     if 'attn_int8_ffn_fp6' in quantname:
-        return 'op_int8','ao_fp6', torch.float16,-8,-8, 3,2
+        return 'op_int8','ao_fp6', torch.bfloat16,-8,-8, 3,2
     if 'int4' in quantname:
-        return 'hqq_int4','hqq_int4', torch.float16,-44,-44,  -44,-44
+        return 'hqq_int4','hqq_int4', torch.bfloat16,-44,-44,  -44,-44
     if 'int8' in quantname:
-        return 'op_int8','op_int8' , torch.float16,-8,-8, -8,-8
+        return 'op_int8','op_int8' , torch.bfloat16,-8,-8, -8,-8
     if 'fp5' in quantname:
-        return 'ao_fp5','ao_fp5',torch.float16,2,2, 2,2
+        return 'ao_fp5','ao_fp5',torch.bfloat16,2,2, 2,2
     if 'fp6' in quantname:
-        return 'ao_fp6','ao_fp6',torch.float16,3,2, 3,2
+        return 'ao_fp6','ao_fp6',torch.bfloat16,3,2, 3,2
     return 'None','None', torch.bfloat16, -999,-999,-999,-999
 
 def Quant(z,TensorKey,QuantMode,device):

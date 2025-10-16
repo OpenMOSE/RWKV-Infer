@@ -13,11 +13,14 @@ from collections import defaultdict
 
 from torch.nn.attention import SDPBackend, sdpa_kernel
 
+import torch
+import torch.nn.functional as F
+
 
 import torch._dynamo
-torch._dynamo.config.cache_size_limit = 256  # 例えば32に拡張
 
-
+torch._dynamo.reset()  # Dynamo の内部キャッシュを全消去
+torch._dynamo.config.cache_size_limit = 512  # 例えば32に拡張
 # try:
 #     import bitsandbytes as bnb
 #     HAS_BITSANDBYTES = True
@@ -48,60 +51,122 @@ from rwkvengine.matmularena import hybrid_matmul
 from rwkvengine.quantization import fpx_matmul
 # from rwkvengine.fla.ops.rwkv6.chunk import chunk_rwkv6,ChunkRWKV6Function
 # from rwkvengine.fla.ops.rwkv6.fused_recurrent import fused_recurrent_rwkv6
+#from rwkvengine.fla.ops.rwkv7 import fused_recurrent_rwkv7
+#from rwkvengine.cuda.wkv7triton import rwkv7_attn_triton
 from rwkvengine.fla.ops.rwkv7 import fused_recurrent_rwkv7
-from rwkvengine.cuda.wkv7triton import rwkv7_attn_triton
 
 
 from rwkvengine.flashattention_triton import triton_attention
 
 
 MyStatic = torch.jit.script
+import triton
+import triton.language as tl
 
+@triton.autotune(
+    configs=[
+        triton.Config({'BV': BV}, num_warps=nw, num_stages=ns)
+        for BV in [32, 64, 128, 256]
+        for nw in [2, 4, 8]
+        for ns in [2, 3]
+    ],
+    key=['K','V','USE_INITIAL_STATE','STORE_FINAL_STATE'],
+)
+@triton.jit
+def dplr_decode_t1_kernel(
+    q, k, v, a, b, gk,
+    o,           # [B,T=1,H,V]
+    h0, ht,      # [N,H,K,V] or None
+    B: tl.constexpr, H: tl.constexpr, K: tl.constexpr, V: tl.constexpr,
+    BV: tl.constexpr,
+    USE_INITIAL_STATE: tl.constexpr,
+    STORE_FINAL_STATE: tl.constexpr,
+):
+    # program ids
+    i_vblk = tl.program_id(0).to(tl.int64)           # along V
+    i_nh   = tl.program_id(1).to(tl.int64)           # along N*H (here B==N, T=1)
+    i_n, i_h = i_nh // H, i_nh % H
 
-# DTYPE = torch.bfloat16
+    o_v = i_vblk * BV + tl.arange(0, BV)
+    mask_v = o_v < V
 
-# from torch.utils.cpp_extension import load
-# HEAD_SIZE = 64
-# current_path = os.path.dirname(os.path.abspath(__file__))
+    # pointers (T=1, no reverse/varlen)
+    p_q  = q  + (i_n * 1 + 0) * H*K + i_h*K + tl.arange(0, K)
+    p_k  = k  + (i_n * 1 + 0) * H*K + i_h*K + tl.arange(0, K)
+    p_a  = a  + (i_n * 1 + 0) * H*K + i_h*K + tl.arange(0, K)
+    p_b  = b  + (i_n * 1 + 0) * H*K + i_h*K + tl.arange(0, K)
+    p_gk = gk + (i_n * 1 + 0) * H*K + i_h*K + tl.arange(0, K)
+    p_v  = v  + (i_n * 1 + 0) * H*V + i_h*V + o_v
+    p_o  = o  + (i_n * 1 + 0) * H*V + i_h*V + o_v
 
-# device_props = th.cuda.get_device_properties(th.cuda.current_device())
-# if 'AMD' in device_props.name:
-#     load(name="rwkv7_state_fwd_fp16", sources=[f"{current_path}/cuda/rwkv7_state_fwd_fp16.cpp", f"{current_path}/cuda/rwkv7_state_fwd_fp16.cu"], is_python_module=False,
-#                     verbose=True, extra_cuda_cflags=['-O3', '-ffast-math', '-DAMD', f"-D_N_={HEAD_SIZE}"])
-# else:
-#     load(name="rwkv7_state_fwd_fp16", sources=[f"{current_path}/cuda/rwkv7_state_fwd_fp16.cpp", f"{current_path}/cuda/rwkv7_state_fwd_fp16.cu"], is_python_module=False,
-#                     verbose=True, extra_cuda_cflags=["-res-usage", "--use_fast_math", "-O3", "-Xptxas -O3", "--extra-device-vectorization", f"-D_N_={HEAD_SIZE}"])
-# class WKV_7(torch.autograd.Function):
-#     @staticmethod
-#     def forward(ctx, state, r, w, k, v, a, b):
-#         with torch.no_grad():
-#             T, C = r.size()
-#             H = C // HEAD_SIZE
-#             N = HEAD_SIZE
-#             assert HEAD_SIZE == C // H
-#             assert all(x.dtype == DTYPE for x in [r,w,k,v,a,b])
-#             assert all(x.is_contiguous() for x in [r,w,k,v,a,b])
-#             y = torch.empty((T, C), device=k.device, dtype=DTYPE, requires_grad=False, memory_format=torch.contiguous_format)
-#             torch.ops.rwkv7_state_fwd_fp16.forward(1, T, C, H, state, r, w, k, v, a, b, y)
-#             return y
-# def RWKV7_OP(state, r, w, k, v, a, b):
-#     return WKV_7.apply(state, r, w, k, v, a, b)
+    # load vectors (K) and block (V)
+    b_q  = tl.load(p_q).to(tl.float32)
+    b_kv = tl.load(p_k).to(tl.float32)
+    b_av = tl.load(p_a).to(tl.float32)
+    b_bv = tl.load(p_b).to(tl.float32)
+    b_g  = tl.exp(tl.load(p_gk).to(tl.float32))      # fastmath exp once
+    b_v  = tl.load(p_v, mask=mask_v, other=0).to(tl.float32)
 
-# class WKV_7_batch(torch.autograd.Function):
-#     @torch.compiler.disable
-#     def forward(ctx, state, r, w, k, v, a, b):
-#         with torch.no_grad():
-#             B, T, C = r.size()
-#             H = C // HEAD_SIZE
-#             N = HEAD_SIZE
-#             assert HEAD_SIZE == C // H
-#             assert all(x.dtype == DTYPE for x in [r,w,k,v,a,b])
-#             assert all(x.is_contiguous() for x in [r,w,k,v,a,b])
-#             y = torch.empty((B, T, C), device=k.device, dtype=DTYPE, requires_grad=False, memory_format=torch.contiguous_format)
-#             torch.ops.rwkv7_state_fwd_fp16.forward(B, T, C, H, state, r, w, k, v, a, b, y)
-#             return y
-# def RWKV7_BATCH_OP(state, r, w, k, v, a, b):
-#     return WKV_7_batch.apply(state, r, w, k, v, a, b)
+    # precompute scalars for rank-1 terms
+    alpha = tl.sum(b_q * b_bv)     # q^T b
+    beta  = tl.sum(b_q * b_kv)     # q^T k
+
+    # reductions over rows of H: s = a^T H, t = (q ⊙ e^g)^T H
+    s = tl.zeros([BV], dtype=tl.float32)
+    t = tl.zeros([BV], dtype=tl.float32)
+
+    if USE_INITIAL_STATE:
+        p_h0 = h0 + i_nh * (K*V) + (tl.arange(0, K)[:, None]) * V + o_v[None, :]
+        # read H once for both s and t
+        Hblk = tl.load(p_h0, mask=(o_v[None, :] < V), other=0).to(tl.float32)
+        # s = a^T H
+        s += tl.sum((b_av[:, None]) * Hblk, axis=0)
+        # t = (q ⊙ e^g)^T H
+        t += tl.sum(((b_q * b_g)[:, None]) * Hblk, axis=0)
+
+    # output: o = t + alpha*s + beta*v
+    out = t + alpha * s + beta * b_v
+    tl.store(p_o, out.to(o.dtype.element_ty), mask=mask_v, eviction_policy='evict_last')
+
+    # optionally write next state H'
+    if STORE_FINAL_STATE:
+        # s is ready; (re)load H (keeps register pressure low)
+        Hprev = tl.zeros([K, BV], dtype=tl.float32)
+        if USE_INITIAL_STATE:
+            p_h0 = h0 + i_nh * (K*V) + (tl.arange(0, K)[:, None]) * V + o_v[None, :]
+            Hprev = tl.load(p_h0, mask=(o_v[None, :] < V), other=0).to(tl.float32)
+
+        Hnext = (b_g[:, None]) * Hprev \
+              + (b_bv[:, None]) * s[None, :] \
+              + (b_kv[:, None]) * b_v[None, :]
+
+        p_ht = ht + i_nh * (K*V) + (tl.arange(0, K)[:, None]) * V + o_v[None, :]
+        tl.store(p_ht, Hnext.to(ht.dtype.element_ty), mask=(o_v[None, :] < V))
+
+def fused_recurrent_dplr_delta_rule_decode_t1(
+    q,k,v,a,b,gk,
+    initial_state=None,      # [B,H,K,V] あるいは [N,H,K,V]
+    output_final_state=False
+):
+    B, T, H, K = q.shape
+    assert T == 1
+    V = v.shape[-1]
+    N = B
+
+    o  = torch.empty_like(v)
+    ht = q.new_empty(N, H, K, V, dtype=torch.float32) if output_final_state else None
+
+    def grid(meta): return (triton.cdiv(V, meta['BV']), N * H)
+
+    dplr_decode_t1_kernel[grid](
+        q, k, v, a, b, gk,
+        o, initial_state, ht,
+        B=B, H=H, K=K, V=V,
+        USE_INITIAL_STATE = initial_state is not None,
+        STORE_FINAL_STATE = output_final_state,
+    )
+    return o, ht
+
 
 
 
@@ -261,66 +326,12 @@ def apply_rotary_pos_emb(q, k, cos, sin, position_ids=None, unsqueeze_dim=1):
  
 
 
-def sdpa_attention_forward(
-    #module: torch.nn.Module,
-    query: torch.Tensor,
-    key: torch.Tensor,
-    value: torch.Tensor,
-    attention_mask: Optional[torch.Tensor],
-    dropout: float = 0.0,
-    scaling: Optional[float] = None,
-    is_causal: Optional[bool] = None,
-    **kwargs,
-) -> Tuple[torch.Tensor, None]:
-    # if kwargs.get("output_attentions", False) or kwargs.get("head_mask", None) is not None:
-    #     logger.warning_once(
-    #         "`sdpa` attention does not support `output_attentions=True` or `head_mask`."
-    #         " Please set your attention to `eager` if you want any of these features."
-    #     )
 
-    # if hasattr(module, "num_key_value_groups"):
-    #     key = repeat_kv_original(key, module.num_key_value_groups)
-    #     value = repeat_kv_original(value, module.num_key_value_groups)
-
-    # if attention_mask is not None and attention_mask.ndim == 4:
-    #     attention_mask = attention_mask[:, :, :, : key.shape[-2]]
-
-    # SDPA with memory-efficient backend is bugged with non-contiguous inputs and custom attn_mask for some torch versions
-    # Reference: https://github.com/pytorch/pytorch/issues/112577.
-    # query = query.contiguous()
-    # key = key.contiguous()
-    # value = value.contiguous()
-
-    # We dispatch to SDPA's Flash Attention or Efficient kernels via this `is_causal` if statement instead of an inline conditional assignment
-    # in SDPA to support both torch.compile's dynamic shapes and full graph options. An inline conditional prevents dynamic shapes from compiling.
-    # Note that it is important to check first for the shape, otherwise compile will fail with `argument 'is_causal' must be bool, not SymBool`
-    # if is_causal is None:
-    #     # The last condition is for encoder (decoder) models which specify this by passing their own `is_causal` flag
-    #     # This is mainly due to those models having mixed implementations for encoder, decoder, and encoder-decoder attns
-    #     is_causal = query.shape[2] > 1 and attention_mask is None and getattr(module, "is_causal", True)
-
-    # Shapes (e.g. query.shape[2]) are tensors during jit tracing, resulting in `is_causal` being a tensor.
-    # We convert it to a bool for the SDPA kernel that only accepts bools.
-    # if torch.jit.is_tracing() and isinstance(is_causal, torch.Tensor):
-    #     is_causal = is_causal.item()
-
-    attn_output = torch.nn.functional.scaled_dot_product_attention(
-        query,
-        key,
-        value,
-        attn_mask=attention_mask,
-        dropout_p=dropout,
-        scale=scaling,
-        is_causal=is_causal,
-    )
-    attn_output = attn_output.transpose(1, 2).contiguous()
-
-    return attn_output, None
 
 
 class HRWKV_7(nn.Module):
     #@torch.compile()
-    @torch.compile(mode="max-autotune-no-cudagraphs")
+    #@torch.compile(mode="max-autotune-no-cudagraphs")
     def hxa079_TimeMix(layer_id: int, H: int, N: int,
                         x_in, x_prev, v_first,k_first,state,cache_position,
                         calc_cos,calc_sin,
@@ -356,14 +367,16 @@ class HRWKV_7(nn.Module):
         r,k,v = rkv.split(rkv_split_list,dim=-1)
 
         kv_dim = k.shape[2] # B,T,kv_dim
-        kv_repeat = HN // kv_dim
+        kv_repeat = H*N // kv_dim
         kv_per_head = kv_dim // N
 
         r = r.add_(R_bias)
         k = k.add_(K_bias).view(B, T, kv_per_head, N)
         v = v.add_(V_bias).view(B, T, kv_per_head, N)
 
-        if ln_r == None:
+        #ln_r = None
+
+        if ln_r is None:
             r = r.view(B,T,H,N)
             k = k
         else:
@@ -401,12 +414,15 @@ class HRWKV_7(nn.Module):
         w = -w.exp()#.to(dtype=torch.float32).exp()
         r_,w_,k_,v_,aa_,bb_ = [i.view(B,T,H,N) for i in [r,w,k,v,aa,bb]]
         B,T,_,_ = r_.shape
-        xx, state = fused_recurrent_rwkv7(r_, w_, k_, v_, aa_, bb_, scale=1.0, initial_state=state, output_final_state=True, head_first=False)
+        if T == 1:
+            xx, state = fused_recurrent_dplr_delta_rule_decode_t1(r_,k_,v_,aa_,bb_,w_,initial_state=state,output_final_state=True)
+        else:
+            xx, state = fused_recurrent_rwkv7(r_, w_, k_, v_, aa_, bb_, scale=1.0, initial_state=state, output_final_state=True, head_first=False)
 
         
         xx = xx.view(B,T,-1) * (float(N) ** -0.5)
 
-        xx = xx.to(dtype=r.dtype) + ((r.view(B,T,H,N)*k.view(B,T,H,N)*r_k.view(H,N)).sum(dim=-1, keepdim=True) * v.view(B,T,H,N)).view(B,T,HN)
+        xx = xx.to(dtype=r.dtype) + ((r.view(B,T,H,N)*k.view(B,T,H,N)*r_k.view(H,N)).sum(dim=-1, keepdim=True) * v.view(B,T,H,N)).view(B,T,H*N)
 
         output = fpx_matmul((xx * (torch.sigmoid(xg) @ g2)), O_, O_state,ebits,mbits)
 
@@ -420,7 +436,7 @@ class HRWKV_7(nn.Module):
     @torch.compile(mode="max-autotune-no-cudagraphs")
     def hxa07A_TimeMix(layer_id: int, H: int, N: int,
                         x_in, x_prev,state,cache_position,
-                     
+                        calc_cos,calc_sin,
                         wag1,wag_split_list,
                         w0, w2, a0, a2,
                         g2,
@@ -429,7 +445,9 @@ class HRWKV_7(nn.Module):
                         O_,
                         RKV_state,
                         O_state,
-                        rmsnorm_epsilon:float,
+                        R_bias, K_bias, V_bias, O_bias,
+                        ln_r,ln_k,rmsnorm_epsilon:float,
+                        
                         ln1,ln2,
                         ebits:int, mbits:int
                         ):
@@ -446,14 +464,29 @@ class HRWKV_7(nn.Module):
         kv_dim = k.shape[2] # B,T,kv_dim
         kv_repeat = (H*N) // kv_dim
         kv_per_head = kv_dim // N
-     
+
+        r = r.add_(R_bias)
+        k = k.add_(K_bias).view(B, T, kv_per_head, N)
+        v = v.add_(V_bias).view(B, T, kv_per_head, N)
+
+        if ln_r is None:
+            r = r.view(B,T,H,N)
+            k = k
+        else:
+            r = T5RMSNorm(r.view(B,T,H,N), ln_r, variance_epsilon=rmsnorm_epsilon)
+            k = T5RMSNorm(k, ln_k, variance_epsilon=rmsnorm_epsilon)
+
+        # Rotary embedding
+        cos, sin = calc_cos.to(k.dtype), calc_sin.to(k.dtype)
+        r, k = apply_rotary_pos_emb(r, k, cos, sin,unsqueeze_dim=2)
 
         k = repeat_kv(k.view(B, T, kv_per_head, N), kv_repeat).view(B, T, -1)#.contiguous()
         v = repeat_kv(v.view(B, T, kv_per_head, N), kv_repeat).view(B, T, -1)#.contiguous()
 
         a = torch.sigmoid(xa @ a2 + a0)
         
-        kk = F.normalize(k.view(B, T, H, N), p=2.0, dim=-1).view(B, T, H*N)
+        kk = (k).view(B,T,H,-1).float()
+        kk = (kk / (torch.norm(kk, dim=-1, keepdim=True) + 1e-12)).view(B,T,-1).to(k.dtype)
         w = torch.tanh(xw) @ w2 + w0
         w = -F.softplus(-w) - 0.5
         k = k * (1.0 - w + a)
@@ -461,15 +494,12 @@ class HRWKV_7(nn.Module):
         aa = -kk
         bb = kk * a
         w = -w.exp()
-        r_,w_,k_,v_,aa_,bb_ = [i.view(B,T,H,N).to(dtype=torch.bfloat16) for i in [r,w,k,v,aa,bb]]
+        r_,w_,k_,v_,aa_,bb_ = [i.view(B,T,H,N) for i in [r,w,k,v,aa,bb]]
         B,T,_,_ = r_.shape
         xx, state = fused_recurrent_rwkv7(r_, w_, k_, v_, aa_, bb_, scale=1.0, initial_state=state, output_final_state=True, head_first=False)
         xx = xx.to(dtype=x.dtype)
         
         xx = xx.view(B,T,-1) * (float(N) ** -0.5)
-        xx = xx.to(dtype=r.dtype) + ((r.view(B,T,H,N)*k.view(B,T,H,N)*r_k.view(H,N)).sum(dim=-1, keepdim=True) * v.view(B,T,H,N)).view(B,T,(H*N))
-
-        #print(f'Layer:{layer_id} r={r.sum()} k={k.sum()} v={v.sum()} w={w.sum()} gatedxx = {gatedxx.sum()} x_in ={x_in.sum()} x = {x.sum()} x = {x}')
 
         output = fpx_matmul((xx * (torch.sigmoid(xg) @ g2)), O_, O_state,ebits,mbits)
 
@@ -480,763 +510,247 @@ class HRWKV_7(nn.Module):
     
   
 
+ 
+    @torch._dynamo.disable
+    def evict_cache_inplace(
+        past_key_value: torch.Tensor,
+        gqa_layer_id: int,
+        starts: torch.Tensor,
+        excess_tokens: torch.Tensor,
+        batches_to_evict: torch.Tensor,
+        Lmax: int,
+    ):
+        """
+        In-place eviction: 先頭から excess 分を捨て、残りを前詰め。
+        追加アロケーションなし。copy_ / zero_ / narrow のみ。
 
-    # @torch.compile
-    # def hxa079_TimeMix_x(layer_id: int, H: int, N: int,
-    #                     x_in, x_prev, v_first,k_first,state,cache_position,
-    #                     calc_cos,calc_sin,
-    #                     # w0, w1, w2, a0, a1, a2,
-    #                     # v0, v1, v2, g1, g2,
-    #                     # k0, k1, k2,
-    #                     wavgk1,wavgk_split_list,
-    #                     w0, w2, a0, a2,
-    #                     v0, v2, g2,
-    #                     k0, k2,
-    #                     r_k, 
-    #                     #R_, K_, V_,
-    #                     RKV_,rkv_split_list,
-    #                     O_,
-    #                     #R_state,K_state,V_state,
-    #                     RKV_state,
-    #                     O_state,
-    #                     R_bias, K_bias, V_bias, O_bias,
-    #                     ln_r,ln_k,rmsnorm_epsilon:float,
-    #                     ln1,ln2,rope_theta,
-    #                     ebits:int, mbits:int
-    #                     ):
-        
-    #     x = T5RMSNorm(x_in,ln1,variance_epsilon=rmsnorm_epsilon)
-    #     xw,xa,xv,xg,xk = (x @ wavgk1).split(wavgk_split_list, dim=-1)
+        Args:
+        past_key_value: [GQA_L, B, 2, Lmax, KVd] （0:K, 1:V）
+        gqa_layer_id  : 対象GQAレイヤID
+        starts        : [B] 各バッチの現使用長（外から渡された読み値）
+        excess_tokens : [B] 溢れ量
+        batches_to_evict: [B] 退避が必要なバッチ
+        Lmax          : キャッシュ最大長
+        Returns:
+        past_key_value (同一参照), starts（前詰め後の新しい長さ）
+        """
+        B = starts.numel()
+        for b in range(B):
+            if not batches_to_evict[b]:
+                continue
 
-    #     B, T, C = x.shape
-    #     HN = H*N
+            # startsが壊れていても落ちないように矯正
+            current_len = int(starts[b].item())
+            if current_len < 0: current_len = 0
+            if current_len > Lmax: current_len = Lmax
+            starts[b] = current_len
 
-    #     rkv = fpx_matmul(x, RKV_,RKV_state, ebits, mbits)
-    #     r,k,v = rkv.split(rkv_split_list,dim=-1)
+            evict_count = int(excess_tokens[b].item())
+            if evict_count <= 0:
+                continue
+            if evict_count > current_len:
+                evict_count = current_len
 
-    #     kv_dim = k.shape[2] # B,T,kv_dim
-    #     kv_repeat = HN // kv_dim
-    #     kv_per_head = kv_dim // N
+            remaining_len = current_len - evict_count  # >= 0
 
-    #     r = r.add_(R_bias)
-    #     k = k.add_(K_bias).view(B, T, kv_per_head, N)
-    #     v = v.add_(V_bias).view(B, T, kv_per_head, N)
+            k_row = past_key_value[gqa_layer_id, b, 0]  # [Lmax, KVd]
+            v_row = past_key_value[gqa_layer_id, b, 1]
 
-    #     if ln_r == None:
-    #         r = r.view(B,T,H,N)
-    #         k = k
-    #     else:
-    #         r = T5RMSNorm(r.view(B,T,H,N), ln_r, variance_epsilon=rmsnorm_epsilon)
-    #         k = T5RMSNorm(k, ln_k, variance_epsilon=rmsnorm_epsilon)
+            if remaining_len > 0:
+                # [evict_count : evict_count+remaining_len] → [:remaining_len] を重なりcopy_
+                k_row.narrow(0, 0, remaining_len).copy_(k_row.narrow(0, evict_count, remaining_len))
+                v_row.narrow(0, 0, remaining_len).copy_(v_row.narrow(0, evict_count, remaining_len))
+                # テールをゼロ
+                tail = current_len - remaining_len  # == evict_count
+                if tail > 0:
+                    k_row.narrow(0, remaining_len, tail).zero_()
+                    v_row.narrow(0, remaining_len, tail).zero_()
+                starts[b] = remaining_len
+            else:
+                if current_len > 0:
+                    k_row.narrow(0, 0, current_len).zero_()
+                    v_row.narrow(0, 0, current_len).zero_()
+                starts[b] = 0
 
-    #     # Rotary embedding
-    #     cos, sin = calc_cos.to(k.dtype), calc_sin.to(k.dtype)
-    #     r, k = apply_rotary_pos_emb(r, k, cos, sin,unsqueeze_dim=2)
+        return past_key_value, starts
 
-    #     if layer_id == 0:
-    #         v_first = v
-    #         k_first = k 
-    #     else:
-    #         # gate = torch.sigmoid(xv@v2 + v0).view(B, T, kv_per_head, N)
-    #         # v = v + (v_first - v) * gate
-    #         # gate2 = torch.sigmoid(xk@k2 + k0).view(B, T, kv_per_head, N)
-    #         # k = k + (k_first - k) * gate2
-    #         v = v + (v_first - v) * torch.sigmoid(xv@v2 + v0).view(B, T, kv_per_head, N)
-    #         k = k + (k_first - k) * torch.sigmoid(xk@k2 + k0).view(B, T, kv_per_head, N)
+
+    def GQA_Attention_Flash_(
+        layer_id: int, gqa_layer_id: int, H: int, N: int,
+        x_in: torch.Tensor,
+        past_key_value: torch.Tensor,
+        cache_position: torch.Tensor,  # 関数外で更新される前提（ここでは読み取りのみ）
+        calc_cos, calc_sin,            # 未使用（必要ならRoPE適用部を追加）
+        QKV_: torch.Tensor, qkv_split_list,
+        O_: torch.Tensor,
+        QKV_state, O_state,
+        Q_bias: torch.Tensor, K_bias: torch.Tensor, V_bias: torch.Tensor, O_bias: torch.Tensor | None,
+        ln_r, ln_k, rmsnorm_epsilon: float,
+        ln1, ln2, rope_theta,
+        ebits: int, mbits: int,
+    ):
+        """
+        できる限り in-place / 再割当ゼロで動くGQA + Flash-Attention 前処理。
+        - cache_position は外部管理：関数内では clamp した「読み値」を使うだけで更新しない
+        - eviction と KV 書き込みは in-place（narrow + copy_ + zero_）
+        - K/V 連結は cat 不使用：総長で一度だけ確保し順次 copy_
+
+        期待形状:
+        x_in           : [B, T, C]
+        past_key_value : [GQA_L, B, 2, Lmax, KVd]  (KVd = kv_heads * N)
+        cache_position : [B, 1]  （各バッチの現使用長）
+        Q_bias         : [H*N],  K_bias/V_bias: [kv_heads*N], O_bias: [C] or None
+        QKV_           : [C, (H*N + kv_heads*N + kv_heads*N)]
+        O_             : [HN, C]
+        """
+        B, T, C = x_in.shape
+        device = x_in.device
+        Lmax = past_key_value.shape[3]
+
+        # ---- cache_position は読み取り専用。関数内だけで矯正して使う（外は絶対に書き換えない）
+        starts = cache_position[:, 0].clone()
+        starts.clamp_(min=0, max=Lmax)
+
+        # ---- 入力Norm（T5RMSNorm は in-place不可のため最小限の一時テンソル）
+        x = T5RMSNorm(x_in, ln1, rmsnorm_epsilon)  # 実装は外部
+
+        HN = H * N
+
+        # ---- QKV投影（実装上の一時テンソルは不可避）
+        qkv = fpx_matmul(x, QKV_, QKV_state, ebits, mbits)  # [B,T, QHN + KVd + KVd]
+        q, k, v = qkv.split(qkv_split_list, dim=-1)
+
+        # ---- Bias 加算（in-place）
+        q.add_(Q_bias)
+        k.add_(K_bias)
+        v.add_(V_bias)
+
+        # ---- 形状整備（viewは再割当なし）
+        q = q.view(B, T, H, N)  # [B,T,H,N]
+        kv_dim_flat = k.shape[-1]     # kv_heads * N
+        kv_heads = kv_dim_flat // N
+        k = k.view(B, T, kv_heads, N) # [B,T,kv_h,N]
+        v = v.view(B, T, kv_heads, N)
+
+        # ---- 任意の追加Norm（in-place不可だが最小限）
+        if ln_r is not None:
+            q = T5RMSNorm(q, ln_r, rmsnorm_epsilon)
+            k = T5RMSNorm(k, ln_k, rmsnorm_epsilon)
+
+        # ---- KV 書き込み（in-place）
+        # [B,T,kv_h,N] → [B,T, kv_h*N] へ view し、連続スライスに copy_
+        k_write = k.view(B, T, -1)
+        v_write = v.view(B, T, -1)
+
+        # 溢れ量を計算
+        new_lengths = starts + T
+        excess_tokens = torch.clamp(new_lengths - Lmax, min=0)
+        batches_to_evict = excess_tokens > 0
+
+        # Evict（in-place）
+        if bool(batches_to_evict.any()):
+            past_key_value, starts = HRWKV_7.evict_cache_inplace(
+                past_key_value, gqa_layer_id, starts, excess_tokens, batches_to_evict, Lmax
+            )
+
+        # 追記先: [starts[b] : starts[b]+T]（はみ出しは切り詰め）
+        for b in range(B):
+            s = int(starts[b].item())
+            write_T = min(T, Lmax - s)
+            if write_T > 0:
+                past_key_value[gqa_layer_id, b, 0].narrow(0, s, write_T).copy_(k_write[b, :write_T])
+                past_key_value[gqa_layer_id, b, 1].narrow(0, s, write_T).copy_(v_write[b, :write_T])
+            # write_T < T の超過分はスキップ（ここまでにエビクト済みなら通常発生しない）
+
+        # このステップでの有効長（外の cache_position はここでは更新しない）
+        valid_lengths = torch.minimum(starts + T, torch.tensor(Lmax, device=device))
+
+        # ---- Flash-Attention 入力（in-placeフレンドリ構築）
+        # Q: view のみ
+        q_flash = q.view(B * T, H, N)  # [B*T,H,N]
+
+        # K/V: cat せず総長で確保 → copy_ で詰める
+        total_k = int(valid_lengths.sum().item())
+        if total_k == 0:
+            # ガード：有効KVが無い（理論上ほぼ無い）
+            o_flash = torch.empty_like(q_flash)
+            attn_output = o_flash
+            cu_seqlens_q = torch.arange(0, (B + 1) * T, step=T, device=device, dtype=torch.int32)
+            cu_seqlens_k = torch.zeros(B + 1, dtype=torch.int32, device=device)
+            max_seqlen_q = T
+            max_seqlen_k = 0
+        else:
+            k_flash = torch.empty((total_k, kv_heads, N), dtype=k.dtype, device=device)
+            v_flash = torch.empty((total_k, kv_heads, N), dtype=v.dtype, device=device)
+
+            # cu_seqlens（Q は等長なので arange で一発）
+            cu_seqlens_q = torch.arange(0, (B + 1) * T, step=T, device=device, dtype=torch.int32)
+            cu_seqlens_k = torch.empty(B + 1, dtype=torch.int32, device=device)
+            cu_seqlens_k[0] = 0
+
+            # 各バッチの有効KVを順次 copy_
+            offset = 0
+            max_seqlen_k = 0
+            for b in range(B):
+                vlen = int(valid_lengths[b].item())
+                if vlen > 0:
+                    # [vlen, KVd] -> [vlen, kv_h, N] に view して copy_
+                    srcK = past_key_value[gqa_layer_id, b, 0].narrow(0, 0, vlen).view(vlen, kv_heads, N)
+                    srcV = past_key_value[gqa_layer_id, b, 1].narrow(0, 0, vlen).view(vlen, kv_heads, N)
+                    k_flash.narrow(0, offset, vlen).copy_(srcK)
+                    v_flash.narrow(0, offset, vlen).copy_(srcV)
+                    offset += vlen
+                    if vlen > max_seqlen_k:
+                        max_seqlen_k = vlen
+                cu_seqlens_k[b + 1] = cu_seqlens_k[b] + vlen
+
+            # 出力ワーク領域（最小）
+            o_flash = torch.empty_like(q_flash)
+            sm_scale = 1.0 / (N ** 0.5)
+
+            # Triton Flash-Attention 呼び出し（実装は外部）
+            attn_output, _ = triton_attention(
+                q_flash,
+                k_flash,
+                v_flash,
+                o_flash,
+                cu_seqlens_q,
+                cu_seqlens_k,
+                T,                   # max_seqlen_q
+                int(max_seqlen_k),   # max_seqlen_k
+                True,                # causal
+                sm_scale,
+                None,                # bias
+            )
+
+        # ---- 出力投影
+        attn_output = attn_output.view(B, T, HN)
+        out = fpx_matmul(attn_output, O_, O_state, ebits, mbits)
+        if O_bias is not None:
+            out.add_(O_bias)
+
+        # 残差
+        x_out = x_in + out
+
+        # 後段Norm（返り値は従来互換）
+        y = T5RMSNorm(x_out, ln2, rmsnorm_epsilon)
+        return y, x_out, past_key_value
+
+
+
+
+
+
+
 
  
-
-    #     k = repeat_kv(k, kv_repeat).view(B, T, -1)
-    #     v = repeat_kv(v, kv_repeat).view(B, T, -1)
-
-  
-    #     a = torch.sigmoid(xa @ a2 + a0)
-        
-    #     kk = F.normalize(k.view(B, T, H, N), p=2.0, dim=-1).view(B, T, H*N)
-    #     w = torch.tanh(xw) @ w2 + w0
-    #     w = -F.softplus(-w) - 0.5
-    #     k = k * (1.0 - w + a)
-
-    #     aa = -kk
-    #     bb = kk * a
-
-    #     w = -w.to(dtype=torch.float32).exp()
-    #     r_,w_,k_,v_,aa_,bb_ = [i.view(B,T,H,N) for i in [r,w,k,v,aa,bb]]
-    #     B,T,_,_ = r_.shape
-    #     xx, state = fused_recurrent_rwkv7(r_, w_, k_, v_, aa_, bb_, scale=1.0, initial_state=state, output_final_state=True, head_first=False)
-
-        
-    #     xx = xx.view(B,T,-1) * (float(N) ** -0.5)
-
-    #     xx = xx.to(dtype=r.dtype) + ((r.view(B,T,H,N)*k.view(B,T,H,N)*r_k.view(H,N)).sum(dim=-1, keepdim=True) * v.view(B,T,H,N)).view(B,T,HN)
-
-    #     output = fpx_matmul((xx * (torch.sigmoid(xg) @ g2)), O_, O_state,ebits,mbits)
-
-    #     x_in = x_in + output
-    #     output = T5RMSNorm(x_in,ln2,variance_epsilon=rmsnorm_epsilon)
-
-    #     return  output, x[:,-1], state, v_first, k_first, x_in
-
-
-    @torch.compile
-    def GQA_Attention_Nested_(layer_id: int, gqa_layer_id: int, H: int, N: int,
-                        x_in, past_key_value, cache_position,
-                        calc_cos, calc_sin,
-                        #Q_, K_, V_,
-                        QKV_,qkv_split_list,
-                        O_,
-                        #Q_state, K_state, V_state, 
-                        QKV_state,
-                        O_state,
-                        Q_bias, K_bias, V_bias, O_bias,
-                        ln_r, ln_k, rmsnorm_epsilon: float,
-                        ln1, ln2, rope_theta,
-                        ebits: int, mbits: int):
-
-        B, T, C = x_in.size()
-        x = T5RMSNorm(x_in, ln1, rmsnorm_epsilon)
-
-        HN = H * N
-
-
-        qkv = fpx_matmul(x, QKV_,QKV_state, ebits, mbits)
-        q,k,v = qkv.split(qkv_split_list,dim=-1)
-
-        q = q.add_(Q_bias).view(B, T, H, N)
-        k = k.add_(K_bias)
-        v = v.add_(V_bias)
-
-        kv_dim = k.shape[2]  # B,T,kv_dim
-        kv_per_head = kv_dim // N
-        kv_repeat = HN // kv_dim
-
-        k = k.view(B, T, kv_per_head, N)
-        v = v.view(B, T, kv_per_head, N)
-
-        if ln_r is not None:
-            q = T5RMSNorm(q, ln_r, rmsnorm_epsilon)
-            k = T5RMSNorm(k, ln_k, rmsnorm_epsilon)
-
-
-        cache_shape = past_key_value.shape
-        
-        k_write = k.view(B, T, -1)
-        v_write = v.view(B, T, -1)
-        starts = cache_position[:, 0]
-        
-        #if is_new_layout:
-        if B == 1 or (starts == starts[0]).all():
-            start = starts[0].int()
-            end = start + T
-            past_key_value[gqa_layer_id, :, 0, start:end] = k_write
-            past_key_value[gqa_layer_id, :, 1, start:end] = v_write
-        else:
-            batch_idx = torch.arange(B, device=k.device)[:, None]
-            seq_idx = starts[:, None] + torch.arange(T, device=k.device)
-            past_key_value[gqa_layer_id, batch_idx, 0, seq_idx] = k_write
-            past_key_value[gqa_layer_id, batch_idx, 1, seq_idx] = v_write
-  
-        kv_heads = kv_dim // N
-        
-        # Get valid lengths for each batch item
-        valid_lengths = cache_position[:, 0] + T  # Current position + new tokens
-        
-        # Create lists for K and V tensors per batch item
-        k_list = []
-        v_list = []
-        q_list = []
-        
-        for b in range(B):
-            valid_len = valid_lengths[b].int()
-            
-            #if is_new_layout:
-            k_valid = past_key_value[gqa_layer_id, b, 0, :valid_len]
-            v_valid = past_key_value[gqa_layer_id, b, 1, :valid_len]
-            # else:
-            #     k_valid = past_key_value[gqa_layer_id, b, :valid_len, 0]
-            #     v_valid = past_key_value[gqa_layer_id, b, :valid_len, 1]
-            
-            # Reshape to (seq_len, kv_heads, N)
-            k_valid = k_valid.view(valid_len, kv_heads, N)
-            v_valid = v_valid.view(valid_len, kv_heads, N)
-            
-            # Repeat KV if needed (GQA)
-            if kv_repeat > 1:
-                k_valid = k_valid.repeat_interleave(kv_repeat, dim=1)  # (seq_len, H, N)
-                v_valid = v_valid.repeat_interleave(kv_repeat, dim=1)
-            
-            # Transpose to (kv_heads, seq_len, N) for SDPA
-            k_valid = k_valid.transpose(0, 1)  # (H, seq_len, N)
-            v_valid = v_valid.transpose(0, 1)
-            
-            k_list.append(k_valid)
-            v_list.append(v_valid)
-            
-            # Also prepare query for this batch item
-            q_b = q[b].transpose(0, 1)  # (H, T, N)
-            q_list.append(q_b)
-
-        # Create Nested Tensors
-        try:
-            # Try using nested tensors if available
-            q_nested = torch.nested.nested_tensor(q_list, dtype=q.dtype, device=q.device)
-            k_nested = torch.nested.nested_tensor(k_list, dtype=k.dtype, device=k.device) 
-            v_nested = torch.nested.nested_tensor(v_list, dtype=v.dtype, device=v.device)
-            
-            # Use SDPA with nested tensors (no mask needed, causal=True)
-            #with sdpa_kernel(SDPBackend.FLASH_ATTENTION):
-            attn_output_nested = F.scaled_dot_product_attention(
-                    q_nested, k_nested, v_nested, 
-                    attn_mask=None, 
-                    is_causal=True
-                )
-            
-            # Convert back to regular tensor
-            attn_output_list = attn_output_nested.unbind()
-            attn_output = torch.stack([
-                out.transpose(0, 1) for out in attn_output_list  # (T, H, N)
-            ], dim=0)  # (B, T, H, N)
-            
-        except (AttributeError, RuntimeError):
-            #print('fallback :(')
-            # Fallback: Use regular tensors with manual padding
-            # This handles cases where nested tensors aren't fully supported
-            max_len = max(valid_lengths).int()
-            
-            # Pad all tensors to max length
-            k_padded = torch.zeros(B, kv_heads * kv_repeat, max_len, N, 
-                                dtype=k.dtype, device=k.device)
-            v_padded = torch.zeros(B, kv_heads * kv_repeat, max_len, N, 
-                                dtype=v.dtype, device=v.device)
-            
-            for b in range(B):
-                valid_len = valid_lengths[b].int()
-                k_padded[b, :, :valid_len] = k_list[b]
-                v_padded[b, :, :valid_len] = v_list[b]
-            
-            # Create causal mask for padded version
-            causal_mask = torch.triu(
-                torch.full((T, max_len), float('-inf'), dtype=q.dtype, device=q.device),
-                diagonal=1
-            )
-            
-            # Add padding mask
-            for b in range(B):
-                valid_len = valid_lengths[b].int()
-                if valid_len < max_len:
-                    causal_mask[:, valid_len:] = float('-inf')
-            
-            attn_output = F.scaled_dot_product_attention(
-                q.transpose(1, 2), k_padded, v_padded,
-                attn_mask=causal_mask,
-                is_causal=False  # We're handling causality with explicit mask
-            )
-            attn_output = attn_output.transpose(1, 2)
-
-        # Reshape and project output
-        attn_output = attn_output.contiguous().view(B, T, HN)
-        out = fpx_matmul(attn_output, O_, O_state, ebits, mbits)
-        x_out = x_in + out
-
-        return T5RMSNorm(x_out, ln2, rmsnorm_epsilon), x_out, past_key_value
-
-    
-
-    @torch.compile()
-    def GQA_Attention_Nested(layer_id: int, gqa_layer_id: int, H: int, N: int,
-                        x_in, past_key_value, cache_position,
-                        calc_cos, calc_sin,
-                        QKV_, qkv_split_list,
-                        O_,
-                        QKV_state,
-                        O_state,
-                        Q_bias, K_bias, V_bias, O_bias,
-                        ln_r, ln_k, rmsnorm_epsilon: float,
-                        ln1, ln2, rope_theta,
-                        ebits: int, mbits: int):
-    
-        B, T, C = x_in.size()
-        x = T5RMSNorm(x_in, ln1, rmsnorm_epsilon)
-        
-        HN = H * N
-        
-        # QKV projection
-        qkv = fpx_matmul(x, QKV_, QKV_state, ebits, mbits)
-        q, k, v = qkv.split(qkv_split_list, dim=-1)
-        
-        # Add bias and reshape
-        q = q.add_(Q_bias).view(B, T, H, N)
-        k = k.add_(K_bias)
-        v = v.add_(V_bias)
-        
-        # KV dimensions for GQA
-        kv_dim = k.shape[2]
-        kv_heads = kv_dim // N
-        kv_repeat = HN // kv_dim
-        
-        k = k.view(B, T, kv_heads, N)
-        v = v.view(B, T, kv_heads, N)
-        
-        # Optional RMSNorm
-        if ln_r is not None:
-            q = T5RMSNorm(q, ln_r, rmsnorm_epsilon)
-            k = T5RMSNorm(k, ln_k, rmsnorm_epsilon)
-        
-        # Write to KV cache
-        k_write = k.view(B, T, -1)
-        v_write = v.view(B, T, -1)
-        starts = cache_position[:, 0]
-        
-        # Simple batched write to cache
-        batch_idx = torch.arange(B, device=k.device)[:, None]
-        seq_idx = starts[:, None] + torch.arange(T, device=k.device)
-        past_key_value[gqa_layer_id, batch_idx, 0, seq_idx] = k_write
-        past_key_value[gqa_layer_id, batch_idx, 1, seq_idx] = v_write
-        
-        # Get valid lengths for each batch
-        valid_lengths = cache_position[:, 0] + T
-        
-        # Create lists for building nested tensors
-        q_list = []
-        k_list = []
-        v_list = []
-        
-        # Process each batch item
-        for b in range(B):
-            valid_len = valid_lengths[b].int()
-            
-            # Extract valid K and V from cache
-            k_valid = past_key_value[gqa_layer_id, b, 0, :valid_len]
-            v_valid = past_key_value[gqa_layer_id, b, 1, :valid_len]
-            
-            # Reshape to (seq_len, kv_heads, N)
-            k_valid = k_valid.view(valid_len, kv_heads, N)
-            v_valid = v_valid.view(valid_len, kv_heads, N)
-            
-            # Repeat KV if needed (GQA)
-            if kv_repeat > 1:
-                k_valid = k_valid.repeat_interleave(kv_repeat, dim=1)  # (seq_len, H, N)
-                v_valid = v_valid.repeat_interleave(kv_repeat, dim=1)
-            
-            # Transpose to (H, seq_len, N) for SDPA
-            k_valid = k_valid.transpose(0, 1)  # (H, seq_len, N)
-            v_valid = v_valid.transpose(0, 1)
-            
-            k_list.append(k_valid)
-            v_list.append(v_valid)
-            
-            # Prepare query for this batch item
-            q_b = q[b].transpose(0, 1)  # (H, T, N)
-            q_list.append(q_b)
-        
-        # Create Nested Tensors with jagged layout
-        q_nested = torch.nested.nested_tensor(q_list, dtype=q.dtype, device=q.device, layout=torch.jagged)
-        k_nested = torch.nested.nested_tensor(k_list, dtype=k.dtype, device=k.device, layout=torch.jagged)
-        v_nested = torch.nested.nested_tensor(v_list, dtype=v.dtype, device=v.device, layout=torch.jagged)
-        
-        # Apply scaled dot product attention
-        attn_output_nested = F.scaled_dot_product_attention(
-            q_nested, k_nested, v_nested,
-            attn_mask=None,
-            is_causal=True
-        )
-        
-        # Convert back to regular tensor
-        attn_output_list = attn_output_nested.unbind()
-        attn_output = torch.stack([
-            out.transpose(0, 1) for out in attn_output_list  # (T, H, N)
-        ], dim=0)  # (B, T, H, N)
-        
-        # Reshape and output projection
-        attn_output = attn_output.contiguous().view(B, T, HN)
-        out = fpx_matmul(attn_output, O_, O_state, ebits, mbits)
-        x_out = x_in + out
-        
-        return T5RMSNorm(x_out, ln2, rmsnorm_epsilon), x_out, past_key_value
-    #@torch.compile()
-    #@torch.compile
-    #@torch.compiler.disable
-    def triton_attention_wrapper(
-            q_flash,
-            k_flash,
-            v_flash,
-            o_flash,
-            cu_seqlens_q,
-            cu_seqlens_k,
-            max_seqlen_q,
-            max_seqlen_k,
-            causal,  # causal
-            sm_scale,
-            bias,  # bias
-
-        ):
-        return triton_attention(
-            q_flash,
-            k_flash,
-            v_flash,
-            o_flash,
-            cu_seqlens_q,
-            cu_seqlens_k,
-            max_seqlen_q,
-            max_seqlen_k,
-            causal,  # causal
-            sm_scale,
-            bias,  # bias
-        )
-
-
-    #@torch.compile#r.disable
-    #@torch.compile(mode="max-autotune-no-cudagraphs")
-    @torch.compiler.disable
-    def GQA_Attention_Flash_(layer_id: int, gqa_layer_id: int, H: int, N: int,
-                       x_in, past_key_value, cache_position,
-                       calc_cos, calc_sin,
-                       QKV_, qkv_split_list,
-                       O_,
-                       QKV_state,
-                       O_state,
-                       Q_bias, K_bias, V_bias, O_bias,
-                       ln_r, ln_k, rmsnorm_epsilon: float,
-                       ln1, ln2, rope_theta,
-                       ebits: int, mbits: int):
-        """
-        GQA Attention using Flash Attention implementation via Triton with KV cache size management.
-        
-        This function replaces the PyTorch SDPA with the custom Flash Attention kernel
-        and manages KV cache size by evicting old entries when approaching the limit.
-        The max cache size is automatically determined from the KV cache tensor dimensions.
-        """
-        
-        B, T, C = x_in.size()
-        
-        # Get max cache size from KV cache tensor dimensions
-        # past_key_value shape: [num_layers, batch_size, 2, max_seq_len, hidden_dim]
-        max_cache_size = past_key_value.shape[3]
-        
-        x = T5RMSNorm(x_in, ln1, rmsnorm_epsilon)
-        
-        HN = H * N
-        
-        # QKV projection
-        qkv = fpx_matmul(x, QKV_, QKV_state, ebits, mbits)
-        q, k, v = qkv.split(qkv_split_list, dim=-1)
-        
-        # Add bias and reshape
-        q = q.add_(Q_bias).view(B, T, H, N)
-        k = k.add_(K_bias)
-        v = v.add_(V_bias)
-        
-        # KV dimensions for GQA
-        kv_dim = k.shape[2]
-        kv_heads = kv_dim // N
-        kv_repeat = HN // kv_dim
-        
-        k = k.view(B, T, kv_heads, N)
-        v = v.view(B, T, kv_heads, N)
-        
-        # Optional RMSNorm
-        if ln_r is not None:
-            q = T5RMSNorm(q, ln_r, rmsnorm_epsilon)
-            k = T5RMSNorm(k, ln_k, rmsnorm_epsilon)
-        
-        # Write to KV cache with size management
-        k_write = k.view(B, T, -1)
-        v_write = v.view(B, T, -1)
-        starts = cache_position[:, 0]
-        
-        # Check which batches need cache eviction
-        new_lengths = starts + T
-        batches_to_evict = new_lengths > max_cache_size
-        
-        # For batches that would exceed max_cache_size, perform eviction
-        if batches_to_evict.any():
-            # Calculate how many tokens to evict for each overflowing batch
-            excess_tokens = torch.clamp(new_lengths - max_cache_size, min=0)
-            
-            for b in range(B):
-                if batches_to_evict[b]:
-                    evict_count = excess_tokens[b].item()
-                    if evict_count > 0:
-                        # Shift the cache to remove old tokens (FIFO eviction)
-                        current_len = starts[b].item()
-                        remaining_len = current_len - evict_count
-                        
-                        if remaining_len > 0:
-                            # Clone the data to avoid memory overlap issues
-                            k_data = past_key_value[gqa_layer_id, b, 0, evict_count:current_len].clone()
-                            v_data = past_key_value[gqa_layer_id, b, 1, evict_count:current_len].clone()
-                            
-                            # Clear the cache for this batch
-                            past_key_value[gqa_layer_id, b, 0, :current_len].zero_()
-                            past_key_value[gqa_layer_id, b, 1, :current_len].zero_()
-                            
-                            # Write the shifted data back
-                            past_key_value[gqa_layer_id, b, 0, :remaining_len] = k_data
-                            past_key_value[gqa_layer_id, b, 1, :remaining_len] = v_data
-                        else:
-                            # If no tokens remain, clear the entire cache for this batch
-                            past_key_value[gqa_layer_id, b, 0, :current_len].zero_()
-                            past_key_value[gqa_layer_id, b, 1, :current_len].zero_()
-                        
-                        # Update the start position for this batch
-                        starts[b] = remaining_len
-        
-        # Write new K, V to cache (after potential eviction)
-        batch_idx = torch.arange(B, device=k.device)[:, None]
-        seq_idx = starts[:, None] + torch.arange(T, device=k.device)
-        
-        # Ensure we don't exceed cache bounds
-        valid_seq_idx = torch.clamp(seq_idx, 0, past_key_value.shape[3] - 1)
-        
-        past_key_value[gqa_layer_id, batch_idx, 0, valid_seq_idx] = k_write
-        past_key_value[gqa_layer_id, batch_idx, 1, valid_seq_idx] = v_write
-        
-        # Get valid lengths for each batch (capped at max_cache_size)
-        valid_lengths = torch.clamp(starts + T, max=max_cache_size)
-        
-        # Prepare for Flash Attention
-        # For variable length sequences, we need cu_seqlens format
-        cu_seqlens_q = torch.zeros(B + 1, dtype=torch.int32, device=q.device)
-        cu_seqlens_k = torch.zeros(B + 1, dtype=torch.int32, device=q.device)
-        
-        # Build cumulative sequence lengths
-        for i in range(B):
-            cu_seqlens_q[i + 1] = cu_seqlens_q[i] + T
-            cu_seqlens_k[i + 1] = cu_seqlens_k[i] + valid_lengths[i]
-        
-        # Prepare tensors for Flash Attention
-        # Query: reshape to (total_q_tokens, H, N)
-        q_flash = q.view(B * T, H, N)
-        
-        # Key and Value: gather all valid tokens from cache
-        k_all_list = []
-        v_all_list = []
-        
-        for b in range(B):
-            valid_len = valid_lengths[b].int()
-            
-            # Extract valid K and V from cache
-            k_valid = past_key_value[gqa_layer_id, b, 0, :valid_len]
-            v_valid = past_key_value[gqa_layer_id, b, 1, :valid_len]
-            
-            # Reshape to (seq_len, kv_heads, N)
-            k_valid = k_valid.view(valid_len, kv_heads, N)
-            v_valid = v_valid.view(valid_len, kv_heads, N)
-            
-            k_all_list.append(k_valid)
-            v_all_list.append(v_valid)
-        
-        # Concatenate all K and V
-        k_flash = torch.cat(k_all_list, dim=0)  # (total_k_tokens, kv_heads, N)
-        v_flash = torch.cat(v_all_list, dim=0)  # (total_v_tokens, kv_heads, N)
-        
-        # Calculate max sequence lengths
-        max_seqlen_q = T
-        max_seqlen_k = int(valid_lengths.max().item())
-        
-        # Prepare output tensor
-        o_flash = torch.empty_like(q_flash)
-        
-        # Set up scaling
-        sm_scale = 1.0 / (N ** 0.5)
-        
-        # Call Flash Attention
-        # Note: The triton_attention function expects FP8 scale parameters
-        # For non-FP8 case, we pass None
-        fp8_scales = None
-        fp8_out_scale = None
-        
-        # Handle GQA by ensuring K/V are properly shaped
-        # If we have fewer KV heads than Q heads, Flash Attention handles this internally
-        
-        # Import the Flash Attention implementation
-        #from flash_attn_triton import triton_attention
-        
-        # Call the Flash Attention kernel
-        attn_output, _ = triton_attention(
-            q_flash,
-            k_flash,
-            v_flash,
-            o_flash,
-            cu_seqlens_q,
-            cu_seqlens_k,
-            max_seqlen_q,
-            max_seqlen_k,
-            True,  # causal
-            sm_scale,
-            None,  # bias
-            # fp8_scales,
-            # fp8_out_scale,
-        )
-        
-        # Reshape output back to (B, T, H, N)
-        #heattn_output = attn_output.view(B, T, H, N)
-        
-        # For GQA, if we had repeated KV heads, the output already accounts for this
-        # Reshape and output projection
-        attn_output = attn_output.contiguous().view(B, T, HN)
-        out = fpx_matmul(attn_output, O_, O_state, ebits, mbits)
-        x_out = x_in + out
-        
-        # Update cache_position to reflect any eviction that occurred
-        cache_position[:, 0] = starts
-        
-        return T5RMSNorm(x_out, ln2, rmsnorm_epsilon), x_out, past_key_value
-
-
-
-    # def GQA_Attention_Flash__(layer_id: int, gqa_layer_id: int, H: int, N: int,
-    #                    x_in, past_key_value, cache_position,
-    #                    calc_cos, calc_sin,
-    #                    QKV_, qkv_split_list,
-    #                    O_,
-    #                    QKV_state,
-    #                    O_state,
-    #                    Q_bias, K_bias, V_bias, O_bias,
-    #                    ln_r, ln_k, rmsnorm_epsilon: float,
-    #                    ln1, ln2, rope_theta,
-    #                    ebits: int, mbits: int):
-    #     """
-    #     GQA Attention using Flash Attention implementation via Triton.
-        
-    #     This function replaces the PyTorch SDPA with the custom Flash Attention kernel.
-    #     """
-        
-    #     B, T, C = x_in.size()
-    #     x = T5RMSNorm(x_in, ln1, rmsnorm_epsilon)
-        
-    #     HN = H * N
-        
-    #     # QKV projection
-    #     qkv = fpx_matmul(x, QKV_, QKV_state, ebits, mbits)
-    #     q, k, v = qkv.split(qkv_split_list, dim=-1)
-        
-    #     # Add bias and reshape
-    #     q = q.add_(Q_bias).view(B, T, H, N)
-    #     k = k.add_(K_bias)
-    #     v = v.add_(V_bias)
-        
-    #     # KV dimensions for GQA
-    #     kv_dim = k.shape[2]
-    #     kv_heads = kv_dim // N
-    #     kv_repeat = HN // kv_dim
-        
-    #     k = k.view(B, T, kv_heads, N)
-    #     v = v.view(B, T, kv_heads, N)
-        
-    #     # Optional RMSNorm
-    #     if ln_r is not None:
-    #         q = T5RMSNorm(q, ln_r, rmsnorm_epsilon)
-    #         k = T5RMSNorm(k, ln_k, rmsnorm_epsilon)
-        
-    #     # Write to KV cache
-    #     k_write = k.view(B, T, -1)
-    #     v_write = v.view(B, T, -1)
-    #     starts = cache_position[:, 0]
-        
-    #     # Simple batched write to cache
-    #     batch_idx = torch.arange(B, device=k.device)[:, None]
-    #     seq_idx = starts[:, None] + torch.arange(T, device=k.device)
-    #     past_key_value[gqa_layer_id, batch_idx, 0, seq_idx] = k_write
-    #     past_key_value[gqa_layer_id, batch_idx, 1, seq_idx] = v_write
-        
-    #     # Get valid lengths for each batch
-    #     valid_lengths = cache_position[:, 0] + T
-        
-    #     # Prepare for Flash Attention
-    #     # For variable length sequences, we need cu_seqlens format
-    #     cu_seqlens_q = torch.zeros(B + 1, dtype=torch.int32, device=q.device)
-    #     cu_seqlens_k = torch.zeros(B + 1, dtype=torch.int32, device=q.device)
-        
-    #     # Build cumulative sequence lengths
-    #     for i in range(B):
-    #         cu_seqlens_q[i + 1] = cu_seqlens_q[i] + T
-    #         cu_seqlens_k[i + 1] = cu_seqlens_k[i] + valid_lengths[i]
-        
-    #     # Prepare tensors for Flash Attention
-    #     # Query: reshape to (total_q_tokens, H, N)
-    #     q_flash = q.reshape(B * T, H, N)
-        
-    #     # Key and Value: gather all valid tokens from cache
-    #     k_all_list = []
-    #     v_all_list = []
-        
-    #     for b in range(B):
-    #         valid_len = valid_lengths[b].int()
-            
-    #         # Extract valid K and V from cache
-    #         k_valid = past_key_value[gqa_layer_id, b, 0, :valid_len]
-    #         v_valid = past_key_value[gqa_layer_id, b, 1, :valid_len]
-            
-    #         # Reshape to (seq_len, kv_heads, N)
-    #         k_valid = k_valid.view(valid_len, kv_heads, N)
-    #         v_valid = v_valid.view(valid_len, kv_heads, N)
-            
-    #         k_all_list.append(k_valid)
-    #         v_all_list.append(v_valid)
-        
-    #     # Concatenate all K and V
-    #     k_flash = torch.cat(k_all_list, dim=0)  # (total_k_tokens, kv_heads, N)
-    #     v_flash = torch.cat(v_all_list, dim=0)  # (total_v_tokens, kv_heads, N)
-        
-    #     # Calculate max sequence lengths
-    #     max_seqlen_q = T
-    #     max_seqlen_k = int(valid_lengths.max().item())
-        
-    #     # Prepare output tensor
-    #     o_flash = torch.empty_like(q_flash)
-        
-    #     # Set up scaling
-    #     sm_scale = 1.0 / (N ** 0.5)
-        
-    #     # Call Flash Attention
-    #     # Note: The triton_attention function expects FP8 scale parameters
-    #     # For non-FP8 case, we pass None
-    #     fp8_scales = None
-    #     fp8_out_scale = None
-        
-    #     # Handle GQA by ensuring K/V are properly shaped
-    #     # If we have fewer KV heads than Q heads, Flash Attention handles this internally
-        
-    #     # Import the Flash Attention implementation
-    #     #from flash_attn_triton import triton_attention
-        
-    #     # Call the Flash Attention kernel
-    #     attn_output, _ = triton_attention(
-    #         q_flash,
-    #     k_flash,
-    #     v_flash,
-    #     o_flash,
-    #     cu_seqlens_q,
-    #     cu_seqlens_k,
-    #     max_seqlen_q,
-    #     max_seqlen_k,
-    #     True,  # causal
-    #     sm_scale,
-    #     None,  # bias
-    #     # fp8_scales,
-    #     # fp8_out_scale,
-    #     )
-        
-    #     # Reshape output back to (B, T, H, N)
-    #     attn_output = attn_output.view(B, T, H, N)
-        
-    #     # For GQA, if we had repeated KV heads, the output already accounts for this
-    #     # Reshape and output projection
-    #     attn_output = attn_output.contiguous().view(B, T, HN)
-    #     out = fpx_matmul(attn_output, O_, O_state, ebits, mbits)
-    #     x_out = x_in + out
-        
-    #     return T5RMSNorm(x_out, ln2, rmsnorm_epsilon), x_out, past_key_value
-
     
 
 
 
 
     #from flash_attn import flash_attn_varlen_func, flash_attn_func
-    import torch
-    import torch.nn.functional as F
+    
 
 
 
@@ -1543,7 +1057,16 @@ class HRWKV_7(nn.Module):
 
             B, T, C = x.shape
 
+ 
+
+            calc_cos, calc_sin = get_batch_rope_cache(self.cos, self.sin, cache_pos, T)
+
             dummytensor = self.dummytensor
+
+            ln_r =  z.get(f'model.layers.{0}.self_attn.r_norm.weight',None)
+            rk_normmode = False
+            if ln_r is not None:
+                rk_normmode = True
 
        
 
@@ -1558,18 +1081,40 @@ class HRWKV_7(nn.Module):
                 if self.HRWKV_Block_Mode[i][0] == 0:
                     time_mix_state = last_wkv_states[self.HRWKV_Block_Mode[i][2]]
 
+                    """
+                    def hxa07A_TimeMix(layer_id: int, H: int, N: int,
+                        x_in, x_prev,state,cache_position,
+                        calc_cos,calc_sin,
+                        wag1,wag_split_list,
+                        w0, w2, a0, a2,
+                        g2,
+                        r_k, 
+                        RKV_,rkv_split_list,
+                        O_,
+                        RKV_state,
+                        O_state,
+                        R_bias, K_bias, V_bias, O_bias,
+                        ln_r,ln_k,rmsnorm_epsilon:float,
+                        
+                        ln1,ln2,
+                        ebits:int, mbits:int
+                        ):
+                    """
+
                     xx, time_mix_shift, time_mix_state, x = HRWKV_7.hxa07A_TimeMix(self.HRWKV_Block_Mode[i][2], self.rwkv_n_head, self.rwkv_head_size, x, time_mix_shift, time_mix_state,cache_pos,
+                                                                        calc_cos, calc_sin,
                                                  
                                                                         z[att+'wag_fused'],self.HRWKV_Misc[att+'wag_split_list'],
                                                                         z[att+'w0'], z[att+'w2'], z[att+'a0'], z[att+'a2'], 
                                                                         z[att+'g2'],
                                                                      
-                                                                        z[att+'r_k'],
+                                                                        None,
                                                                         z[att+'rkv_fused.weight'],self.HRWKV_Misc[att+'rkv_split_list'],
                                                                         z[att+'output.weight'],
                                                                         z[att+'rkv_fused.weight.qstate'],
                                                                         z[att+'output.weight.qstate'],
-                                                                        self.rms_norm_eps,
+                                                                        z[att+'receptance.bias'], z[att+'key.bias'], z[att+'value.bias'], dummytensor,
+                                                                        z.get(att+'r_norm.weight',None),z.get(att+'k_norm.weight',None),self.rms_norm_eps,
                                                                         z[bbb+'input_layernorm.weight'],z[bbb+'post_attention_layernorm.weight'],
                                                                         self.attn_ebits,self.attn_mbits
                                                                         )
