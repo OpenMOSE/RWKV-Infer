@@ -28,10 +28,12 @@ parser = ArgumentParser()
 parser.add_argument("--localhost", default="0.0.0.0", type=str) 
 parser.add_argument("--port", default=9000, type=int) 
 parser.add_argument("--debug", default=False, type=bool) 
-parser.add_argument("--workers", default=64, type=int)
-parser.add_argument("--mrssmax", default=4, type=int) #If workers 8, mrssmax 4, maximum batch inference = 8 * (4 + 1) = 40
+parser.add_argument("--workers", default=8, type=int)
+parser.add_argument("--mrssmax", default=1, type=int) #If workers 8, mrssmax 4, maximum batch inference = 8 * (4 + 1) = 40
 
-parser.add_argument("--max_ctxlen", default=4096, type=int)
+parser.add_argument("--max_ctxlen", default=8192, type=int)
+
+parser.add_argument("--perlayeroffloading", default=-1, type=int)
 
 parser.add_argument("--dynamic_state_cache_size", default=512, type=int)  # for 14B need 16GB of PC RAM
 parser.add_argument("--dynamic_state_cache_store", default='cpu', type=str) #if gpu need more vram for storing state 
@@ -253,7 +255,7 @@ async def loadmodel(request: Request):
         StateList = []
         DynamicStateList = []
         
-        engine1.LoadModel(model_filename,Quant,precision,adapter_model=adapter_filename,adapter_mode=adapter_mode,adapter_scale=adapter_scaling,fully_fusedrecurrent=args.fully_fusedrecurrent,template_mode=template_mode,rope_theta=rope_theta,rms_norm_eps=rms_norm_eps,max_ctxlen=args.max_ctxlen)
+        engine1.LoadModel(model_filename,Quant,precision,adapter_model=adapter_filename,adapter_mode=adapter_mode,adapter_scale=adapter_scaling,fully_fusedrecurrent=args.fully_fusedrecurrent,template_mode=template_mode,rope_theta=rope_theta,rms_norm_eps=rms_norm_eps,max_ctxlen=args.max_ctxlen,perlayeroffloading=args.perlayeroffloading)
         model_endtoken = data.get('endtoken',engine1.pipeline.default_eos_token)
         # if engine1.templatemode == 'world':
         #     model_endtoken = data.get('endtoken',DefaultEndtoken)

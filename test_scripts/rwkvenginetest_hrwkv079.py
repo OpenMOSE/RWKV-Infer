@@ -1,7 +1,7 @@
 import time
 import sys
 import os
-import gemlite
+#import gemlite
 #gemlite.reset_cache()
 #gemlite.set_autotune_setting(lambda M: M) #max-autotune example
 # 1階層上のディレクトリのパスを取得
@@ -27,7 +27,7 @@ if __name__ == '__main__':
     pipeline = PIPELINE("qwen3")
 
 
-    model = RWKV_x('/home/client/Projects/llm/RWKV-Qwen3-4B','int8',
+    model = RWKV_x('/home/client/Projects/llm/RWKV-Qwen3-15B-hxa079/','nf4',
                    adapter_model='',
                    adapter_mode='',
                    fully_fusedrecurrent=args.fully_fused,
@@ -70,8 +70,8 @@ if __name__ == '__main__':
 
         #context = context + "<reasoning>\n\n</reasoning>\n"
 
-        States = model.new_state(Target_batch,4096)#tate_empty(32, 1, 2560, 2560 // 32)
-        States2 = model.new_state(Target_batch,4096)#state_empty(32, 1, 2560, 2560 // 32)
+        States = model.new_state(Target_batch,1024)#tate_empty(32, 1, 2560, 2560 // 32)
+        States2 = model.new_state(Target_batch,1024)#state_empty(32, 1, 2560, 2560 // 32)
 
         
 

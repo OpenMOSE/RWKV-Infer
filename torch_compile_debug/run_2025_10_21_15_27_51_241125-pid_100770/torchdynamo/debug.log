@@ -1,0 +1,547 @@
+Step 1: torchdynamo start tracing RunLLM /home/client/Projects/RWKV-Infer/rwkvengine/rwkvinfer_fla.py:473
+TRACE starts_line /home/client/Projects/RWKV-Infer/rwkvengine/rwkvinfer_fla.py:473 in RunLLM (LLMWorker)
+        @torch.compile()
+TRACE RETURN_GENERATOR None [BuiltinVariable(None)]
+TRACE POP_TOP None [BuiltinVariable(None)]
+TRACE RESUME 0 []
+TRACE starts_line /home/client/Projects/RWKV-Infer/rwkvengine/rwkvinfer_fla.py:475 in RunLLM (LLMWorker.RunLLM)
+            print('Start LLM Engine')
+TRACE LOAD_GLOBAL print []
+TRACE LOAD_CONST Start LLM Engine [NullVariable, LazyVariableTracker()]
+TRACE CALL 1 [NullVariable, LazyVariableTracker(), ConstantVariable(str: 'Start LLM Engine')]
+empty checkpoint
+Step 1: torchdynamo start tracing reference_dequant_gemm /home/client/Projects/RWKV-Infer/rwkvengine/matmulhell.py:213
+TRACE starts_line /home/client/Projects/RWKV-Infer/rwkvengine/matmulhell.py:213 in reference_dequant_gemm ()
+    @torch.compile
+TRACE RESUME 0 []
+TRACE starts_line /home/client/Projects/RWKV-Infer/rwkvengine/matmulhell.py:219 in reference_dequant_gemm (reference_dequant_gemm)
+        W_fp16 = W_int8.to(torch.float16) * scale.view(-1, 1)
+TRACE LOAD_FAST W_int8 []
+TRACE LOAD_ATTR to [LazyVariableTracker()]
+wrap_to_fake L['W_int8'] (5120, 151936) StatefulSymbolicContext(dynamic_sizes=[<DimDynamic.STATIC: 2>, <DimDynamic.STATIC: 2>], dynamic_strides=[<DimDynamic.INFER_STRIDE: 4>, <DimDynamic.INFER_STRIDE: 4>], constraint_sizes=[None, None], constraint_strides=[None, None], specialize_on=[[], []], view_base_context=None, tensor_source=LocalSource(local_name='W_int8', is_input=True, dynamism=None, is_derefed_cell_contents=False), shape_env_to_source_to_symbol_cache={}) <class 'torch.Tensor'>
+create_graph_input L_W_int8_ L['W_int8'] FakeTensor(..., device='cuda:0', size=(5120, 151936), dtype=torch.int8) at debug_level 0 before=False
+TRACE LOAD_GLOBAL torch [NullVariable, GetAttrVariable(TensorVariable(), to)]
+TRACE LOAD_ATTR float16 [NullVariable, GetAttrVariable(TensorVariable(), to), LazyVariableTracker()]
+TRACE CALL 1 [NullVariable, GetAttrVariable(TensorVariable(), to), LazyVariableTracker()]
+TRACE FX call to from /home/client/Projects/RWKV-Infer/rwkvengine/matmulhell.py:219 in reference_dequant_gemm (reference_dequant_gemm)
+    W_fp16 = W_int8.to(torch.float16) * scale.view(-1, 1)
+             ~~~~~~~~~^^^^^^^^^^^^^^^
+TRACE LOAD_FAST scale [TensorVariable()]
+TRACE LOAD_ATTR view [TensorVariable(), LazyVariableTracker()]
+wrap_to_fake L['scale'] (5120,) StatefulSymbolicContext(dynamic_sizes=[<DimDynamic.STATIC: 2>], dynamic_strides=[<DimDynamic.INFER_STRIDE: 4>], constraint_sizes=[None], constraint_strides=[None], specialize_on=[[]], view_base_context=None, tensor_source=LocalSource(local_name='scale', is_input=True, dynamism=None, is_derefed_cell_contents=False), shape_env_to_source_to_symbol_cache={}) <class 'torch.Tensor'>
+create_graph_input L_scale_ L['scale'] FakeTensor(..., device='cuda:0', size=(5120,), dtype=torch.float16) at debug_level 0 before=False
+TRACE LOAD_CONST -1 [TensorVariable(), NullVariable, GetAttrVariable(TensorVariable(), view)]
+TRACE LOAD_CONST 1 [TensorVariable(), NullVariable, GetAttrVariable(TensorVariable(), view), ConstantVariable(int: -1)]
+TRACE CALL 2 [TensorVariable(), NullVariable, GetAttrVariable(TensorVariable(), view), ConstantVariable(int: -1), ConstantVariable(int: 1)]
+TRACE FX call view from /home/client/Projects/RWKV-Infer/rwkvengine/matmulhell.py:219 in reference_dequant_gemm (reference_dequant_gemm)
+    W_fp16 = W_int8.to(torch.float16) * scale.view(-1, 1)
+                                        ~~~~~~~~~~^^^^^^^
+TRACE BINARY_OP 5 [TensorVariable(), TensorVariable()]
+TRACE FX call mul from /home/client/Projects/RWKV-Infer/rwkvengine/matmulhell.py:219 in reference_dequant_gemm (reference_dequant_gemm)
+    W_fp16 = W_int8.to(torch.float16) * scale.view(-1, 1)
+             ~~~~~~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~
+TRACE STORE_FAST W_fp16 [TensorVariable()]
+TRACE starts_line /home/client/Projects/RWKV-Infer/rwkvengine/matmulhell.py:220 in reference_dequant_gemm (reference_dequant_gemm)
+        return torch.matmul(A, W_fp16)
+TRACE LOAD_GLOBAL torch []
+TRACE LOAD_ATTR matmul [NullVariable, LazyVariableTracker()]
+TRACE LOAD_FAST A [NullVariable, LazyVariableTracker()]
+TRACE LOAD_FAST W_fp16 [NullVariable, LazyVariableTracker(), LazyVariableTracker()]
+TRACE CALL 2 [NullVariable, LazyVariableTracker(), LazyVariableTracker(), TensorVariable()]
+wrap_to_fake L['A'] (1, 512, 5120) StatefulSymbolicContext(dynamic_sizes=[<DimDynamic.STATIC: 2>, <DimDynamic.STATIC: 2>, <DimDynamic.STATIC: 2>], dynamic_strides=[<DimDynamic.INFER_STRIDE: 4>, <DimDynamic.INFER_STRIDE: 4>, <DimDynamic.INFER_STRIDE: 4>], constraint_sizes=[None, None, None], constraint_strides=[None, None, None], specialize_on=[[], [], []], view_base_context=None, tensor_source=LocalSource(local_name='A', is_input=True, dynamism=None, is_derefed_cell_contents=False), shape_env_to_source_to_symbol_cache={}) <class 'torch.Tensor'>
+create_graph_input L_A_ L['A'] FakeTensor(..., device='cuda:0', size=(1, 512, 5120), dtype=torch.float16) at debug_level 0 before=False
+TRACE FX call matmul from /home/client/Projects/RWKV-Infer/rwkvengine/matmulhell.py:220 in reference_dequant_gemm (reference_dequant_gemm)
+    return torch.matmul(A, W_fp16)
+           ~~~~~~~~~~~~^^^^^^^^^^^
+TRACE RETURN_VALUE None [TensorVariable()]
+Step 1: torchdynamo done tracing reference_dequant_gemm (RETURN_VALUE)
+RETURN_VALUE triggered compile
+COMPILING GRAPH due to GraphCompileReason(reason='return_value', user_stack=[<FrameSummary file /home/client/Projects/RWKV-Infer/rwkvengine/matmulhell.py, line 220 in reference_dequant_gemm>], graph_break=False)
+TRACED GRAPH
+ ===== __compiled_fn_2_6b0ac52e_9e98_457c_8f2d_225b58084211 =====
+ /home/client/miniconda3/envs/RWKV-Infer/lib/python3.12/site-packages/torch/fx/_lazy_graph_module.py class GraphModule(torch.nn.Module):
+    def forward(self, L_W_int8_: "[31mi8[0m[34m[5120, 151936][0m[2m[34m[1, 5120][0m[2m[32mcuda:0[0m", L_scale_: "[31mf16[0m[34m[5120][0m[2m[34m[1][0m[2m[32mcuda:0[0m", L_A_: "[31mf16[0m[34m[1, 512, 5120][0m[2m[34m[2621440, 5120, 1][0m[2m[32mcuda:0[0m"):
+        l_w_int8_ = L_W_int8_
+        l_scale_ = L_scale_
+        l_a_ = L_A_
+        
+         [2m# File: /home/client/Projects/RWKV-Infer/rwkvengine/matmulhell.py:219 in reference_dequant_gemm, code: W_fp16 = W_int8.to(torch.float16) * scale.view(-1, 1)[0m
+        to: "[31mf16[0m[34m[5120, 151936][0m[2m[34m[1, 5120][0m[2m[32mcuda:0[0m" = l_w_int8_.to([34mtorch.float16[0m);  [2ml_w_int8_ = None[0m
+        view: "[31mf16[0m[34m[5120, 1][0m[2m[34m[1, 1][0m[2m[32mcuda:0[0m" = l_scale_.view([34m-1[0m, [34m1[0m);  [2ml_scale_ = None[0m
+        W_fp16: "[31mf16[0m[34m[5120, 151936][0m[2m[34m[1, 5120][0m[2m[32mcuda:0[0m" = to * view;  [2mto = view = None[0m
+        
+         [2m# File: /home/client/Projects/RWKV-Infer/rwkvengine/matmulhell.py:220 in reference_dequant_gemm, code: return torch.matmul(A, W_fp16)[0m
+        matmul: "[31mf16[0m[34m[1, 512, 151936][0m[2m[34m[77791232, 151936, 1][0m[2m[32mcuda:0[0m" = torch.matmul(l_a_, W_fp16);  [2ml_a_ = W_fp16 = None[0m
+        return (matmul,)
+        
+
+Step 2: calling compiler function inductor
+Step 2: done compiler function inductor
+Step 1: torchdynamo start tracing reference_dequant_gemm /home/client/Projects/RWKV-Infer/rwkvengine/matmulhell.py:213
+TRACE starts_line /home/client/Projects/RWKV-Infer/rwkvengine/matmulhell.py:213 in reference_dequant_gemm ()
+    @torch.compile
+TRACE RESUME 0 []
+TRACE starts_line /home/client/Projects/RWKV-Infer/rwkvengine/matmulhell.py:219 in reference_dequant_gemm (reference_dequant_gemm)
+        W_fp16 = W_int8.to(torch.float16) * scale.view(-1, 1)
+TRACE LOAD_FAST W_int8 []
+TRACE LOAD_ATTR to [LazyVariableTracker()]
+wrap_to_fake L['W_int8'] (5120, 151936) StatefulSymbolicContext(dynamic_sizes=[<DimDynamic.STATIC: 2>, <DimDynamic.STATIC: 2>], dynamic_strides=[<DimDynamic.INFER_STRIDE: 4>, <DimDynamic.INFER_STRIDE: 4>], constraint_sizes=[None, None], constraint_strides=[None, None], specialize_on=[[], []], view_base_context=None, tensor_source=LocalSource(local_name='W_int8', is_input=True, dynamism=None, is_derefed_cell_contents=False), shape_env_to_source_to_symbol_cache={}) <class 'torch.Tensor'>
+create_graph_input L_W_int8_ L['W_int8'] FakeTensor(..., device='cuda:0', size=(5120, 151936), dtype=torch.int8) at debug_level 0 before=False
+TRACE LOAD_GLOBAL torch [NullVariable, GetAttrVariable(TensorVariable(), to)]
+TRACE LOAD_ATTR float16 [NullVariable, GetAttrVariable(TensorVariable(), to), LazyVariableTracker()]
+TRACE CALL 1 [NullVariable, GetAttrVariable(TensorVariable(), to), LazyVariableTracker()]
+TRACE FX call to from /home/client/Projects/RWKV-Infer/rwkvengine/matmulhell.py:219 in reference_dequant_gemm (reference_dequant_gemm)
+    W_fp16 = W_int8.to(torch.float16) * scale.view(-1, 1)
+             ~~~~~~~~~^^^^^^^^^^^^^^^
+TRACE LOAD_FAST scale [TensorVariable()]
+TRACE LOAD_ATTR view [TensorVariable(), LazyVariableTracker()]
+wrap_to_fake L['scale'] (5120,) StatefulSymbolicContext(dynamic_sizes=[<DimDynamic.STATIC: 2>], dynamic_strides=[<DimDynamic.INFER_STRIDE: 4>], constraint_sizes=[None], constraint_strides=[None], specialize_on=[[]], view_base_context=None, tensor_source=LocalSource(local_name='scale', is_input=True, dynamism=None, is_derefed_cell_contents=False), shape_env_to_source_to_symbol_cache={}) <class 'torch.Tensor'>
+create_graph_input L_scale_ L['scale'] FakeTensor(..., device='cuda:0', size=(5120,), dtype=torch.float16) at debug_level 0 before=False
+TRACE LOAD_CONST -1 [TensorVariable(), NullVariable, GetAttrVariable(TensorVariable(), view)]
+TRACE LOAD_CONST 1 [TensorVariable(), NullVariable, GetAttrVariable(TensorVariable(), view), ConstantVariable(int: -1)]
+TRACE CALL 2 [TensorVariable(), NullVariable, GetAttrVariable(TensorVariable(), view), ConstantVariable(int: -1), ConstantVariable(int: 1)]
+TRACE FX call view from /home/client/Projects/RWKV-Infer/rwkvengine/matmulhell.py:219 in reference_dequant_gemm (reference_dequant_gemm)
+    W_fp16 = W_int8.to(torch.float16) * scale.view(-1, 1)
+                                        ~~~~~~~~~~^^^^^^^
+TRACE BINARY_OP 5 [TensorVariable(), TensorVariable()]
+TRACE FX call mul from /home/client/Projects/RWKV-Infer/rwkvengine/matmulhell.py:219 in reference_dequant_gemm (reference_dequant_gemm)
+    W_fp16 = W_int8.to(torch.float16) * scale.view(-1, 1)
+             ~~~~~~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~
+TRACE STORE_FAST W_fp16 [TensorVariable()]
+TRACE starts_line /home/client/Projects/RWKV-Infer/rwkvengine/matmulhell.py:220 in reference_dequant_gemm (reference_dequant_gemm)
+        return torch.matmul(A, W_fp16)
+TRACE LOAD_GLOBAL torch []
+TRACE LOAD_ATTR matmul [NullVariable, LazyVariableTracker()]
+TRACE LOAD_FAST A [NullVariable, LazyVariableTracker()]
+TRACE LOAD_FAST W_fp16 [NullVariable, LazyVariableTracker(), LazyVariableTracker()]
+TRACE CALL 2 [NullVariable, LazyVariableTracker(), LazyVariableTracker(), TensorVariable()]
+automatic dynamic size L['A'] size(1) 128 != 512
+wrap_to_fake L['A'] (1, 128, 5120) StatefulSymbolicContext(dynamic_sizes=[<DimDynamic.STATIC: 2>, <DimDynamic.DYNAMIC: 0>, <DimDynamic.STATIC: 2>], dynamic_strides=[<DimDynamic.INFER_STRIDE: 4>, <DimDynamic.INFER_STRIDE: 4>, <DimDynamic.INFER_STRIDE: 4>], constraint_sizes=[None, RelaxedUnspecConstraint(warn_only=True), None], constraint_strides=[None, None, None], specialize_on=[[], [], []], view_base_context=None, tensor_source=LocalSource(local_name='A', is_input=True, dynamism=None, is_derefed_cell_contents=False), shape_env_to_source_to_symbol_cache={}) <class 'torch.Tensor'>
+create_graph_input L_A_ L['A'] FakeTensor(..., device='cuda:0', size=(1, s84, 5120), dtype=torch.float16) at debug_level 0 before=False
+create_graph_input s84 L['A'].size()[1] s84 at debug_level 0 before=True
+_lift_symbols_in_symint s84 from L['A'].size()[1] at debug_level 0
+TRACE FX call matmul from /home/client/Projects/RWKV-Infer/rwkvengine/matmulhell.py:220 in reference_dequant_gemm (reference_dequant_gemm)
+    return torch.matmul(A, W_fp16)
+           ~~~~~~~~~~~~^^^^^^^^^^^
+TRACE RETURN_VALUE None [TensorVariable()]
+Step 1: torchdynamo done tracing reference_dequant_gemm (RETURN_VALUE)
+RETURN_VALUE triggered compile
+COMPILING GRAPH due to GraphCompileReason(reason='return_value', user_stack=[<FrameSummary file /home/client/Projects/RWKV-Infer/rwkvengine/matmulhell.py, line 220 in reference_dequant_gemm>], graph_break=False)
+TRACED GRAPH
+ ===== __compiled_fn_4_579a0ea5_a665_4099_9d03_644555da528b =====
+ /home/client/miniconda3/envs/RWKV-Infer/lib/python3.12/site-packages/torch/fx/_lazy_graph_module.py class GraphModule(torch.nn.Module):
+    def forward(self, L_W_int8_: "[31mi8[0m[34m[5120, 151936][0m[2m[34m[1, 5120][0m[2m[32mcuda:0[0m", L_scale_: "[31mf16[0m[34m[5120][0m[2m[34m[1][0m[2m[32mcuda:0[0m", s84: "Sym(s84)", L_A_: "[31mf16[0m[34m[1, s84, 5120][0m[2m[34m[5120*s84, 5120, 1][0m[2m[32mcuda:0[0m"):
+        l_w_int8_ = L_W_int8_
+        l_scale_ = L_scale_
+        l_a_ = L_A_
+        
+         [2m# File: /home/client/Projects/RWKV-Infer/rwkvengine/matmulhell.py:219 in reference_dequant_gemm, code: W_fp16 = W_int8.to(torch.float16) * scale.view(-1, 1)[0m
+        to: "[31mf16[0m[34m[5120, 151936][0m[2m[34m[1, 5120][0m[2m[32mcuda:0[0m" = l_w_int8_.to([34mtorch.float16[0m);  [2ml_w_int8_ = None[0m
+        view: "[31mf16[0m[34m[5120, 1][0m[2m[34m[1, 1][0m[2m[32mcuda:0[0m" = l_scale_.view([34m-1[0m, [34m1[0m);  [2ml_scale_ = None[0m
+        W_fp16: "[31mf16[0m[34m[5120, 151936][0m[2m[34m[1, 5120][0m[2m[32mcuda:0[0m" = to * view;  [2mto = view = None[0m
+        
+         [2m# File: /home/client/Projects/RWKV-Infer/rwkvengine/matmulhell.py:220 in reference_dequant_gemm, code: return torch.matmul(A, W_fp16)[0m
+        matmul: "[31mf16[0m[34m[1, s84, 151936][0m[2m[34m[151936*s84, 151936, 1][0m[2m[32mcuda:0[0m" = torch.matmul(l_a_, W_fp16);  [2ml_a_ = W_fp16 = None[0m
+        return (matmul,)
+        
+
+Step 2: calling compiler function inductor
+Step 2: done compiler function inductor
+Step 1: torchdynamo start tracing nucleous_sample /home/client/Projects/RWKV-Infer/rwkvengine/misc.py:501
+TRACE starts_line /home/client/Projects/RWKV-Infer/rwkvengine/misc.py:501 in nucleous_sample (PIPELINE)
+        @torch.compile
+TRACE RESUME 0 []
+TRACE starts_line /home/client/Projects/RWKV-Infer/rwkvengine/misc.py:508 in nucleous_sample (PIPELINE.nucleous_sample)
+            B, V = logits.shape
+TRACE LOAD_FAST logits []
+TRACE LOAD_ATTR shape [LazyVariableTracker()]
+wrap_to_fake L['logits'] (1, 151936) StatefulSymbolicContext(dynamic_sizes=[<DimDynamic.STATIC: 2>, <DimDynamic.STATIC: 2>], dynamic_strides=[<DimDynamic.INFER_STRIDE: 4>, <DimDynamic.INFER_STRIDE: 4>], constraint_sizes=[None, None], constraint_strides=[None, None], specialize_on=[[], []], view_base_context=None, tensor_source=LocalSource(local_name='logits', is_input=True, dynamism=None, is_derefed_cell_contents=False), shape_env_to_source_to_symbol_cache={}) <class 'torch.Tensor'>
+create_graph_input L_logits_ L['logits'] FakeTensor(..., device='cuda:0', size=(1, 151936), dtype=torch.bfloat16) at debug_level 0 before=False
+TRACE UNPACK_SEQUENCE 2 [SizeVariable(length=2)]
+TRACE STORE_FAST B [ConstantVariable(int: 151936), ConstantVariable(int: 1)]
+TRACE STORE_FAST V [ConstantVariable(int: 151936)]
+TRACE starts_line /home/client/Projects/RWKV-Infer/rwkvengine/misc.py:509 in nucleous_sample (PIPELINE.nucleous_sample)
+            device = logits.device
+TRACE LOAD_FAST logits []
+TRACE LOAD_ATTR device [TensorVariable()]
+TRACE STORE_FAST device [ConstantVariable(device: device(type='cuda', index=0))]
+TRACE starts_line /home/client/Projects/RWKV-Infer/rwkvengine/misc.py:510 in nucleous_sample (PIPELINE.nucleous_sample)
+            dtype = logits.dtype
+TRACE LOAD_FAST logits []
+TRACE LOAD_ATTR dtype [TensorVariable()]
+TRACE STORE_FAST dtype [ConstantVariable(dtype: torch.bfloat16)]
+TRACE starts_line /home/client/Projects/RWKV-Infer/rwkvengine/misc.py:513 in nucleous_sample (PIPELINE.nucleous_sample)
+            temperature = temperature.view(-1, 1).to(device, dtype)
+TRACE LOAD_FAST temperature []
+TRACE LOAD_ATTR view [LazyVariableTracker()]
+wrap_to_fake L['temperature'] (1, 1) StatefulSymbolicContext(dynamic_sizes=[<DimDynamic.STATIC: 2>, <DimDynamic.STATIC: 2>], dynamic_strides=[<DimDynamic.INFER_STRIDE: 4>, <DimDynamic.INFER_STRIDE: 4>], constraint_sizes=[None, None], constraint_strides=[None, None], specialize_on=[[], []], view_base_context=None, tensor_source=LocalSource(local_name='temperature', is_input=True, dynamism=None, is_derefed_cell_contents=False), shape_env_to_source_to_symbol_cache={}) <class 'torch.Tensor'>
+create_graph_input L_temperature_ L['temperature'] FakeTensor(..., size=(1, 1)) at debug_level 0 before=False
+TRACE LOAD_CONST -1 [NullVariable, GetAttrVariable(TensorVariable(), view)]
+TRACE LOAD_CONST 1 [NullVariable, GetAttrVariable(TensorVariable(), view), ConstantVariable(int: -1)]
+TRACE CALL 2 [NullVariable, GetAttrVariable(TensorVariable(), view), ConstantVariable(int: -1), ConstantVariable(int: 1)]
+TRACE FX call view from /home/client/Projects/RWKV-Infer/rwkvengine/misc.py:513 in nucleous_sample (PIPELINE.nucleous_sample)
+        temperature = temperature.view(-1, 1).to(device, dtype)
+                      ~~~~~~~~~~~~~~~~^^^^^^^
+TRACE LOAD_ATTR to [TensorVariable()]
+TRACE LOAD_FAST device [NullVariable, GetAttrVariable(TensorVariable(), to)]
+TRACE LOAD_FAST dtype [NullVariable, GetAttrVariable(TensorVariable(), to), ConstantVariable(device: device(type='cuda', index=0))]
+TRACE CALL 2 [NullVariable, GetAttrVariable(TensorVariable(), to), ConstantVariable(device: device(type='cuda', index=0)), ConstantVariable(dtype: torch.bfloat16)]
+TRACE FX call to from /home/client/Projects/RWKV-Infer/rwkvengine/misc.py:513 in nucleous_sample (PIPELINE.nucleous_sample)
+        temperature = temperature.view(-1, 1).to(device, dtype)
+                      ~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^
+TRACE STORE_FAST temperature [TensorVariable()]
+TRACE starts_line /home/client/Projects/RWKV-Infer/rwkvengine/misc.py:515 in nucleous_sample (PIPELINE.nucleous_sample)
+            temperature.masked_fill_(temperature == 0.0, 1.0)
+TRACE LOAD_FAST temperature []
+TRACE LOAD_ATTR masked_fill_ [TensorVariable()]
+TRACE LOAD_FAST temperature [NullVariable, GetAttrVariable(TensorVariable(), masked_fill_)]
+TRACE LOAD_CONST 0.0 [NullVariable, GetAttrVariable(TensorVariable(), masked_fill_), TensorVariable()]
+TRACE COMPARE_OP == [NullVariable, GetAttrVariable(TensorVariable(), masked_fill_), TensorVariable(), ConstantVariable(float: 0.0)]
+TRACE FX call eq from /home/client/Projects/RWKV-Infer/rwkvengine/misc.py:515 in nucleous_sample (PIPELINE.nucleous_sample)
+        temperature.masked_fill_(temperature == 0.0, 1.0)
+                                 ^^^^^^^^^^^^^^^^^^
+TRACE LOAD_CONST 1.0 [NullVariable, GetAttrVariable(TensorVariable(), masked_fill_), TensorVariable()]
+TRACE CALL 2 [NullVariable, GetAttrVariable(TensorVariable(), masked_fill_), TensorVariable(), ConstantVariable(float: 1.0)]
+TRACE FX call masked_fill_ from /home/client/Projects/RWKV-Infer/rwkvengine/misc.py:515 in nucleous_sample (PIPELINE.nucleous_sample)
+        temperature.masked_fill_(temperature == 0.0, 1.0)
+        ~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^
+TRACE POP_TOP None [TensorVariable()]
+TRACE starts_line /home/client/Projects/RWKV-Infer/rwkvengine/misc.py:517 in nucleous_sample (PIPELINE.nucleous_sample)
+            p = top_p.view(-1, 1).to(device, dtype)
+TRACE LOAD_FAST top_p []
+TRACE LOAD_ATTR view [LazyVariableTracker()]
+wrap_to_fake L['top_p'] (1, 1) StatefulSymbolicContext(dynamic_sizes=[<DimDynamic.STATIC: 2>, <DimDynamic.STATIC: 2>], dynamic_strides=[<DimDynamic.INFER_STRIDE: 4>, <DimDynamic.INFER_STRIDE: 4>], constraint_sizes=[None, None], constraint_strides=[None, None], specialize_on=[[], []], view_base_context=None, tensor_source=LocalSource(local_name='top_p', is_input=True, dynamism=None, is_derefed_cell_contents=False), shape_env_to_source_to_symbol_cache={}) <class 'torch.Tensor'>
+create_graph_input L_top_p_ L['top_p'] FakeTensor(..., size=(1, 1)) at debug_level 0 before=False
+TRACE LOAD_CONST -1 [NullVariable, GetAttrVariable(TensorVariable(), view)]
+TRACE LOAD_CONST 1 [NullVariable, GetAttrVariable(TensorVariable(), view), ConstantVariable(int: -1)]
+TRACE CALL 2 [NullVariable, GetAttrVariable(TensorVariable(), view), ConstantVariable(int: -1), ConstantVariable(int: 1)]
+TRACE FX call view_1 from /home/client/Projects/RWKV-Infer/rwkvengine/misc.py:517 in nucleous_sample (PIPELINE.nucleous_sample)
+        p = top_p.view(-1, 1).to(device, dtype)
+            ~~~~~~~~~~^^^^^^^
+TRACE LOAD_ATTR to [TensorVariable()]
+TRACE LOAD_FAST device [NullVariable, GetAttrVariable(TensorVariable(), to)]
+TRACE LOAD_FAST dtype [NullVariable, GetAttrVariable(TensorVariable(), to), ConstantVariable(device: device(type='cuda', index=0))]
+TRACE CALL 2 [NullVariable, GetAttrVariable(TensorVariable(), to), ConstantVariable(device: device(type='cuda', index=0)), ConstantVariable(dtype: torch.bfloat16)]
+TRACE FX call to_1 from /home/client/Projects/RWKV-Infer/rwkvengine/misc.py:517 in nucleous_sample (PIPELINE.nucleous_sample)
+        p = top_p.view(-1, 1).to(device, dtype)
+            ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^
+TRACE STORE_FAST p [TensorVariable()]
+TRACE starts_line /home/client/Projects/RWKV-Infer/rwkvengine/misc.py:520 in nucleous_sample (PIPELINE.nucleous_sample)
+            probs = F.softmax(logits.to(torch.bfloat16), dim=-1)
+TRACE LOAD_GLOBAL F []
+TRACE LOAD_ATTR softmax [NullVariable, LazyVariableTracker()]
+TRACE LOAD_FAST logits [NullVariable, LazyVariableTracker()]
+TRACE LOAD_ATTR to [NullVariable, LazyVariableTracker(), TensorVariable()]
+TRACE LOAD_GLOBAL torch [NullVariable, LazyVariableTracker(), NullVariable, GetAttrVariable(TensorVariable(), to)]
+TRACE LOAD_ATTR bfloat16 [NullVariable, LazyVariableTracker(), NullVariable, GetAttrVariable(TensorVariable(), to), LazyVariableTracker()]
+TRACE CALL 1 [NullVariable, LazyVariableTracker(), NullVariable, GetAttrVariable(TensorVariable(), to), LazyVariableTracker()]
+TRACE FX call to_2 from /home/client/Projects/RWKV-Infer/rwkvengine/misc.py:520 in nucleous_sample (PIPELINE.nucleous_sample)
+        probs = F.softmax(logits.to(torch.bfloat16), dim=-1)
+                          ~~~~~~~~~^^^^^^^^^^^^^^^^
+TRACE LOAD_CONST -1 [NullVariable, LazyVariableTracker(), TensorVariable()]
+TRACE KW_NAMES ('dim',) [NullVariable, LazyVariableTracker(), TensorVariable(), ConstantVariable(int: -1)]
+TRACE CALL 2 [NullVariable, LazyVariableTracker(), TensorVariable(), ConstantVariable(int: -1)]
+TRACE FX call softmax from /home/client/Projects/RWKV-Infer/rwkvengine/misc.py:520 in nucleous_sample (PIPELINE.nucleous_sample)
+        probs = F.softmax(logits.to(torch.bfloat16), dim=-1)
+                ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TRACE STORE_FAST probs [TensorVariable()]
+TRACE starts_line /home/client/Projects/RWKV-Infer/rwkvengine/misc.py:521 in nucleous_sample (PIPELINE.nucleous_sample)
+            self.max_k = 1024
+TRACE LOAD_CONST 1024 []
+TRACE LOAD_FAST self [ConstantVariable(int: 1024)]
+TRACE STORE_ATTR max_k [ConstantVariable(int: 1024), LazyVariableTracker()]
+TRACE starts_line /home/client/Projects/RWKV-Infer/rwkvengine/misc.py:523 in nucleous_sample (PIPELINE.nucleous_sample)
+            k = min(self.max_k, V)
+TRACE LOAD_GLOBAL min []
+TRACE LOAD_FAST self [NullVariable, LazyVariableTracker()]
+TRACE LOAD_ATTR max_k [NullVariable, LazyVariableTracker(), UserDefinedObjectVariable(PIPELINE)]
+TRACE LOAD_FAST V [NullVariable, LazyVariableTracker(), ConstantVariable(int: 1024)]
+TRACE CALL 2 [NullVariable, LazyVariableTracker(), ConstantVariable(int: 1024), ConstantVariable(int: 151936)]
+TRACE STORE_FAST k [ConstantVariable(int: 1024)]
+TRACE starts_line /home/client/Projects/RWKV-Infer/rwkvengine/misc.py:524 in nucleous_sample (PIPELINE.nucleous_sample)
+            topk_probs, topk_indices = torch.topk(probs, k, dim=-1, largest=True, sorted=True)
+TRACE LOAD_GLOBAL torch []
+TRACE LOAD_ATTR topk [NullVariable, LazyVariableTracker()]
+TRACE LOAD_FAST probs [NullVariable, LazyVariableTracker()]
+TRACE LOAD_FAST k [NullVariable, LazyVariableTracker(), TensorVariable()]
+TRACE LOAD_CONST -1 [NullVariable, LazyVariableTracker(), TensorVariable(), ConstantVariable(int: 1024)]
+TRACE LOAD_CONST True [NullVariable, LazyVariableTracker(), TensorVariable(), ConstantVariable(int: 1024), ConstantVariable(int: -1)]
+TRACE LOAD_CONST True [NullVariable, LazyVariableTracker(), TensorVariable(), ConstantVariable(int: 1024), ConstantVariable(int: -1), ConstantVariable(bool: True)]
+TRACE KW_NAMES ('dim', 'largest', 'sorted') [NullVariable, LazyVariableTracker(), TensorVariable(), ConstantVariable(int: 1024), ConstantVariable(int: -1), ConstantVariable(bool: True), ConstantVariable(bool: True)]
+TRACE CALL 5 [NullVariable, LazyVariableTracker(), TensorVariable(), ConstantVariable(int: 1024), ConstantVariable(int: -1), ConstantVariable(bool: True), ConstantVariable(bool: True)]
+TRACE FX call topk from /home/client/Projects/RWKV-Infer/rwkvengine/misc.py:524 in nucleous_sample (PIPELINE.nucleous_sample)
+        topk_probs, topk_indices = torch.topk(probs, k, dim=-1, largest=True, sorted=True)
+                                   ~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TRACE UNPACK_SEQUENCE 2 [NamedTupleVariable(length=2)]
+TRACE STORE_FAST topk_probs [TensorVariable(), TensorVariable()]
+TRACE STORE_FAST topk_indices [TensorVariable()]
+TRACE starts_line /home/client/Projects/RWKV-Infer/rwkvengine/misc.py:527 in nucleous_sample (PIPELINE.nucleous_sample)
+            cum_probs = torch.cumsum(topk_probs, dim=-1)
+TRACE LOAD_GLOBAL torch []
+TRACE LOAD_ATTR cumsum [NullVariable, LazyVariableTracker()]
+TRACE LOAD_FAST topk_probs [NullVariable, LazyVariableTracker()]
+TRACE LOAD_CONST -1 [NullVariable, LazyVariableTracker(), TensorVariable()]
+TRACE KW_NAMES ('dim',) [NullVariable, LazyVariableTracker(), TensorVariable(), ConstantVariable(int: -1)]
+TRACE CALL 2 [NullVariable, LazyVariableTracker(), TensorVariable(), ConstantVariable(int: -1)]
+TRACE FX call cumsum from /home/client/Projects/RWKV-Infer/rwkvengine/misc.py:527 in nucleous_sample (PIPELINE.nucleous_sample)
+        cum_probs = torch.cumsum(topk_probs, dim=-1)
+                    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^
+TRACE STORE_FAST cum_probs [TensorVariable()]
+TRACE starts_line /home/client/Projects/RWKV-Infer/rwkvengine/misc.py:531 in nucleous_sample (PIPELINE.nucleous_sample)
+            mask = cum_probs > p
+TRACE LOAD_FAST cum_probs []
+TRACE LOAD_FAST p [TensorVariable()]
+TRACE COMPARE_OP > [TensorVariable(), TensorVariable()]
+TRACE FX call gt from /home/client/Projects/RWKV-Infer/rwkvengine/misc.py:531 in nucleous_sample (PIPELINE.nucleous_sample)
+        mask = cum_probs > p
+               ^^^^^^^^^^^^^
+TRACE STORE_FAST mask [TensorVariable()]
+TRACE starts_line /home/client/Projects/RWKV-Infer/rwkvengine/misc.py:533 in nucleous_sample (PIPELINE.nucleous_sample)
+            mask[..., 0] = False
+TRACE LOAD_CONST False []
+TRACE LOAD_FAST mask [ConstantVariable(bool: False)]
+TRACE LOAD_CONST (Ellipsis, 0) [ConstantVariable(bool: False), TensorVariable()]
+TRACE STORE_SUBSCR None [ConstantVariable(bool: False), TensorVariable(), TupleVariable(length=2)]
+TRACE FX call setitem from /home/client/Projects/RWKV-Infer/rwkvengine/misc.py:533 in nucleous_sample (PIPELINE.nucleous_sample)
+        mask[..., 0] = False
+        ~~~~^^^^^^^^
+TRACE starts_line /home/client/Projects/RWKV-Infer/rwkvengine/misc.py:535 in nucleous_sample (PIPELINE.nucleous_sample)
+            mask[..., 1:] = mask[..., :-1].clone()
+TRACE LOAD_FAST mask []
+TRACE LOAD_CONST Ellipsis [TensorVariable()]
+TRACE LOAD_CONST None [TensorVariable(), ConstantVariable(ellipsis: Ellipsis)]
+TRACE LOAD_CONST -1 [TensorVariable(), ConstantVariable(ellipsis: Ellipsis), ConstantVariable(NoneType: None)]
+TRACE BUILD_SLICE 2 [TensorVariable(), ConstantVariable(ellipsis: Ellipsis), ConstantVariable(NoneType: None), ConstantVariable(int: -1)]
+TRACE BUILD_TUPLE 2 [TensorVariable(), ConstantVariable(ellipsis: Ellipsis), SliceVariable()]
+TRACE BINARY_SUBSCR None [TensorVariable(), TupleVariable(length=2)]
+TRACE FX call getitem_2 from /home/client/Projects/RWKV-Infer/rwkvengine/misc.py:535 in nucleous_sample (PIPELINE.nucleous_sample)
+        mask[..., 1:] = mask[..., :-1].clone()
+                        ~~~~^^^^^^^^^^
+TRACE LOAD_ATTR clone [TensorVariable()]
+TRACE CALL 0 [NullVariable, GetAttrVariable(TensorVariable(), clone)]
+TRACE FX call clone from /home/client/Projects/RWKV-Infer/rwkvengine/misc.py:535 in nucleous_sample (PIPELINE.nucleous_sample)
+        mask[..., 1:] = mask[..., :-1].clone()
+                        ~~~~~~~~~~~~~~~~~~~~^^
+TRACE LOAD_FAST mask [TensorVariable()]
+TRACE LOAD_CONST Ellipsis [TensorVariable(), TensorVariable()]
+TRACE LOAD_CONST 1 [TensorVariable(), TensorVariable(), ConstantVariable(ellipsis: Ellipsis)]
+TRACE LOAD_CONST None [TensorVariable(), TensorVariable(), ConstantVariable(ellipsis: Ellipsis), ConstantVariable(int: 1)]
+TRACE BUILD_SLICE 2 [TensorVariable(), TensorVariable(), ConstantVariable(ellipsis: Ellipsis), ConstantVariable(int: 1), ConstantVariable(NoneType: None)]
+TRACE BUILD_TUPLE 2 [TensorVariable(), TensorVariable(), ConstantVariable(ellipsis: Ellipsis), SliceVariable()]
+TRACE STORE_SUBSCR None [TensorVariable(), TensorVariable(), TupleVariable(length=2)]
+TRACE FX call setitem_1 from /home/client/Projects/RWKV-Infer/rwkvengine/misc.py:535 in nucleous_sample (PIPELINE.nucleous_sample)
+        mask[..., 1:] = mask[..., :-1].clone()
+        ~~~~^^^^^^^^^
+TRACE starts_line /home/client/Projects/RWKV-Infer/rwkvengine/misc.py:538 in nucleous_sample (PIPELINE.nucleous_sample)
+            topk_probs.masked_fill_(mask, 0.0)
+TRACE LOAD_FAST topk_probs []
+TRACE LOAD_ATTR masked_fill_ [TensorVariable()]
+TRACE LOAD_FAST mask [NullVariable, GetAttrVariable(TensorVariable(), masked_fill_)]
+TRACE LOAD_CONST 0.0 [NullVariable, GetAttrVariable(TensorVariable(), masked_fill_), TensorVariable()]
+TRACE CALL 2 [NullVariable, GetAttrVariable(TensorVariable(), masked_fill_), TensorVariable(), ConstantVariable(float: 0.0)]
+TRACE FX call masked_fill__1 from /home/client/Projects/RWKV-Infer/rwkvengine/misc.py:538 in nucleous_sample (PIPELINE.nucleous_sample)
+        topk_probs.masked_fill_(mask, 0.0)
+        ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^
+TRACE POP_TOP None [TensorVariable()]
+TRACE starts_line /home/client/Projects/RWKV-Infer/rwkvengine/misc.py:541 in nucleous_sample (PIPELINE.nucleous_sample)
+            if not torch.all(temperature == 1.0):
+TRACE LOAD_GLOBAL torch []
+TRACE LOAD_ATTR all [NullVariable, LazyVariableTracker()]
+TRACE LOAD_FAST temperature [NullVariable, LazyVariableTracker()]
+TRACE LOAD_CONST 1.0 [NullVariable, LazyVariableTracker(), TensorVariable()]
+TRACE COMPARE_OP == [NullVariable, LazyVariableTracker(), TensorVariable(), ConstantVariable(float: 1.0)]
+TRACE FX call eq_1 from /home/client/Projects/RWKV-Infer/rwkvengine/misc.py:541 in nucleous_sample (PIPELINE.nucleous_sample)
+        if not torch.all(temperature == 1.0):
+                         ^^^^^^^^^^^^^^^^^^
+TRACE CALL 1 [NullVariable, LazyVariableTracker(), TensorVariable()]
+TRACE FX call all_1 from /home/client/Projects/RWKV-Infer/rwkvengine/misc.py:541 in nucleous_sample (PIPELINE.nucleous_sample)
+        if not torch.all(temperature == 1.0):
+               ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^
+TRACE POP_JUMP_IF_TRUE 762 [TensorVariable()]
+Graph break in user code at /home/client/Projects/RWKV-Infer/rwkvengine/misc.py:541
+Graph Break Reason: Data-dependent branching
+  Explanation: Detected data-dependent branching (e.g. `if my_tensor.sum() > 0:`). Dynamo does not support tracing dynamic control flow.
+  Hint: This graph break is fundamental - it is unlikely that Dynamo will ever be able to trace through your code. Consider finding a workaround.
+  Hint: Use `torch.cond` to express dynamic control flow.
+
+  Developer debug context: attempted to jump with TensorVariable()
+
+User code traceback:
+  File "/home/client/Projects/RWKV-Infer/rwkv_server_fla_fastapi.py", line 1182, in <module>
+    asyncio.run(main())
+  File "/home/client/miniconda3/envs/RWKV-Infer/lib/python3.12/asyncio/runners.py", line 195, in run
+    return runner.run(main)
+  File "/home/client/miniconda3/envs/RWKV-Infer/lib/python3.12/asyncio/runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+  File "/home/client/miniconda3/envs/RWKV-Infer/lib/python3.12/asyncio/base_events.py", line 678, in run_until_complete
+    self.run_forever()
+  File "/home/client/miniconda3/envs/RWKV-Infer/lib/python3.12/asyncio/base_events.py", line 645, in run_forever
+    self._run_once()
+  File "/home/client/miniconda3/envs/RWKV-Infer/lib/python3.12/asyncio/base_events.py", line 1999, in _run_once
+    handle._run()
+  File "/home/client/miniconda3/envs/RWKV-Infer/lib/python3.12/asyncio/events.py", line 88, in _run
+    self._context.run(self._callback, *self._args)
+  File "/home/client/Projects/RWKV-Infer/rwkvengine/rwkvinfer_fla.py", line 958, in RunLLM
+    otokens = self.pipeline.nucleous_sample(BatchProbs, temperature=torch.stack(temperature), top_p=torch.stack(top_p)).tolist()
+  File "/home/client/Projects/RWKV-Infer/rwkvengine/misc.py", line 541, in nucleous_sample
+    if not torch.all(temperature == 1.0):
+
+generic_jump triggered compile
+COMPILING GRAPH due to GraphCompileReason(reason='generic_jump TensorVariable()', user_stack=[<FrameSummary file /home/client/Projects/RWKV-Infer/rwkvengine/misc.py, line 541 in nucleous_sample>], graph_break=True)
+TRACED GRAPH
+ ===== __compiled_fn_6_d7c56ee3_4030_418f_bb3c_f5ecabef6bae =====
+ /home/client/miniconda3/envs/RWKV-Infer/lib/python3.12/site-packages/torch/fx/_lazy_graph_module.py class GraphModule(torch.nn.Module):
+    def forward(self, L_logits_: "[31mbf16[0m[34m[1, 151936][0m[2m[34m[151936, 1][0m[2m[32mcuda:0[0m", L_temperature_: "[31mf32[0m[34m[1, 1][0m[2m[34m[1, 1][0m[2m[32mcpu[0m", L_top_p_: "[31mf32[0m[34m[1, 1][0m[2m[34m[1, 1][0m[2m[32mcpu[0m"):
+        l_logits_ = L_logits_
+        l_temperature_ = L_temperature_
+        l_top_p_ = L_top_p_
+        
+         [2m# File: /home/client/Projects/RWKV-Infer/rwkvengine/misc.py:513 in nucleous_sample, code: temperature = temperature.view(-1, 1).to(device, dtype)[0m
+        view: "[31mf32[0m[34m[1, 1][0m[2m[34m[1, 1][0m[2m[32mcpu[0m" = l_temperature_.view([34m-1[0m, [34m1[0m);  [2ml_temperature_ = None[0m
+        temperature: "[31mbf16[0m[34m[1, 1][0m[2m[34m[1, 1][0m[2m[32mcuda:0[0m" = view.to([34mdevice(type='cuda', index=0)[0m, [34mtorch.bfloat16[0m);  [2mview = None[0m
+        
+         [2m# File: /home/client/Projects/RWKV-Infer/rwkvengine/misc.py:515 in nucleous_sample, code: temperature.masked_fill_(temperature == 0.0, 1.0)[0m
+        eq: "[31mb8[0m[34m[1, 1][0m[2m[34m[1, 1][0m[2m[32mcuda:0[0m" = temperature.__eq__([34m0.0[0m)
+        masked_fill_: "[31mbf16[0m[34m[1, 1][0m[2m[34m[1, 1][0m[2m[32mcuda:0[0m" = temperature.masked_fill_(eq, [34m1.0[0m);  [2meq = masked_fill_ = None[0m
+        
+         [2m# File: /home/client/Projects/RWKV-Infer/rwkvengine/misc.py:517 in nucleous_sample, code: p = top_p.view(-1, 1).to(device, dtype)[0m
+        view_1: "[31mf32[0m[34m[1, 1][0m[2m[34m[1, 1][0m[2m[32mcpu[0m" = l_top_p_.view([34m-1[0m, [34m1[0m);  [2ml_top_p_ = None[0m
+        p: "[31mbf16[0m[34m[1, 1][0m[2m[34m[1, 1][0m[2m[32mcuda:0[0m" = view_1.to([34mdevice(type='cuda', index=0)[0m, [34mtorch.bfloat16[0m);  [2mview_1 = None[0m
+        
+         [2m# File: /home/client/Projects/RWKV-Infer/rwkvengine/misc.py:520 in nucleous_sample, code: probs = F.softmax(logits.to(torch.bfloat16), dim=-1)[0m
+        to_2: "[31mbf16[0m[34m[1, 151936][0m[2m[34m[151936, 1][0m[2m[32mcuda:0[0m" = l_logits_.to([34mtorch.bfloat16[0m);  [2ml_logits_ = None[0m
+        probs: "[31mbf16[0m[34m[1, 151936][0m[2m[34m[151936, 1][0m[2m[32mcuda:0[0m" = torch.nn.functional.softmax(to_2, dim = [34m-1[0m);  [2mto_2 = None[0m
+        
+         [2m# File: /home/client/Projects/RWKV-Infer/rwkvengine/misc.py:524 in nucleous_sample, code: topk_probs, topk_indices = torch.topk(probs, k, dim=-1, largest=True, sorted=True)[0m
+        topk = torch.topk(probs, [34m1024[0m, dim = [34m-1[0m, largest = [34mTrue[0m, sorted = [34mTrue[0m);  [2mprobs = None[0m
+        topk_probs: "[31mbf16[0m[34m[1, 1024][0m[2m[34m[1024, 1][0m[2m[32mcuda:0[0m" = topk[[34m0[0m]
+        topk_indices: "[31mi64[0m[34m[1, 1024][0m[2m[34m[1024, 1][0m[2m[32mcuda:0[0m" = topk[[34m1[0m];  [2mtopk = None[0m
+        
+         [2m# File: /home/client/Projects/RWKV-Infer/rwkvengine/misc.py:527 in nucleous_sample, code: cum_probs = torch.cumsum(topk_probs, dim=-1)[0m
+        cum_probs: "[31mbf16[0m[34m[1, 1024][0m[2m[34m[1024, 1][0m[2m[32mcuda:0[0m" = torch.cumsum(topk_probs, dim = [34m-1[0m)
+        
+         [2m# File: /home/client/Projects/RWKV-Infer/rwkvengine/misc.py:531 in nucleous_sample, code: mask = cum_probs > p[0m
+        mask: "[31mb8[0m[34m[1, 1024][0m[2m[34m[1024, 1][0m[2m[32mcuda:0[0m" = cum_probs > p;  [2mcum_probs = p = None[0m
+        
+         [2m# File: /home/client/Projects/RWKV-Infer/rwkvengine/misc.py:533 in nucleous_sample, code: mask[..., 0] = False[0m
+        mask[([34mEllipsis[0m, [34m0[0m)] = [34mFalse[0m;  setitem = mask;  [2msetitem = None[0m
+        
+         [2m# File: /home/client/Projects/RWKV-Infer/rwkvengine/misc.py:535 in nucleous_sample, code: mask[..., 1:] = mask[..., :-1].clone()[0m
+        getitem_2: "[31mb8[0m[34m[1, 1023][0m[2m[34m[1024, 1][0m[2m[32mcuda:0[0m" = mask[([34mEllipsis[0m, slice([34mNone[0m, [34m-1[0m, [34mNone[0m))]
+        clone: "[31mb8[0m[34m[1, 1023][0m[2m[34m[1023, 1][0m[2m[32mcuda:0[0m" = getitem_2.clone();  [2mgetitem_2 = None[0m
+        mask[([34mEllipsis[0m, slice([34m1[0m, [34mNone[0m, [34mNone[0m))] = clone;  setitem_1 = mask;  [2mclone = setitem_1 = None[0m
+        
+         [2m# File: /home/client/Projects/RWKV-Infer/rwkvengine/misc.py:538 in nucleous_sample, code: topk_probs.masked_fill_(mask, 0.0)[0m
+        masked_fill__1: "[31mbf16[0m[34m[1, 1024][0m[2m[34m[1024, 1][0m[2m[32mcuda:0[0m" = topk_probs.masked_fill_(mask, [34m0.0[0m);  [2mmask = masked_fill__1 = None[0m
+        
+         [2m# File: /home/client/Projects/RWKV-Infer/rwkvengine/misc.py:541 in nucleous_sample, code: if not torch.all(temperature == 1.0):[0m
+        eq_1: "[31mb8[0m[34m[1, 1][0m[2m[34m[1, 1][0m[2m[32mcuda:0[0m" = temperature.__eq__([34m1.0[0m)
+        all_1: "[31mb8[0m[34m[][0m[2m[34m[][0m[2m[32mcuda:0[0m" = torch.all(eq_1);  [2meq_1 = None[0m
+        return (all_1, temperature, topk_probs, topk_indices)
+        
+
+Step 2: calling compiler function inductor
+Step 2: done compiler function inductor
+Step 1: torchdynamo start tracing torch_dynamo_resume_in_nucleous_sample_at_541 /home/client/Projects/RWKV-Infer/rwkvengine/misc.py:541
+TRACE starts_line /home/client/Projects/RWKV-Infer/rwkvengine/misc.py:541 in torch_dynamo_resume_in_nucleous_sample_at_541 (PIPELINE.nucleous_sample)
+            if not torch.all(temperature == 1.0):
+TRACE RESUME 0 []
+TRACE LOAD_CONST True []
+TRACE STORE_FAST __is_tracing_resume_prologue [ConstantVariable(bool: True)]
+TRACE LOAD_CONST False []
+TRACE STORE_FAST __is_tracing_resume_prologue [ConstantVariable(bool: False)]
+TRACE JUMP_FORWARD 774 []
+TRACE starts_line /home/client/Projects/RWKV-Infer/rwkvengine/misc.py:545 in torch_dynamo_resume_in_nucleous_sample_at_541 (PIPELINE.nucleous_sample)
+            topk_probs.div_(topk_probs.sum(dim=-1, keepdim=True))
+TRACE LOAD_FAST topk_probs []
+TRACE LOAD_ATTR div_ [LazyVariableTracker()]
+wrap_to_fake L['topk_probs'] (1, 1024) StatefulSymbolicContext(dynamic_sizes=[<DimDynamic.STATIC: 2>, <DimDynamic.STATIC: 2>], dynamic_strides=[<DimDynamic.INFER_STRIDE: 4>, <DimDynamic.INFER_STRIDE: 4>], constraint_sizes=[None, None], constraint_strides=[None, None], specialize_on=[[], []], view_base_context=None, tensor_source=LocalSource(local_name='topk_probs', is_input=True, dynamism=None, is_derefed_cell_contents=False), shape_env_to_source_to_symbol_cache={}) <class 'torch.Tensor'>
+create_graph_input L_topk_probs_ L['topk_probs'] FakeTensor(..., device='cuda:0', size=(1, 1024), dtype=torch.bfloat16) at debug_level 0 before=False
+TRACE LOAD_FAST topk_probs [NullVariable, GetAttrVariable(TensorVariable(), div_)]
+TRACE LOAD_ATTR sum [NullVariable, GetAttrVariable(TensorVariable(), div_), TensorVariable()]
+TRACE LOAD_CONST -1 [NullVariable, GetAttrVariable(TensorVariable(), div_), NullVariable, GetAttrVariable(TensorVariable(), sum)]
+TRACE LOAD_CONST True [NullVariable, GetAttrVariable(TensorVariable(), div_), NullVariable, GetAttrVariable(TensorVariable(), sum), ConstantVariable(int: -1)]
+TRACE KW_NAMES ('dim', 'keepdim') [NullVariable, GetAttrVariable(TensorVariable(), div_), NullVariable, GetAttrVariable(TensorVariable(), sum), ConstantVariable(int: -1), ConstantVariable(bool: True)]
+TRACE CALL 2 [NullVariable, GetAttrVariable(TensorVariable(), div_), NullVariable, GetAttrVariable(TensorVariable(), sum), ConstantVariable(int: -1), ConstantVariable(bool: True)]
+TRACE FX call sum_1 from /home/client/Projects/RWKV-Infer/rwkvengine/misc.py:545 in torch_dynamo_resume_in_nucleous_sample_at_541 (PIPELINE.nucleous_sample)
+        topk_probs.div_(topk_probs.sum(dim=-1, keepdim=True))
+                        ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^
+TRACE CALL 1 [NullVariable, GetAttrVariable(TensorVariable(), div_), TensorVariable()]
+TRACE FX call div_ from /home/client/Projects/RWKV-Infer/rwkvengine/misc.py:545 in torch_dynamo_resume_in_nucleous_sample_at_541 (PIPELINE.nucleous_sample)
+        topk_probs.div_(topk_probs.sum(dim=-1, keepdim=True))
+        ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TRACE POP_TOP None [TensorVariable()]
+TRACE starts_line /home/client/Projects/RWKV-Infer/rwkvengine/misc.py:549 in torch_dynamo_resume_in_nucleous_sample_at_541 (PIPELINE.nucleous_sample)
+            idx_in_topk = torch.multinomial(topk_probs, num_samples=1).squeeze(-1)
+TRACE LOAD_GLOBAL torch []
+TRACE LOAD_ATTR multinomial [NullVariable, LazyVariableTracker()]
+TRACE LOAD_FAST topk_probs [NullVariable, LazyVariableTracker()]
+TRACE LOAD_CONST 1 [NullVariable, LazyVariableTracker(), TensorVariable()]
+TRACE KW_NAMES ('num_samples',) [NullVariable, LazyVariableTracker(), TensorVariable(), ConstantVariable(int: 1)]
+TRACE CALL 2 [NullVariable, LazyVariableTracker(), TensorVariable(), ConstantVariable(int: 1)]
+TRACE FX call multinomial from /home/client/Projects/RWKV-Infer/rwkvengine/misc.py:549 in torch_dynamo_resume_in_nucleous_sample_at_541 (PIPELINE.nucleous_sample)
+        idx_in_topk = torch.multinomial(topk_probs, num_samples=1).squeeze(-1)
+                      ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TRACE LOAD_ATTR squeeze [TensorVariable()]
+TRACE LOAD_CONST -1 [NullVariable, GetAttrVariable(TensorVariable(), squeeze)]
+TRACE CALL 1 [NullVariable, GetAttrVariable(TensorVariable(), squeeze), ConstantVariable(int: -1)]
+TRACE FX call squeeze from /home/client/Projects/RWKV-Infer/rwkvengine/misc.py:549 in torch_dynamo_resume_in_nucleous_sample_at_541 (PIPELINE.nucleous_sample)
+        idx_in_topk = torch.multinomial(topk_probs, num_samples=1).squeeze(-1)
+                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^
+TRACE STORE_FAST idx_in_topk [TensorVariable()]
+TRACE starts_line /home/client/Projects/RWKV-Infer/rwkvengine/misc.py:550 in torch_dynamo_resume_in_nucleous_sample_at_541 (PIPELINE.nucleous_sample)
+            samples = topk_indices.gather(1, idx_in_topk.unsqueeze(-1)).squeeze(-1)
+TRACE LOAD_FAST topk_indices []
+TRACE LOAD_ATTR gather [LazyVariableTracker()]
+wrap_to_fake L['topk_indices'] (1, 1024) StatefulSymbolicContext(dynamic_sizes=[<DimDynamic.STATIC: 2>, <DimDynamic.STATIC: 2>], dynamic_strides=[<DimDynamic.INFER_STRIDE: 4>, <DimDynamic.INFER_STRIDE: 4>], constraint_sizes=[None, None], constraint_strides=[None, None], specialize_on=[[], []], view_base_context=None, tensor_source=LocalSource(local_name='topk_indices', is_input=True, dynamism=None, is_derefed_cell_contents=False), shape_env_to_source_to_symbol_cache={}) <class 'torch.Tensor'>
+create_graph_input L_topk_indices_ L['topk_indices'] FakeTensor(..., device='cuda:0', size=(1, 1024), dtype=torch.int64) at debug_level 0 before=False
+TRACE LOAD_CONST 1 [NullVariable, GetAttrVariable(TensorVariable(), gather)]
+TRACE LOAD_FAST idx_in_topk [NullVariable, GetAttrVariable(TensorVariable(), gather), ConstantVariable(int: 1)]
+TRACE LOAD_ATTR unsqueeze [NullVariable, GetAttrVariable(TensorVariable(), gather), ConstantVariable(int: 1), TensorVariable()]
+TRACE LOAD_CONST -1 [NullVariable, GetAttrVariable(TensorVariable(), gather), ConstantVariable(int: 1), NullVariable, GetAttrVariable(TensorVariable(), unsqueeze)]
+TRACE CALL 1 [NullVariable, GetAttrVariable(TensorVariable(), gather), ConstantVariable(int: 1), NullVariable, GetAttrVariable(TensorVariable(), unsqueeze), ConstantVariable(int: -1)]
+TRACE FX call unsqueeze from /home/client/Projects/RWKV-Infer/rwkvengine/misc.py:550 in torch_dynamo_resume_in_nucleous_sample_at_541 (PIPELINE.nucleous_sample)
+        samples = topk_indices.gather(1, idx_in_topk.unsqueeze(-1)).squeeze(-1)
+                                         ~~~~~~~~~~~~~~~~~~~~~^^^^
+TRACE CALL 2 [NullVariable, GetAttrVariable(TensorVariable(), gather), ConstantVariable(int: 1), TensorVariable()]
+TRACE FX call gather from /home/client/Projects/RWKV-Infer/rwkvengine/misc.py:550 in torch_dynamo_resume_in_nucleous_sample_at_541 (PIPELINE.nucleous_sample)
+        samples = topk_indices.gather(1, idx_in_topk.unsqueeze(-1)).squeeze(-1)
+                  ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TRACE LOAD_ATTR squeeze [TensorVariable()]
+TRACE LOAD_CONST -1 [NullVariable, GetAttrVariable(TensorVariable(), squeeze)]
+TRACE CALL 1 [NullVariable, GetAttrVariable(TensorVariable(), squeeze), ConstantVariable(int: -1)]
+TRACE FX call squeeze_1 from /home/client/Projects/RWKV-Infer/rwkvengine/misc.py:550 in torch_dynamo_resume_in_nucleous_sample_at_541 (PIPELINE.nucleous_sample)
+        samples = topk_indices.gather(1, idx_in_topk.unsqueeze(-1)).squeeze(-1)
+                  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^
+TRACE STORE_FAST samples [TensorVariable()]
+TRACE starts_line /home/client/Projects/RWKV-Infer/rwkvengine/misc.py:552 in torch_dynamo_resume_in_nucleous_sample_at_541 (PIPELINE.nucleous_sample)
+            return samples
+TRACE LOAD_FAST samples []
+TRACE RETURN_VALUE None [TensorVariable()]
+Step 1: torchdynamo done tracing torch_dynamo_resume_in_nucleous_sample_at_541 (RETURN_VALUE)
+RETURN_VALUE triggered compile
+COMPILING GRAPH due to GraphCompileReason(reason='return_value', user_stack=[<FrameSummary file /home/client/Projects/RWKV-Infer/rwkvengine/misc.py, line 552 in torch_dynamo_resume_in_nucleous_sample_at_541>], graph_break=False)
+TRACED GRAPH
+ ===== __compiled_fn_10_4544b220_7a26_43fa_9a10_5825cd5bbf24 =====
+ /home/client/miniconda3/envs/RWKV-Infer/lib/python3.12/site-packages/torch/fx/_lazy_graph_module.py class GraphModule(torch.nn.Module):
+    def forward(self, L_topk_probs_: "[31mbf16[0m[34m[1, 1024][0m[2m[34m[1024, 1][0m[2m[32mcuda:0[0m", L_topk_indices_: "[31mi64[0m[34m[1, 1024][0m[2m[34m[1024, 1][0m[2m[32mcuda:0[0m"):
+        l_topk_probs_ = L_topk_probs_
+        l_topk_indices_ = L_topk_indices_
+        
+         [2m# File: /home/client/Projects/RWKV-Infer/rwkvengine/misc.py:545 in torch_dynamo_resume_in_nucleous_sample_at_541, code: topk_probs.div_(topk_probs.sum(dim=-1, keepdim=True))[0m
+        sum_1: "[31mbf16[0m[34m[1, 1][0m[2m[34m[1, 1][0m[2m[32mcuda:0[0m" = l_topk_probs_.sum(dim = [34m-1[0m, keepdim = [34mTrue[0m)
+        div_: "[31mbf16[0m[34m[1, 1024][0m[2m[34m[1024, 1][0m[2m[32mcuda:0[0m" = l_topk_probs_.div_(sum_1);  [2msum_1 = div_ = None[0m
+        
+         [2m# File: /home/client/Projects/RWKV-Infer/rwkvengine/misc.py:549 in torch_dynamo_resume_in_nucleous_sample_at_541, code: idx_in_topk = torch.multinomial(topk_probs, num_samples=1).squeeze(-1)[0m
+        multinomial: "[31mi64[0m[34m[1, 1][0m[2m[34m[1, 1][0m[2m[32mcuda:0[0m" = torch.multinomial(l_topk_probs_, num_samples = [34m1[0m);  [2ml_topk_probs_ = None[0m
+        idx_in_topk: "[31mi64[0m[34m[1][0m[2m[34m[1][0m[2m[32mcuda:0[0m" = multinomial.squeeze([34m-1[0m);  [2mmultinomial = None[0m
+        
+         [2m# File: /home/client/Projects/RWKV-Infer/rwkvengine/misc.py:550 in torch_dynamo_resume_in_nucleous_sample_at_541, code: samples = topk_indices.gather(1, idx_in_topk.unsqueeze(-1)).squeeze(-1)[0m
+        unsqueeze: "[31mi64[0m[34m[1, 1][0m[2m[34m[1, 1][0m[2m[32mcuda:0[0m" = idx_in_topk.unsqueeze([34m-1[0m);  [2midx_in_topk = None[0m
+        gather: "[31mi64[0m[34m[1, 1][0m[2m[34m[1, 1][0m[2m[32mcuda:0[0m" = l_topk_indices_.gather([34m1[0m, unsqueeze);  [2ml_topk_indices_ = unsqueeze = None[0m
+        samples: "[31mi64[0m[34m[1][0m[2m[34m[1][0m[2m[32mcuda:0[0m" = gather.squeeze([34m-1[0m);  [2mgather = None[0m
+        return (samples,)
+        
+
+Step 2: calling compiler function inductor
+Step 2: done compiler function inductor

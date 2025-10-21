@@ -186,7 +186,7 @@ class LLMWorker:
     def __init__(self,max_batch_size = 32,max_ctxlen=16384):
         print('Initializing LLM Worker')
         
-        self.llm_batch_chunk = 1024 #FLA Preprocess Prompt chunks
+        self.llm_batch_chunk = 512 #FLA Preprocess Prompt chunks
         self.llm_minimum_chunk = 128
         self.llm_batch_cycle = 10 #Preprocess cycle if 4, Pre,single,single,single,Pre,....
         self.llm_work_cycle = 0
@@ -235,11 +235,11 @@ class LLMWorker:
 
         
 
-    def LoadModel(self,modelpath,quantize=False,precision='bf16',adapter_model = '',adapter_mode = '',adapter_scale=2.0, fully_fusedrecurrent = True,template_mode='',rope_theta=1000000.0,rms_norm_eps=1e-6,max_ctxlen=16384):
+    def LoadModel(self,modelpath,quantize=False,precision='bf16',adapter_model = '',adapter_mode = '',adapter_scale=2.0, fully_fusedrecurrent = True,template_mode='',rope_theta=1000000.0,rms_norm_eps=1e-6,max_ctxlen=16384,perlayeroffloading=-1):
         self.model = None
         gc.collect()
         torch.cuda.empty_cache()
-        self.model = RWKV_x(modelpath,base_precision=precision,adapter_model=adapter_model,adapter_mode=adapter_mode,adapter_scale=adapter_scale,fully_fusedrecurrent=fully_fusedrecurrent,rope_theta=rope_theta,rms_norm_eps=rms_norm_eps,max_ctxlen=max_ctxlen)
+        self.model = RWKV_x(modelpath,base_precision=precision,adapter_model=adapter_model,adapter_mode=adapter_mode,adapter_scale=adapter_scale,fully_fusedrecurrent=fully_fusedrecurrent,rope_theta=rope_theta,rms_norm_eps=rms_norm_eps,max_ctxlen=max_ctxlen,PerLayerOffloading=perlayeroffloading)
         self.pipeline = PIPELINE(template_mode)
         self.templatemode = template_mode
         self.max_ctxlen = max_ctxlen
@@ -653,6 +653,7 @@ class LLMWorker:
                                     if type(b_wkv_states[i])==list:
                                         b_wkv_states[i] = torch.stack(b_wkv_states[i],dim=0)
                                     wkv_states[NowTensorPosition] = b_wkv_states[i]
+                                    b_wkv_states[i] = None
 
                                 
 
@@ -666,12 +667,14 @@ class LLMWorker:
                                     if type(b_shift_states[i])==list:
                                         b_shift_states[i] = torch.stack(b_shift_states[i],dim=0)
                                     shift_states[NowTensorPosition] = b_shift_states[i]
+                                    b_shift_states[i] = None
 
                                 if self.model.HRWKV_Mode == 1:
                                     if b_kv_cache[i] is not None:
                                         if type(b_kv_cache[i])==list:
                                             b_kv_cache[i] = torch.stack(b_kv_cache[i],dim=0)
                                         kv_caches[NowTensorPosition] = b_kv_cache[i]
+                                        b_kv_cache[i] = None
                                         #print(kv_caches[NowTensorPosition].shape)
                                         #exit()
 
@@ -1128,17 +1131,20 @@ class LLMWorker:
                                     if type(b_wkv_states[i])==list:
                                         b_wkv_states[i] = torch.stack(b_wkv_states[i],dim=0)
                                     wkv_states[NowTensorPosition] = b_wkv_states[i]
+                                    b_wkv_states[i] = None
 
                                 if b_wkv_states_offset[i] is not None:
                                     if type(b_wkv_states_offset[i])==list:
                                         b_wkv_states_offset[i] = torch.stack(b_wkv_states_offset[i],dim=0)
                                     if offset_tensor is not None:
                                         offset_tensor[NowTensorPosition] = b_wkv_states_offset[i]
+                                        b_wkv_states_offset[i] = None
 
                                 if b_shift_states[i] is not None:
                                     if type(b_shift_states[i])==list:
                                         b_shift_states[i] = torch.stack(b_shift_states[i],dim=0)
                                     shift_states[NowTensorPosition] = b_shift_states[i]
+                                    b_shift_states[i] = None
 
                                 if self.model.HRWKV_Mode == 1:
                                     if b_kv_cache[i] is not None:
@@ -1147,6 +1153,7 @@ class LLMWorker:
                                             b_kv_cache[i] = torch.stack(b_kv_cache[i],dim=0)
                                         #print(f'kv_caches = {kv_caches.shape}')# b_kv_cache = {b_kv_cache.shape}')
                                         kv_caches[NowTensorPosition] = b_kv_cache[i]
+                                        b_kv_cache[i] = None
 
                                     if b_pos_cache[i] is not None:
                                         if type(b_pos_cache[i])==list:

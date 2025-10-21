@@ -61,7 +61,7 @@ from rwkvengine.hrwkv7 import HRWKV_7, compute_qwen3_rope_cache
 
 class RWKV_x(nn.Module):
 
-    def __init__(self,load_model: str,base_precision: str = 'int8',adapter_model:str = '', adapter_mode:str = '', adapter_scale:float=2.0,fully_fusedrecurrent:bool=True, tokenizer='',rope_theta=1000000.0,rms_norm_eps=1e-6,max_ctxlen=8192,device='cuda'):
+    def __init__(self,load_model: str,base_precision: str = 'int8',adapter_model:str = '', adapter_mode:str = '', adapter_scale:float=2.0,fully_fusedrecurrent:bool=True, tokenizer='',rope_theta=1000000.0,rms_norm_eps=1e-6,max_ctxlen=8192,device='cuda',PerLayerOffloading=-1):
 
         print('RWKV-Infer RWKVCore Initializing')
         self.max_ctxlen = max_ctxlen
@@ -374,12 +374,12 @@ class RWKV_x(nn.Module):
                         #exit()
 
                         print(f'wavgk 1 fuse')
-                        z[att + 'wavgk_fused'] = torch.cat([z[att+'w1'],
+                        z[att + 'wavgk_fused'] = (torch.cat([z[att+'w1'],
                                                                  z[att+'a1'],
                                                                  z[att+'v1'],
                                                                  z[att+'g1'],
                                                                  z[att+'k1'],
-                                                                ],dim=1)
+                                                                ],dim=1) ) #pad_weight_tensor_to_256
 
                         self.HRWKV_Misc[att + 'wavgk_split_list'] = [z[att+'w1'].shape[1],
                                                      z[att+'a1'].shape[1],
@@ -650,11 +650,89 @@ class RWKV_x(nn.Module):
             for k in keys:
                 is_in_blocks = any(block in k for block in offload_blocks)
                 #and 'emb' not in k
-                if not k.endswith('qstate')  and 'ln0' not in k and 'emb' not in k:# or is_in_blocks):  and ('mlp' not in k or is_in_blocks)
+                if not k.endswith('qstate')  and 'ln0' not in k and 'emb' not in k and 'mlp' not in k:# or is_in_blocks):  and ('mlp' not in k or is_in_blocks)
                     print(f'{k} move to device {device}')
-                    z[k] = z[k].to(device=self.device)#.contiguous()
+                    z[k] = z[k].to(device=self.device )#.contiguous()
+
+
+            for k in keys:
+                #print(k)
+                if not k.endswith('qstate'):
+                    print(f'{k} {z[k].device}')
 
             self.emboncpu = True
+
+
+            if PerLayerOffloading >= 1:
+                self.AdaptiveOffloading = True
+                self.OffloadingPerLayer = PerLayerOffloading
+            else:
+                self.AdaptiveOffloading = False
+                self.OffloadingPerLayer = 0
+
+
+
+            if self.AdaptiveOffloading:
+                print('Adaptive Offloading Enabled')
+                print(f'totallayer = {self.n_layer}')
+                self.Offload_layers = []
+                for i in range(self.n_layer):
+                    if i % self.OffloadingPerLayer == 0 and i != 0:
+                        self.Offload_layers.append(i)
+
+                print(f'Offload layers = {self.Offload_layers}')
+
+                self.copy_stream = torch.cuda.Stream(device=self.device)
+                self.prefetch_evt = [torch.cuda.Event(), torch.cuda.Event()]  # make 2slots
+
+                # 2スロットのステージングバッファ（gateup / down_proj 用）
+                self.staging = [
+                    {"gateup": None, "down": None},
+                    {"gateup": None, "down": None},
+                ]
+
+                for k in keys:
+                    if hasattr(z[k], "W_q_cpu"):
+                        if 'attn' in k:
+                            z[k].W_q = z[k].W_q_cpu.to(device=self.device)
+                            print(f'{k} W_q moved to {self.device}')
+                            z[k].W_q_cpu = None
+                        elif 'mlp' in k:
+                            Offload= False
+                            for offlayer in self.Offload_layers:
+                                if f'layers.{offlayer}.' in k:
+                                    Offload = True
+                            if Offload == False:
+                                z[k].W_q = z[k].W_q_cpu.to(device=self.device)
+                                print(f'{k} W_q moved to {self.device}')
+                                z[k].W_q_cpu = None
+                            else:
+                                print(f'{k} W_q kept on CPU')
+                                z[k].W_q_one_shot_delete = True
+
+            
+
+            else:
+                print('Adaptive Offloading Disabled')
+                for k in keys:
+                    if hasattr(z[k], "W_q_cpu"):
+                        if not k.endswith('qstate') and ('mlp' in k or 'attn' in k):
+                            z[k].W_q = z[k].W_q_cpu.to(device=self.device)
+                            print(f'{k} W_q moved to {self.device}')
+                            z[k].W_q_cpu = None
+
+            #exit()
+                        
+
+
+
+
+
+
+
+
+
+
             
             # detect model details
             vocab_size, n_embd = z["model.embed_tokens.weight"].shape
@@ -683,7 +761,7 @@ class RWKV_x(nn.Module):
                     #print(f'{key} {z[key].shape} {z[key].dtype}')
                     if ('.bone' in key or '.lora' in key) and 'expert' not in key:
                         z[key] = None
-                        print(f'{key} deleted')
+                        #print(f'{key} deleted')
 
 
 #Sliding
@@ -694,7 +772,9 @@ class RWKV_x(nn.Module):
             torch.cuda.empty_cache()
 
             if modelconfig['rwkv_architecture'] == 'hxa079':
-                self.cos, self.sin, _ = compute_qwen3_rope_cache(1048576,self.head_size,self.device,torch.float32,self.rope_theta)
+                self.cos, self.sin, _ = compute_qwen3_rope_cache(self.max_ctxlen,self.head_size,"cpu",torch.float32,self.rope_theta)
+                self.cos = self.cos.to(dtype=self.base_precision)
+                self.sin = self.sin.to(dtype=self.base_precision)
                 #
                 DummyCheckList = ['receptance.weight.qstate','key.weight.qstate','value.weight.qstate','output.weight.qstate',
                              'receptance.bias','key.bias','value.bias','output.bias',
@@ -719,7 +799,7 @@ class RWKV_x(nn.Module):
                         z[att+key] = z.get(att+key,None)
 
             if modelconfig['rwkv_architecture'] == 'hxa07a':
-                self.cos, self.sin, _ = compute_qwen3_rope_cache(65536,self.att_head_size,self.device,torch.float32,self.rope_theta)
+                self.cos, self.sin, _ = compute_qwen3_rope_cache(self.max_ctxlen,self.att_head_size,self.device,torch.float32,self.rope_theta)
                 #
                 DummyCheckList = ['receptance.weight.qstate','key.weight.qstate','value.weight.qstate','output.weight.qstate',
                              'receptance.bias','key.bias','value.bias','output.bias',
@@ -745,7 +825,36 @@ class RWKV_x(nn.Module):
 
         self.modelconfig = modelconfig
         self.z = z
+        self.offload_debug = True                # デバッグ出力ON
+        self.offload_debug_fallback = True       # MLP直前の最終フォールバック（同期コピー）をON
 
+    def _setup_offload_prefetch(self):
+        # Offload層を昇順にして保持
+        self.Offload_layers = sorted(set(self.Offload_layers))
+        self._offload_evt = {}   # {layer_idx: torch.cuda.Event}
+        self._offloaded_ready = set()  # コピー開始済みの層を記録
+        self._copy_stream = torch.cuda.Stream(device=self.device)
+
+    @torch.no_grad()
+    def _kick_copy_for_layer(self, layer_idx: int):
+        """指定したオフロード層の .W_q_cpu → .W_q コピーを非同期で起動"""
+        ffn = f'model.layers.{layer_idx}.mlp.'
+        gate_obj = self.z[ffn+'gateup.weight']
+        down_obj = self.z[ffn+'down_proj.weight']
+
+        if getattr(gate_obj, 'W_q', None) is None:
+            gate_obj.W_q = torch.empty_like(gate_obj.W_q_cpu, device=self.device)
+        if getattr(down_obj, 'W_q', None) is None:
+            down_obj.W_q = torch.empty_like(down_obj.W_q_cpu, device=self.device)
+
+        evt = torch.cuda.Event()
+        with torch.cuda.stream(self._copy_stream):
+            gate_obj.W_q.copy_(gate_obj.W_q_cpu, non_blocking=True)
+            down_obj.W_q.copy_(down_obj.W_q_cpu, non_blocking=True)
+            evt.record(self._copy_stream)
+
+        self._offload_evt[layer_idx] = evt
+        self._offloaded_ready.add(layer_idx)
 
 
     def new_state(self, B, max_token=4096):
@@ -899,8 +1008,10 @@ class RWKV_x(nn.Module):
 
     def forward(self, idx, last_shift_states , last_wkv_states,kv_cache=None,pos_cache=None,full_output=False, one_mode = False, KernelMode = 0,time_offset_state:torch.Tensor=None):
         
-        if self.modelconfig['rwkv_architecture'] == 'hxa079' and self.MoEMode == False:
+        if self.modelconfig['rwkv_architecture'] == 'hxa079' and self.MoEMode == False and self.AdaptiveOffloading == False:
             return HRWKV_7.hxa079r_forward(self,idx,last_wkv_states,kv_cache,pos_cache,full_output)
+        elif self.modelconfig['rwkv_architecture'] == 'hxa079' and self.MoEMode == False and self.AdaptiveOffloading == True:
+            return HRWKV_7.hxa079r_forward_offload(self,idx,last_wkv_states,kv_cache,pos_cache,full_output)
         elif self.modelconfig['rwkv_architecture'] == 'hxa07a' and self.MoEMode == False:
             return HRWKV_7.hxa07A_forward(self,idx,last_wkv_states,kv_cache,pos_cache,full_output)
         elif self.modelconfig['rwkv_architecture'] == 'hxa079' and self.MoEMode == True:

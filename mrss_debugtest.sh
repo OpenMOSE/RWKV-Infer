@@ -1,8 +1,8 @@
 #!/bin/bash
 curl http://127.0.0.1:9000/healthcheck
 
-#curl http://127.0.0.1:9000/loadmodel -X POST -H "Content-Type: application/json" -d '{"model_filename":"/home/client/Projects/llm/RWKV-Qwen3-32B-hxa079-Low/","model_viewname":"hxa079+ RWKV-Qwen 32B L8","model_strategy":"int8","adapter_filename":"","adapter_mode":"", "template":"qwen3", "endtoken":"<|im_end|>","default_temperature":"1.0", "default_top_p":"0.3"}'
-curl http://127.0.0.1:9000/loadmodel -X POST -H "Content-Type: application/json" -d '{"model_filename":"/home/client/Projects/llm/RWKV-Qwen3-15B/","model_viewname":"hxa079 RWKV-Qwen 14B L9","model_strategy":"int8","adapter_filename":"","adapter_mode":"", "template":"qwen3", "endtoken":"<|im_end|>","default_temperature":"1.0", "default_top_p":"0.3"}'
+curl http://127.0.0.1:9000/loadmodel -X POST -H "Content-Type: application/json" -d '{"model_filename":"/home/client/Projects/llm/RWKV-Qwen3-32B-hxa079-Low/","model_viewname":"hxa079+ RWKV-Qwen 32B L8","model_strategy":"nf4","adapter_filename":"","adapter_mode":"", "template":"qwen3", "endtoken":"<|im_end|>","default_temperature":"1.0", "default_top_p":"0.3"}'
+#curl http://127.0.0.1:9000/loadmodel -X POST -H "Content-Type: application/json" -d '{"model_filename":"/home/client/Projects/llm/RWKV-Qwen3-15B-hxa079/","model_viewname":"hxa079 RWKV-Qwen 14B L9","model_strategy":"nf4","adapter_filename":"","adapter_mode":"", "template":"qwen3", "endtoken":"<|im_end|>","default_temperature":"1.0", "default_top_p":"0.3"}'
 
 #curl http://127.0.0.1:9000/loadmodel -X POST -H "Content-Type: application/json" -d '{"model_filename":"/home/client/Projects/llm/RWKV-Reka-Flash-Gen2/","model_viewname":"RWKV-Reka","model_strategy":"int8","adapter_filename":"/home/client/Projects/RWKV-LM-RLHF/main/myfolder/hxa079_output_enjp/rwkv-13.pth","adapter_mode":"bone", "template":"rekaflash31", "endtoken":" <sep>","default_temperature":"0.6", "default_top_p":"0.3"}'
 

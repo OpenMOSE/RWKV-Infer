@@ -4,6 +4,7 @@ import torch
 import time
 import numpy as np
 from torch.utils.cpp_extension import load
+import torch.nn as nn
 
 try:
     import torchao
@@ -22,9 +23,12 @@ except ImportError:
 print('Bitsandbytes not found')
 HAS_BITSANDBYTES = False
 bnb = None
-from hqq.core.quantize import BaseQuantizeConfig, HQQLinear
-from gemlite.core import GemLiteLinearTriton, DType, TORCH_TO_DTYPE
+# from hqq.core.quantize import BaseQuantizeConfig, HQQLinear
+# from gemlite.core import GemLiteLinearTriton, DType, TORCH_TO_DTYPE
+
 try:
+    import gemlite
+    gemlite.set_kernel_caching(True)
     from hqq.core.quantize import BaseQuantizeConfig, HQQLinear
     from gemlite.core import GemLiteLinearTriton, DType, TORCH_TO_DTYPE
     HAS_HQQ = True
@@ -33,93 +37,7 @@ except ImportError:
     HAS_HQQ = False
     HQQLinear = None
 
-
-# def load_turbo_kernel():
-#     """ターボ版量子化カーネルをロード"""
-#     return load(
-#         name='quantized_linear_turbo',
-#         sources=['rwkvengine/cpu_kernel_turbo/quantized_linear_turbo.cpp'],
-#         extra_cflags=['-O3', '-march=native', '-fopenmp', '-mavx2', '-mfma', '-funroll-loops'],
-#         extra_ldflags=['-fopenmp'],
-#         verbose=False,
-#         with_cuda=False
-#     )
-
-# int4cpukernel =  load_turbo_kernel()
-
-# class HQQLinearKernel(torch.nn.Module):
-#     """汎用HQQ互換線形層"""
-    
-#     def __init__(self, hqq_layer, kernel_type="turbo"):
-#         super().__init__()
-        
-#         # カーネルタイプに応じてロード
-#         if kernel_type == "original":
-#             self.kernel = load_original_kernel()
-#             self.forward_func = "forward"
-#         elif kernel_type == "simple":
-#             self.kernel = load_simple_kernel()
-#             self.forward_func = "forward_simple"
-#         elif kernel_type == "turbo":
-#             self.kernel = load_turbo_kernel()
-#             self.forward_func = "forward_turbo"
-#         else:
-#             raise ValueError(f"Unknown kernel type: {kernel_type}")
-        
-#         self.kernel_type = kernel_type
-        
-#         # HQQレイヤーから情報を抽出
-#         self.in_features = hqq_layer.in_features
-#         self.out_features = hqq_layer.out_features
-#         self.nbits = hqq_layer.meta['nbits']
-#         self.group_size = hqq_layer.meta['group_size']
-#         self.compute_dtype = hqq_layer.compute_dtype
-        
-#         # メタデータを抽出
-#         self.scale = hqq_layer.meta['scale'].cpu()
-#         self.zero = hqq_layer.meta['zero'].cpu() if 'zero' in hqq_layer.meta else None
-#         self.W_q = hqq_layer.W_q.cpu()
-#         self.bias = hqq_layer.bias.cpu() if hasattr(hqq_layer, 'bias') and hqq_layer.bias is not None else None
-#         self.packing = "4bit_u8"
-#     @torch.jit.ignore    
-#     def forward(self, x):
-#         """汎用順伝播"""
-#         original_device = x.device
-#         x_cpu = x.cpu().to(torch.float32)
-        
-#         bias = self.bias if self.bias is not None else torch.empty(0)
-#         zero = self.zero if self.zero is not None else torch.zeros_like(self.scale)
-#         W_shape = [self.in_features, self.out_features]
-        
-#         # カーネル固有の処理
-#         try:
-#             if self.kernel_type == "original":
-#                 # オリジナルカーネルはgroup_size=8のみサポート
-#                 if self.group_size != 8:
-#                     return torch.empty(0)
-#                 output_cpu = getattr(self.kernel, self.forward_func)(
-#                     x_cpu, bias, self.W_q, self.scale, zero,
-#                     W_shape, self.group_size, self.nbits, 1, self.packing
-#                 )
-#             else:
-#                 # シンプル・ターボはgroup_size=64固定
-#                 if self.group_size != 64:
-#                     return torch.empty(0)
-#                 output_cpu = getattr(self.kernel, self.forward_func)(
-#                     x_cpu, bias, self.W_q, self.scale, zero,
-#                     W_shape, self.group_size, self.nbits, 1, self.packing
-#                 )
-            
-#             if output_cpu.numel() == 0:
-#                 return torch.empty(0)
-                
-#         except Exception as e:
-#             return torch.empty(0)
-        
-#         return output_cpu.to(original_device)
-
-#HAS_HQQ = False
-#HQQLinear = None
+  
 
 def create_hqq_module_from_weight(
     weight: torch.Tensor,
@@ -295,7 +213,7 @@ def bf16_to_fp8(tensor):
 QuantizationList = {}
 
 QuantizationList['embedding'] = ['emb.weight','embed_tokens']
-QuantizationList['head'] = ['head.weight','lm_head.weight']
+QuantizationList['head'] = ['head.weight','lm_head.weight'] #'.wavgk_fused',
 QuantizationList['attention'] = ['.rkv_fused.weight','.qkv_fused.weight','q_proj.weight','k_proj.weight','v_proj.weight','o_proj.weight','self_attn.receptance.weight','self_attn.key.weight','self_attn.value.weight','self_attn.gate.weight','self_attn.output.weight']
 QuantizationList['mlp'] = ['.gateup.weight','.down_proj.weight','.up_proj.weight','.gate_proj.weight','mlp.gate_up_proj.weight','mlp.key.weight','mlp.value.weight','mlp.receptance.weight']
 
@@ -303,7 +221,7 @@ QuantizationModeList = ['hqq_int4','bnb_int4','ao_fp5','ao_fp6','op_int8']
 
 def CleanQuantizationMode(quantname:str):
     if 'int4' == quantname or 'nf4' == quantname:
-        return 'hqq_int4','hqq_int4', torch.bfloat16,-44,-44,  -44,-44
+        return 'hqq_int4','hqq_int4_low', torch.bfloat16,-44,-44,  -44,-44
     if 'bnb_int4' == quantname:
         return 'bnb_int4','bnb_int4', torch.bfloat16,-4,-4,-4,-4
     
@@ -313,45 +231,97 @@ def CleanQuantizationMode(quantname:str):
         return 'op_int8','ao_fp5', torch.bfloat16,-8,-8, 2,2
     if 'attn_int8_ffn_fp6' in quantname:
         return 'op_int8','ao_fp6', torch.bfloat16,-8,-8, 3,2
+    if 'attn_fp8_ffn_int4' in quantname:
+        return 'fp8','hqq_int4', torch.bfloat16,4,3, -44,-44
     if 'int4' in quantname:
         return 'hqq_int4','hqq_int4', torch.bfloat16,-44,-44,  -44,-44
     if 'int8' in quantname:
-        return 'op_int8','op_int8' , torch.bfloat16,-8,-8, -8,-8
+        return 'op_int8','op_int8' , torch.float16,-8,-8, -8,-8
     if 'fp5' in quantname:
         return 'ao_fp5','ao_fp5',torch.bfloat16,2,2, 2,2
     if 'fp6' in quantname:
         return 'ao_fp6','ao_fp6',torch.bfloat16,3,2, 3,2
+    if 'fp8' in quantname:
+        return 'fp8','fp8',torch.bfloat16,4,3, 4,3
     return 'None','None', torch.bfloat16, -999,-999,-999,-999
 
-def Quant(z,TensorKey,QuantMode,device):
+def Quant(z,TensorKey,QuantMode,device,transpose=False):
     print(QuantMode)
     if QuantMode == 'hqq_int4':
         print(f'{TensorKey} quant to hqq 4bit')
-        z[TensorKey], z[TensorKey+'.qstate'] = create_hqq_module_from_weight((z[TensorKey].to(dtype=torch.float16))), None
-        z[TensorKey]=z[TensorKey].to(device='cpu')
+        if transpose:
+            tensor = z[TensorKey].t()
+        else:
+            tensor = z[TensorKey]
+        z[TensorKey], z[TensorKey+'.qstate'] = create_hqq_module_from_weight((tensor.to(dtype=torch.float16))), None
+        z[TensorKey].W_q_cpu = z[TensorKey].W_q.to(device='cpu').contiguous().pin_memory() 
+        z[TensorKey].W_q = None
+
+ 
+        return z
+    if QuantMode == 'hqq_int4_low':
+        print(f'{TensorKey} quant to hqq low 4bit')
+        if transpose:
+            tensor = z[TensorKey].t()
+        else:
+            tensor = z[TensorKey]
+        z[TensorKey], z[TensorKey+'.qstate'] = create_hqq_module_from_weight((tensor.to(dtype=torch.float16)),group_size=128), None
+        z[TensorKey].W_q_cpu = z[TensorKey].W_q.to(device='cpu').contiguous().pin_memory() 
+        z[TensorKey].W_q = None
+
+ 
         return z
     if QuantMode == 'bnb_int4':
+        if transpose:
+            tensor = z[TensorKey].t()
+        else:
+            tensor = z[TensorKey]
         print(f'{TensorKey} quant to bnb 4bit')
-        z[TensorKey], z[TensorKey+'.qstate'] = bnb.functional.quantize_nf4((z[TensorKey]))
+        z[TensorKey], z[TensorKey+'.qstate'] = bnb.functional.quantize_nf4((tensor))
         return z
     if QuantMode == 'ao_fp5':
+        if transpose:
+            tensor = z[TensorKey].t()
+        else:
+            tensor = z[TensorKey]
         print(f'{TensorKey} quant to torchao fp5')
         ebits, mbits = 2, 2
-        z[TensorKey], z[TensorKey+'.qstate'] = to_scaled_tc_floatx(z[TensorKey].to(dtype=torch.float16), ebits, mbits)
+        z[TensorKey], z[TensorKey+'.qstate'] = to_scaled_tc_floatx(tensor.to(device=device,dtype=torch.float16), ebits, mbits)
         z[TensorKey]=z[TensorKey].to(device='cpu')
         return z
     if QuantMode == 'ao_fp6':
+        if transpose:
+            tensor = z[TensorKey].t()
+        else:
+            tensor = z[TensorKey]
         print(f'{TensorKey} quant to torchao fp6')
         ebits, mbits = 3, 2
-        z[TensorKey], z[TensorKey+'.qstate'] = to_scaled_tc_floatx(z[TensorKey].to(dtype=torch.float16), ebits, mbits)
+        z[TensorKey], z[TensorKey+'.qstate'] = to_scaled_tc_floatx(tensor.to(dtype=torch.float16), ebits, mbits)
         z[TensorKey]=z[TensorKey].to(device='cpu')
         return z
     if QuantMode == 'op_int8':
+        if transpose:
+            tensor = z[TensorKey].t()
+        else:
+            tensor = z[TensorKey]
         print(f'{TensorKey} quant to op_int8 bit')
-        z[TensorKey], z[TensorKey+'.qstate'] = quantize_weight(z[TensorKey].to(device=device,dtype = torch.float16).t())
+        z[TensorKey], z[TensorKey+'.qstate'] = quantize_weight(tensor.to(device=device,dtype = torch.float16).t())
+        z[TensorKey]=z[TensorKey].to(device='cpu')
+        return z
+    if QuantMode == 'fp8':
+        if transpose:
+            tensor = z[TensorKey].t()
+        else:
+            tensor = z[TensorKey]
+        print(f'{TensorKey} quant to fp8')
+        z[TensorKey], z[TensorKey+'.qstate'] = bf16_to_fp8(tensor.to(device=device,dtype = torch.bfloat16))
         z[TensorKey]=z[TensorKey].to(device='cpu')
         return z
     else:
+        if transpose:
+            tensor = z[TensorKey].t()
+        else:
+            tensor = z[TensorKey]
         z[TensorKey+'.qstate'] = None
     
     return z
@@ -370,7 +340,7 @@ def DoQuantizationIfPossible(z,TensorKey,attention_quant,mlp_quant,base_precisio
             return z
     for QuantKey in QuantizationList['head']:
         if TensorKey.endswith(QuantKey):
-            z = Quant(z,TensorKey,'op_int8',device)
+            z = Quant(z,TensorKey,"op_int8",device)
             return z
     if 'norm' not in TensorKey  and 'emb' not in TensorKey and TensorKey.endswith('weight'):
         print(f'{TensorKey} linear weight passthrough')
@@ -408,7 +378,7 @@ def bnb_nf4_matmul(x,weight,weight_state):
         w = bnb.functional.dequantize_nf4(weight,quant_state=weight_state).to(torch.bfloat16)
         return x @ w.t()
 
-#@torch.compile
+@torch.compile
 def fp8_matmul(x,weight,weight_state):
     xg = x
     b = weight
@@ -456,35 +426,28 @@ def fp8_matmul(x,weight,weight_state):
         )
         return x.view(S0, S1, -1)
     
-@torch.compile()
+#@torch.compile()
 def fpx_matmul(x,weight,weight_state,ebits:int=3,mbits:int=2):
-    if ebits == -44 and mbits == -44: #hqq
-        need_view = False
-        if len(x.shape) == 3: 
-            S0=x.shape[0]
-            S1=x.shape[1]
-            dtype = x.dtype
-            x = x.to(dtype=torch.float16).view(-1,x.shape[2])  
-            need_view = True
-        else:
-            dtype = x.dtype
-            x = x.to(dtype=torch.float16)
-            
-        #out = weight.forward_manual(x, matmul_type="GEMM").view(S0,S1,-1).to(dtype=dtype)
+    if ebits == -44: #hqq
+        S0=x.shape[0]
+        S1=x.shape[1]
+        dtype = x.dtype
+        x = x.to(dtype=torch.float16).view(-1,x.shape[2])  
+        #print(weight.device)
+        # if weight.W_q is None:
+        #     #weight_temp = weight.to(device=x.device)
+        #     weight.W_q = weight.W_q_cpu.to(device=x.device)
+        #     #print('try matmul ')
+        #     out = weight(x).to(dtype=dtype)
 
-        if weight.W_q.device == torch.device('cpu'):
-          
-            weight = weight.to(device=x.device)
-            out = weight(x).to(dtype=dtype)
-            weight = weight.to(device='cpu')
-        else:
-        #     #print('gpu')
-        #out = weight(x).view(S0,S1,-1).to(dtype=dtype)
-            #out = weight(x*0.5).to(dtype=dtype)*2.0
-            out = weight.forward_manual(x, matmul_type="GEMM").to(dtype=dtype)
-        if need_view:
-            return out.view(S0,S1,-1)
-        return out
+        #     weight.W_q = None 
+        #     #weight = weight.to(device='cpu',non_blocking=True)
+        # else:
+        out = weight.forward_manual(x).to(dtype=dtype)
+        # if weight.W_q_one_shot_delete:
+        #     weight.W_q = None
+        #out = weight.forward_manual(x, matmul_type="GEMV").to(dtype=dtype)
+        return out.view(S0,S1,-1)
 
     elif weight.dtype == torch.uint8:
         S0=x.shape[0]
@@ -498,10 +461,4 @@ def fpx_matmul(x,weight,weight_state,ebits:int=3,mbits:int=2):
     elif weight.dtype == torch.float8_e4m3fn: 
         return fp8_matmul(x,weight,weight_state)
     else:
-        if weight.device == torch.device('cpu'):
-            xdtype = x.dtype
-            xdevice = x.device
-            return (x.to(device=torch.device('cpu'),dtype=weight.dtype) @ weight).to(device=xdevice,dtype=xdtype)
-            #return x @ weight.to(device=x.device).t()
-        else:
-            return x @ weight.t()
+        return x @ weight.t()
